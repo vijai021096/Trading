@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-bot.txt .
+RUN pip install --no-cache-dir -r requirements-bot.txt
+
+COPY shared/ shared/
+COPY kite_broker/ kite_broker/
+COPY bot/ bot/
+COPY .env* ./
+
+ENV PYTHONUNBUFFERED=1
+CMD ["python", "-m", "bot.main"]
