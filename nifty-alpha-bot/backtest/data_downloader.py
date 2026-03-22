@@ -138,6 +138,48 @@ def download_india_vix(
         return df
 
 
+def download_nifty_daily(
+    months: int = 24,
+    force_refresh: bool = False,
+) -> pd.DataFrame:
+    """
+    Download NIFTY50 DAILY OHLCV data — available for years unlike 5m.
+    Returns DataFrame with columns: ts, open, high, low, close, volume
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        raise ImportError("Run: pip install yfinance")
+
+    cache = _cache_path("nifty_daily")
+    if cache.exists() and not force_refresh:
+        df = pd.read_parquet(cache)
+        cutoff = pd.Timestamp.now() - pd.Timedelta(days=months * 31)
+        df["ts"] = pd.to_datetime(df["ts"])
+        df = df[df["ts"] >= cutoff]
+        if len(df) > 30:
+            print(f"[DataLoader] Loaded {len(df)} daily candles from cache.")
+            return df
+
+    print(f"[DataLoader] Downloading NIFTY50 daily data ({months} months)...")
+    ticker = yf.Ticker("^NSEI")
+    df = ticker.history(period=f"{months}mo", interval="1d", auto_adjust=True)
+    if df.empty:
+        raise RuntimeError("No daily data downloaded.")
+    df = df.reset_index()
+    df.columns = [c.lower().replace(" ", "_") for c in df.columns]
+    date_col = "date" if "date" in df.columns else df.columns[0]
+    df = df.rename(columns={date_col: "ts"})
+    df["ts"] = pd.to_datetime(df["ts"]).dt.tz_localize(None)
+    for col in ["open", "high", "low", "close"]:
+        df[col] = df[col].astype(float)
+    df["volume"] = df.get("volume", pd.Series(0, index=df.index)).astype(float)
+    df = df[["ts", "open", "high", "low", "close", "volume"]].sort_values("ts").reset_index(drop=True)
+    df.to_parquet(cache, index=False)
+    print(f"[DataLoader] Saved {len(df)} daily candles to {cache}")
+    return df
+
+
 def get_vix_for_date(vix_df: pd.DataFrame, trade_date: date) -> float:
     """Look up VIX for a given date, falling back to recent average."""
     row = vix_df[vix_df["date"] == trade_date]

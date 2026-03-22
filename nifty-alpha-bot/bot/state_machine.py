@@ -53,7 +53,9 @@ class Position:
     net_pnl: float = 0.0
 
 
-STATE_FILE = Path("/tmp/kite_bot_position.json")
+import os
+STATE_DIR = Path(os.environ.get("STATE_DIR", "/tmp"))
+STATE_FILE = STATE_DIR / "kite_bot_position.json"
 
 
 def load_position() -> Position:

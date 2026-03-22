@@ -23,9 +23,17 @@ export function useWebSocket() {
     } catch {}
   }
 
+  const fetchSlippage = async () => {
+    try {
+      const r = await axios.get(`${API_BASE}/slippage/sl`)
+      store.setSlippageStats(r.data)
+    } catch {}
+  }
+
   useEffect(() => {
     fetchTrades()
     fetchDailyPnl()
+    fetchSlippage()
 
     function connect() {
       const ws = new WebSocket(WS_URL)
@@ -53,6 +61,7 @@ export function useWebSocket() {
             store.addEvents(msg.events)
             fetchTrades()
             fetchDailyPnl()
+            fetchSlippage()
           }
         } catch {}
       }

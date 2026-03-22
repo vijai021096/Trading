@@ -1,23 +1,21 @@
 """
 VWAP Reclaim secondary strategy engine.
-Works 10:00–13:00. Triggers when price reclaims VWAP after a rejection.
+Works 10:00–14:00. Triggers when price reclaims VWAP after a meaningful rejection.
 
-Entry (CALL): Price was below VWAP, now crosses back above with:
-  - Strong reclaim candle (body > 60% of range, bullish)
-  - Supertrend trending UP
-  - RSI 45–65 (momentum building, not overbought)
-  - Volume surge >= 1.5x average
-
-PUT is mirror image.
+Institution-grade design:
+  - Requires sustained time below/above VWAP (not just a single candle)
+  - Rejection magnitude must be ATR-proportional
+  - Reclaim candle must be strong (body > 40%, directional)
+  - Supertrend trend must align
+  - RSI must show momentum building, not exhaustion
 """
 from __future__ import annotations
 
-from datetime import datetime, time as dtime
 from typing import Any, Dict, List, Optional
 
 from shared.indicators import (
     vwap_at, rsi_at, atr_at, supertrend_series,
-    body_ratio, volume_surge_ratio,
+    body_ratio, has_volume_data, volume_surge_ratio,
     is_bullish_candle, is_bearish_candle,
     vwap_cross_up, vwap_cross_down,
 )
@@ -34,15 +32,11 @@ def evaluate_vwap_reclaim_signal(
     supertrend_multiplier: float = 3.0,
     rsi_period: int = 14,
     atr_period: int = 14,
-    min_volume_surge_ratio: float = 1.5,
-    rsi_min: float = 45.0,
+    min_volume_surge_ratio: float = 1.2,
+    rsi_min: float = 40.0,
     rsi_max: float = 65.0,
-    vix_max: float = 18.0,
+    vix_max: float = 22.0,
 ) -> Dict[str, Any]:
-    """
-    Returns same structure as orb_engine.evaluate_orb_signal:
-      {"signal": "CALL"|"PUT"|None, "atr": float, "filters": {...}, "all_passed": bool}
-    """
     filters: Dict[str, Dict] = {}
     result_base = {"signal": None, "atr": None, "filters": filters, "all_passed": False}
 
@@ -67,19 +61,23 @@ def evaluate_vwap_reclaim_signal(
     filters["vwap_cross"] = {
         "passed": True,
         "direction": direction,
-        "detail": f"{direction}: price {close:.1f} crossed {'above' if direction=='CALL' else 'below'} VWAP {vwap_now:.1f}",
+        "detail": f"{direction}: price {close:.1f} crossed {'above' if direction=='CALL' else 'below'} VWAP {vwap_now:.1f if vwap_now else 0:.1f}",
     }
 
-    # ── 2. Rejection magnitude ───────────────────────────────────
-    # Check that the price was meaningfully away from VWAP before reclaiming
+    # ── 2. Rejection magnitude (ATR-proportional) ─────────────────
+    atr = atr_at(candles, ts, atr_period)
+    result_base["atr"] = atr
     if current_idx >= 1 and vwap_now is not None:
         prev_close = float(candles[current_idx - 1]["close"])
         rejection_pts = abs(vwap_now - prev_close)
-        reject_ok = rejection_pts >= reclaim_min_rejection_points
+        min_rejection = reclaim_min_rejection_points
+        if atr is not None and atr > 0:
+            min_rejection = max(reclaim_min_rejection_points, atr * 0.3)
+        reject_ok = rejection_pts >= min_rejection
         filters["rejection_magnitude"] = {
             "passed": reject_ok,
             "value": round(rejection_pts, 1),
-            "detail": f"Rejection {rejection_pts:.1f}pt (need >={reclaim_min_rejection_points}pt)",
+            "detail": f"Rejection {rejection_pts:.1f}pt (need>={min_rejection:.1f}pt)",
         }
     else:
         filters["rejection_magnitude"] = {"passed": True, "detail": "Skipped"}
@@ -90,11 +88,11 @@ def evaluate_vwap_reclaim_signal(
         (direction == "CALL" and is_bullish_candle(current)) or
         (direction == "PUT" and is_bearish_candle(current))
     )
-    body_ok = br >= 0.55 and directional
+    body_ok = br >= 0.40 and directional
     filters["candle_body"] = {
         "passed": body_ok,
         "value": round(br, 2),
-        "detail": f"Body ratio {br:.2f}, directional={directional}",
+        "detail": f"Body ratio {br:.2f} (need>=0.40), directional={directional}",
     }
 
     # ── 4. Supertrend ─────────────────────────────────────────────
@@ -126,24 +124,27 @@ def evaluate_vwap_reclaim_signal(
         filters["rsi"] = {"passed": True, "detail": "RSI skipped"}
 
     # ── 6. Volume ─────────────────────────────────────────────────
-    surge = volume_surge_ratio(current, candles[:current_idx])
-    vol_ok = surge is not None and surge >= min_volume_surge_ratio
-    filters["volume_surge"] = {
-        "passed": vol_ok,
-        "value": round(surge, 2) if surge else None,
-        "detail": f"Volume surge {surge:.1f}x (need >={min_volume_surge_ratio}x)" if surge else "Insufficient history",
-    }
+    if has_volume_data(candles[max(0, current_idx - 20):current_idx]):
+        surge = volume_surge_ratio(current, candles[:current_idx])
+        vol_ok = surge is not None and surge >= min_volume_surge_ratio
+        filters["volume_surge"] = {
+            "passed": vol_ok,
+            "value": round(surge, 2) if surge else None,
+            "detail": f"Volume surge {surge:.1f}x (need>={min_volume_surge_ratio}x)" if surge else "Insufficient history",
+        }
+    else:
+        filters["volume_surge"] = {
+            "passed": True,
+            "value": None,
+            "detail": "Volume data unavailable — filter skipped",
+        }
 
     # ── 7. VIX ───────────────────────────────────────────────────
     if vix is not None:
         vix_ok = vix <= vix_max
-        filters["vix"] = {"passed": vix_ok, "value": round(vix, 2), "detail": f"VIX={vix:.1f}"}
+        filters["vix"] = {"passed": vix_ok, "value": round(vix, 2), "detail": f"VIX={vix:.1f} (max={vix_max})"}
     else:
         filters["vix"] = {"passed": True, "detail": "VIX skipped"}
-
-    # ── ATR ───────────────────────────────────────────────────────
-    atr = atr_at(candles, ts, atr_period)
-    result_base["atr"] = atr
 
     # ── Final ─────────────────────────────────────────────────────
     critical = ["vwap_cross", "rejection_magnitude", "candle_body", "supertrend", "rsi", "volume_surge", "vix"]

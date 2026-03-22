@@ -5,8 +5,8 @@ evaluates ORB and VWAP Reclaim signals, simulates option trades.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass, field
-from datetime import date, datetime, time as dtime
+from dataclasses import dataclass
+from datetime import date, time as dtime
 from typing import Any, Dict, List, Optional
 
 from backtest.data_downloader import get_daily_candles, get_vix_for_date
@@ -25,17 +25,17 @@ class BacktestConfig:
     # ORB
     orb_start: str = "09:15"
     orb_end: str = "09:30"
-    entry_window_close: str = "10:30"    # Extended window for more signals
-    min_orb_range_points: float = 30.0
-    max_orb_range_points: float = 220.0  # Nifty can have wide gaps
-    breakout_buffer_pct: float = 0.0002
-    min_breakout_body_ratio: float = 0.38
-    min_volume_surge_ratio: float = 1.4
+    entry_window_close: str = "10:30"
+    min_orb_range_points: float = 20.0
+    max_orb_range_points: float = 200.0
+    breakout_buffer_pct: float = 0.0003
+    min_breakout_body_ratio: float = 0.40
+    min_volume_surge_ratio: float = 1.0
 
     # VWAP Reclaim
     enable_vwap_reclaim: bool = True
     reclaim_window_start: str = "10:00"
-    reclaim_window_end: str = "13:00"
+    reclaim_window_end: str = "13:30"
     reclaim_min_rejection_points: float = 15.0
 
     # Indicators
@@ -47,27 +47,27 @@ class BacktestConfig:
     # Filters
     require_vwap_confirmation: bool = True
     vwap_buffer_points: float = 5.0
-    rsi_bull_min: float = 52.0
-    rsi_bear_max: float = 48.0
-    rsi_overbought_skip: float = 75.0
-    rsi_oversold_skip: float = 25.0
-    vix_max: float = 18.0
+    rsi_bull_min: float = 45.0
+    rsi_bear_max: float = 55.0
+    rsi_overbought_skip: float = 78.0
+    rsi_oversold_skip: float = 22.0
+    vix_max: float = 22.0
 
     # SL / Target
-    atr_sl_multiplier: float = 1.2
-    atr_sl_min_pct: float = 0.08
-    atr_sl_max_pct: float = 0.12
-    rr_min: float = 2.5
-    trail_trigger_pct: float = 0.20
-    trail_lock_step_pct: float = 0.10
-    break_even_trigger_pct: float = 0.12
-    thursday_max_loss_pct: float = 0.06
+    atr_sl_multiplier: float = 2.0
+    atr_sl_min_pct: float = 0.25
+    atr_sl_max_pct: float = 0.40
+    rr_min: float = 1.6
+    trail_trigger_pct: float = 0.30
+    trail_lock_step_pct: float = 0.15
+    break_even_trigger_pct: float = 0.20
+    thursday_max_loss_pct: float = 0.15
 
     # Execution
     force_exit_time: str = "15:15"
-    max_trades_per_day: int = 3
-    max_consecutive_losses: int = 3
-    max_daily_loss_pct: float = 0.03
+    max_trades_per_day: int = 2
+    max_consecutive_losses: int = 5
+    max_daily_loss_pct: float = 0.04
     slippage_pct: float = 0.005
     strike_step: int = 50
 
@@ -80,10 +80,6 @@ def run_backtest(
     end_date: Optional[date] = None,
     verbose: bool = True,
 ) -> Dict[str, Any]:
-    """
-    Walk-forward backtest over all available trading days.
-    Returns {"trades": [...], "metrics": {...}, "config": {...}}
-    """
     import pandas as pd
 
     orb_start = dtime(*map(int, cfg.orb_start.split(":")))
@@ -92,7 +88,6 @@ def run_backtest(
     reclaim_start = dtime(*map(int, cfg.reclaim_window_start.split(":")))
     reclaim_end = dtime(*map(int, cfg.reclaim_window_end.split(":")))
 
-    # Get all trading dates
     all_dates = sorted(nifty_df["ts"].dt.date.unique())
     if start_date:
         all_dates = [d for d in all_dates if d >= start_date]
@@ -109,12 +104,10 @@ def run_backtest(
         print(f" BACKTEST: {len(all_dates)} trading days")
         print(f" Capital: ₹{cfg.capital:,.0f} | Lots: {cfg.lots} | Lot size: {cfg.lot_size}")
         print(f" Strategy: ORB {cfg.orb_start}-{cfg.orb_end} + VWAP Reclaim")
-        print(f" SL: {cfg.atr_sl_min_pct*100:.0f}-{cfg.atr_sl_max_pct*100:.0f}% ATR | RR: {cfg.rr_min}x")
-        print(f" VIX filter: <={cfg.vix_max} | Max trades/day: {cfg.max_trades_per_day}")
+        print(f" SL: {cfg.atr_sl_min_pct*100:.0f}-{cfg.atr_sl_max_pct*100:.0f}% | RR: {cfg.rr_min}x | VIX<={cfg.vix_max}")
         print(f"{'='*60}\n")
 
     for trade_date in all_dates:
-        # ── Daily setup ───────────────────────────────────────────
         candles = get_daily_candles(nifty_df, trade_date)
         if len(candles) < 20:
             continue
@@ -127,26 +120,22 @@ def run_backtest(
         orb_signal_used = False
         reclaim_signal_used = False
 
-        # ── ORB signal scan (after ORB window closes) ─────────────
+        # Allow one attempt per day even after consecutive loss streak
+        if consecutive_losses >= cfg.max_consecutive_losses:
+            consecutive_losses = cfg.max_consecutive_losses - 1
+
         for i, candle in enumerate(candles):
             if trades_today >= cfg.max_trades_per_day:
                 break
             if consecutive_losses >= cfg.max_consecutive_losses:
-                if verbose:
-                    print(f"  [{trade_date}] HALTED: {consecutive_losses} consecutive losses")
                 break
             if daily_pnl <= -daily_loss_limit:
-                if verbose:
-                    print(f"  [{trade_date}] DAILY LOSS LIMIT HIT: ₹{daily_pnl:.0f}")
                 break
 
             c_time = candle["ts"].time()
 
-            # ORB entry window: orb_end to entry_close
-            if (
-                not orb_signal_used
-                and orb_end <= c_time <= entry_close
-            ):
+            # ORB entry window
+            if not orb_signal_used and orb_end <= c_time <= entry_close:
                 result = evaluate_orb_signal(
                     candles[:i + 1], candle, vix,
                     orb_start=orb_start, orb_end=orb_end,
@@ -168,7 +157,7 @@ def run_backtest(
 
                 if result["all_passed"] and result["signal"]:
                     sl_target = compute_sl_target(
-                        100.0,  # Placeholder — actual option price from simulator
+                        100.0,
                         result["signal"],
                         result["atr"],
                         atr_sl_multiplier=cfg.atr_sl_multiplier,

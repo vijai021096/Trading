@@ -1,16 +1,12 @@
 """
 Zerodha Kite daily token refresh manager.
 
-Kite requires a new access_token every day. Two modes:
-  1. TOTP automation (headless browser) — for AWS/server use
-  2. Manual — user provides token via env var or dashboard API
+Kite requires a new access_token every day. Three modes:
+  1. Dashboard API — user pastes token via web UI (recommended for cloud)
+  2. TOTP automation (headless browser) — for fully automated servers
+  3. Manual — user provides token via env var or CLI --token
 
-TOTP automation uses playwright + pyotp to:
-  1. Open Kite login page
-  2. Fill credentials
-  3. Auto-fill TOTP
-  4. Capture redirect URL
-  5. Exchange request_token for access_token
+Token refresh propagates to the running bot via a shared file + hot-reload.
 """
 from __future__ import annotations
 
@@ -19,13 +15,21 @@ import os
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-TOKEN_CACHE = Path("/tmp/kite_token_cache.json")
+_STATE_DIR = Path(os.environ.get("STATE_DIR", "/tmp"))
+TOKEN_CACHE = _STATE_DIR / "kite_token_cache.json"
+
+_on_token_refresh: Optional[Callable[[str], None]] = None
+
+
+def register_token_callback(fn: Callable[[str], None]) -> None:
+    """Register a callback that gets called when token is refreshed."""
+    global _on_token_refresh
+    _on_token_refresh = fn
 
 
 def save_token(access_token: str) -> None:
-    """Save token with today's date for cache validation."""
     data = {
         "access_token": access_token,
         "date": date.today().isoformat(),
@@ -35,7 +39,6 @@ def save_token(access_token: str) -> None:
 
 
 def load_cached_token() -> Optional[str]:
-    """Return cached token if it was saved today, else None."""
     if not TOKEN_CACHE.exists():
         return None
     try:
@@ -54,10 +57,7 @@ def get_token_automated(
     password: str,
     totp_secret: str,
 ) -> Optional[str]:
-    """
-    Automated TOTP login using Playwright headless browser.
-    Returns access_token or None on failure.
-    """
+    """Automated TOTP login using Playwright headless browser."""
     try:
         import pyotp
         from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
@@ -75,22 +75,17 @@ def get_token_automated(
             ctx = browser.new_context()
             page = ctx.new_page()
 
-            # Navigate to login
             page.goto(login_url, wait_until="networkidle", timeout=30000)
-
-            # Fill credentials
             page.fill('input[type="text"]', user_id)
             page.fill('input[type="password"]', password)
             page.click('button[type="submit"]')
             page.wait_for_timeout(2000)
 
-            # Fill TOTP
             try:
                 page.fill('input[type="number"]', totp.now())
                 page.click('button[type="submit"]')
                 page.wait_for_timeout(3000)
             except Exception:
-                # Some flows use text type for TOTP
                 try:
                     page.fill('input[label="External TOTP"]', totp.now())
                     page.click('button[type="submit"]')
@@ -98,12 +93,10 @@ def get_token_automated(
                 except Exception as e:
                     print(f"[TokenManager] TOTP fill failed: {e}")
 
-            # Capture redirect URL with request_token
             current_url = page.url
             if "request_token=" in current_url:
                 request_token = current_url.split("request_token=")[1].split("&")[0]
             else:
-                # Wait for redirect
                 try:
                     page.wait_for_url("**/request_token=*", timeout=10000)
                     current_url = page.url
@@ -121,13 +114,16 @@ def get_token_automated(
         print("[TokenManager] Failed to capture request_token")
         return None
 
-    # Exchange request_token for access_token
     try:
         from kiteconnect import KiteConnect
         kite = KiteConnect(api_key=api_key)
         session = kite.generate_session(request_token, api_secret=api_secret)
         access_token = session["access_token"]
         save_token(access_token)
+
+        if _on_token_refresh:
+            _on_token_refresh(access_token)
+
         print(f"[TokenManager] Token refreshed successfully at {datetime.now().strftime('%H:%M:%S')}")
         return access_token
     except Exception as e:
@@ -145,32 +141,27 @@ def get_valid_token(
 ) -> str:
     """
     Get a valid access token. Priority:
-    1. manual_token (if provided)
-    2. ENV var KITE_ACCESS_TOKEN (if set today)
+    1. manual_token (CLI --token or dashboard API)
+    2. ENV var KITE_ACCESS_TOKEN
     3. Cached token from today
     4. Automated TOTP refresh
     """
-    # Manual override
     if manual_token:
         save_token(manual_token)
         return manual_token
 
-    # ENV var
     env_token = os.environ.get("KITE_ACCESS_TOKEN", "")
     if env_token:
         cached = load_cached_token()
         if cached == env_token:
             return env_token
-        # ENV token might be from today — trust it and cache it
         save_token(env_token)
         return env_token
 
-    # Cache
     cached = load_cached_token()
     if cached:
         return cached
 
-    # Automated
     if totp_secret and user_id and password:
         print("[TokenManager] Attempting automated TOTP login...")
         token = get_token_automated(api_key, api_secret, user_id, password, totp_secret)
@@ -178,7 +169,11 @@ def get_valid_token(
             return token
 
     raise RuntimeError(
-        "No valid Kite access token. Set KITE_ACCESS_TOKEN env var or provide TOTP credentials."
+        "No valid Kite access token. Options:\n"
+        "  1. Set KITE_ACCESS_TOKEN in .env\n"
+        "  2. Use dashboard: POST /api/kite/token {token: ...}\n"
+        "  3. CLI: python -m bot.main --token YOUR_TOKEN\n"
+        "  4. Configure KITE_TOTP_SECRET for auto-login"
     )
 
 
@@ -190,10 +185,7 @@ def schedule_daily_refresh(
     totp_secret: str,
     refresh_time: str = "08:55",
 ) -> None:
-    """
-    Schedule daily token refresh at refresh_time (IST).
-    Call this in a background thread at bot startup.
-    """
+    """Schedule daily token refresh. Token propagates via callback + env + cache file."""
     try:
         import schedule
 
@@ -204,7 +196,7 @@ def schedule_daily_refresh(
                 os.environ["KITE_ACCESS_TOKEN"] = token
                 print(f"[TokenManager] Daily token refresh successful.")
             else:
-                print("[TokenManager] Daily token refresh FAILED. Manual token required.")
+                print("[TokenManager] Daily token refresh FAILED. Set token via dashboard.")
 
         schedule.every().day.at(refresh_time).do(do_refresh)
 

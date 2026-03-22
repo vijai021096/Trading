@@ -1,6 +1,6 @@
 """
-Zerodha Kite API wrapper — replaces GrowwClient.
-Mirrors the same interface pattern but uses kiteconnect SDK.
+Zerodha Kite API wrapper.
+Supports: aggressive limit entry, SL-M exit protection, market orders.
 """
 from __future__ import annotations
 
@@ -18,15 +18,11 @@ from shared.indicators import normalize_candles
 
 
 class KiteClient:
-    """
-    Thin wrapper around KiteConnect SDK.
-    Handles retries, symbol resolution, and candle normalization.
-    """
 
     EXCHANGE = "NFO"
     EXCHANGE_NSE = "NSE"
-    PRODUCT_MIS = "MIS"   # Intraday
-    PRODUCT_NRML = "NRML"  # Overnight / positional
+    PRODUCT_MIS = "MIS"
+    PRODUCT_NRML = "NRML"
 
     def __init__(self, api_key: str, access_token: str) -> None:
         self.kite = KiteConnect(api_key=api_key)
@@ -39,8 +35,6 @@ class KiteClient:
     @classmethod
     def from_token(cls, api_key: str, access_token: str) -> "KiteClient":
         return cls(api_key, access_token)
-
-    # ─── Retry wrapper ────────────────────────────────────────────
 
     def _call(self, fn, *args, **kwargs) -> Any:
         last_err = None
@@ -65,7 +59,6 @@ class KiteClient:
     # ─── Instruments ──────────────────────────────────────────────
 
     def load_instruments(self, exchange: str = "NFO") -> None:
-        """Load and cache instrument list for fast symbol lookup."""
         instruments = self._call(self.kite.instruments, exchange)
         for inst in instruments:
             key = inst.get("tradingsymbol", "")
@@ -80,7 +73,6 @@ class KiteClient:
     # ─── Quotes ───────────────────────────────────────────────────
 
     def get_quote(self, symbol: str, exchange: str = "NSE") -> float:
-        """Get LTP for a symbol."""
         key = f"{exchange}:{symbol}"
         resp = self._call(self.kite.ltp, [key])
         if resp and key in resp:
@@ -88,7 +80,6 @@ class KiteClient:
         return 0.0
 
     def get_quote_details(self, symbol: str, exchange: str = "NFO") -> Dict[str, Any]:
-        """Get full quote with bid/ask."""
         key = f"{exchange}:{symbol}"
         resp = self._call(self.kite.quote, [key])
         if not resp or key not in resp:
@@ -113,10 +104,6 @@ class KiteClient:
         to_dt: datetime,
         interval: str = "5minute",
     ) -> List[Dict[str, Any]]:
-        """
-        Fetch OHLCV candles.
-        interval: "minute", "3minute", "5minute", "15minute", "60minute", "day"
-        """
         raw = self._call(
             self.kite.historical_data,
             instrument_token,
@@ -124,7 +111,6 @@ class KiteClient:
             to_dt,
             interval,
         )
-        # Kite returns list of dicts with keys: date, open, high, low, close, volume
         candles = []
         for c in raw:
             candles.append({
@@ -138,7 +124,6 @@ class KiteClient:
         return sorted(candles, key=lambda x: x["ts"])
 
     def get_nifty_token(self) -> Optional[int]:
-        """Get NIFTY 50 index instrument token."""
         instruments = self._call(self.kite.instruments, "NSE")
         for inst in instruments:
             if inst.get("tradingsymbol") == "NIFTY 50":
@@ -152,7 +137,6 @@ class KiteClient:
         index_symbol: str = "NIFTY",
         expiry: Optional[date] = None,
     ) -> List[Dict[str, Any]]:
-        """Return list of option instruments for the given expiry."""
         if not self._instruments_loaded:
             self.load_instruments("NFO")
         result = []
@@ -180,21 +164,16 @@ class KiteClient:
         expiry: Optional[date] = None,
         index_symbol: str = "NIFTY",
     ) -> Optional[Dict[str, Any]]:
-        """Find the ATM option closest to current spot."""
         atm = round(spot / strike_step) * strike_step
         opt_type = "CE" if direction == "CALL" else "PE"
         chain = self.get_option_chain_symbols(index_symbol, expiry)
-        candidates = [
-            c for c in chain
-            if c["option_type"] == opt_type
-        ]
+        candidates = [c for c in chain if c["option_type"] == opt_type]
         if not candidates:
             return None
         candidates.sort(key=lambda c: abs(c["strike"] - atm))
         return candidates[0]
 
     def get_nearest_expiry(self, index_symbol: str = "NIFTY") -> Optional[date]:
-        """Return the nearest upcoming expiry date for NIFTY."""
         if not self._instruments_loaded:
             self.load_instruments("NFO")
         today = date.today()
@@ -228,12 +207,12 @@ class KiteClient:
         self,
         symbol: str,
         qty: int,
-        side: str,  # "BUY" or "SELL"
+        side: str,
         exchange: str = "NFO",
         product: str = "MIS",
         limit_price: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Place a market or limit order. Returns order response dict."""
+        """Place market or limit order for entry."""
         tx = self.kite.TRANSACTION_TYPE_BUY if side == "BUY" else self.kite.TRANSACTION_TYPE_SELL
         order_type = self.kite.ORDER_TYPE_LIMIT if limit_price else self.kite.ORDER_TYPE_MARKET
         validity = self.kite.VALIDITY_DAY
@@ -249,10 +228,58 @@ class KiteClient:
             validity=validity,
         )
         if limit_price:
-            kwargs["price"] = float(limit_price)
+            tick = 0.05
+            kwargs["price"] = round(float(limit_price) / tick) * tick
 
         order_id = self._call(self.kite.place_order, **kwargs)
-        return {"order_id": order_id, "status": "PENDING"}
+        return {"order_id": order_id, "status": "PENDING", "placed_at": time.time()}
+
+    def place_slm_order(
+        self,
+        symbol: str,
+        qty: int,
+        trigger_price: float,
+        exchange: str = "NFO",
+        product: str = "MIS",
+    ) -> Dict[str, Any]:
+        """Place SL-M (Stop Loss Market) order for exit protection.
+        Triggers a market sell when price drops to trigger_price."""
+        tick = 0.05
+        trigger = round(float(trigger_price) / tick) * tick
+
+        kwargs: Dict[str, Any] = dict(
+            variety=self.kite.VARIETY_REGULAR,
+            exchange=exchange,
+            tradingsymbol=symbol,
+            transaction_type=self.kite.TRANSACTION_TYPE_SELL,
+            quantity=qty,
+            product=product,
+            order_type=self.kite.ORDER_TYPE_SLM,
+            validity=self.kite.VALIDITY_DAY,
+            trigger_price=trigger,
+        )
+
+        order_id = self._call(self.kite.place_order, **kwargs)
+        return {"order_id": order_id, "status": "SLM_PLACED", "trigger_price": trigger}
+
+    def modify_slm_order(
+        self,
+        order_id: str,
+        new_trigger_price: float,
+    ) -> bool:
+        """Modify existing SL-M order trigger price (for trailing SL)."""
+        tick = 0.05
+        trigger = round(float(new_trigger_price) / tick) * tick
+        try:
+            self._call(
+                self.kite.modify_order,
+                self.kite.VARIETY_REGULAR,
+                order_id,
+                trigger_price=trigger,
+            )
+            return True
+        except Exception:
+            return False
 
     def get_order_status(self, order_id: str) -> Dict[str, Any]:
         try:
@@ -265,7 +292,6 @@ class KiteClient:
         return {}
 
     def confirm_fill(self, order_id: str, timeout_seconds: int = 15) -> bool:
-        """Poll until order is filled or timeout."""
         end = time.time() + timeout_seconds
         while time.time() < end:
             time.sleep(1.0)
@@ -289,13 +315,11 @@ class KiteClient:
     def get_positions(self) -> List[Dict[str, Any]]:
         try:
             resp = self._call(self.kite.positions)
-            # Returns {"net": [...], "day": [...]}
             return resp.get("net", []) or []
         except Exception:
             return []
 
     def get_open_qty(self, symbol: str) -> int:
-        """Get net open quantity for a symbol."""
         positions = self.get_positions()
         for p in positions:
             if p.get("tradingsymbol") == symbol:

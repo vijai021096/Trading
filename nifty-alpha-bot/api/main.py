@@ -14,8 +14,11 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-EVENTS_LOG = Path("/tmp/kite_bot_events.jsonl")
-POSITION_FILE = Path("/tmp/kite_bot_position.json")
+from shared.config import settings
+
+_STATE_DIR = Path(os.environ.get("STATE_DIR", "/tmp"))
+EVENTS_LOG = _STATE_DIR / "kite_bot_events.jsonl"
+POSITION_FILE = _STATE_DIR / "kite_bot_position.json"
 
 # ── WebSocket manager ─────────────────────────────────────────────
 
@@ -47,13 +50,160 @@ manager = ConnectionManager()
 
 # ── App ───────────────────────────────────────────────────────────
 
+def _run_startup_diagnostics() -> dict:
+    """Run comprehensive startup checks and return results dict."""
+    import importlib
+    import sys as _sys
+    diag: dict = {"checks": [], "passed": 0, "failed": 0, "warnings": 0}
+
+    def _log(msg: str):
+        print(msg, flush=True)
+
+    def _check(name: str, ok: bool, detail: str = "", warn: bool = False):
+        status = "PASS" if ok else ("WARN" if warn else "FAIL")
+        diag["checks"].append({"name": name, "status": status, "detail": detail})
+        if ok:
+            diag["passed"] += 1
+        elif warn:
+            diag["warnings"] += 1
+        else:
+            diag["failed"] += 1
+        tag = f"[{status}]"
+        _log(f"  {tag:8s} {name}" + (f"  — {detail}" if detail else ""))
+
+    _log("\n" + "=" * 60)
+    _log("  NIFTY ALPHA BOT — STARTUP DIAGNOSTICS")
+    _log("=" * 60)
+
+    # 1. Config loaded
+    _check("Config loaded", bool(settings), f"capital=₹{settings.capital:,.0f}")
+
+    # 2. Kite API Key
+    api_key = settings.kite_api_key
+    _check("KITE_API_KEY", bool(api_key),
+           f"{'...'+api_key[-4:] if api_key else 'MISSING'}")
+
+    # 3. Kite API Secret
+    api_secret = settings.kite_api_secret
+    _check("KITE_API_SECRET", bool(api_secret),
+           f"{'...'+api_secret[-4:] if api_secret else 'MISSING'}")
+
+    # 4. kiteconnect importable
+    try:
+        importlib.import_module("kiteconnect")
+        _check("kiteconnect package", True)
+    except ImportError:
+        _check("kiteconnect package", False, "pip install kiteconnect")
+
+    # 5. Token cache
+    token = ""
+    try:
+        from kite_broker.token_manager import load_cached_token
+        token = load_cached_token() or ""
+        _check("Token cache (today)", bool(token),
+               f"{'saved' if token else 'no token for today'}", warn=not token)
+    except Exception as e:
+        _check("Token cache", False, str(e))
+
+    # 6. Kite connection test (only if token exists)
+    if token and api_key:
+        try:
+            from kiteconnect import KiteConnect
+            k = KiteConnect(api_key=api_key)
+            k.set_access_token(token)
+            profile = k.profile()
+            user_name = profile.get("user_name", "?")
+            _check("Kite API connection", True, f"user={user_name}")
+            global _kite_verified
+            _kite_verified = True
+        except Exception as e:
+            err = str(e)[:60]
+            _check("Kite API connection", False, err, warn=True)
+    else:
+        _check("Kite API connection", False, "skipped — no token", warn=True)
+
+    # 7. State directory
+    _check("State directory", _STATE_DIR.exists(), str(_STATE_DIR))
+
+    # 8. Events log
+    _check("Events log", True,
+           f"{EVENTS_LOG} ({'exists' if EVENTS_LOG.exists() else 'will create'})")
+
+    # 9. Position file
+    _check("Position file", True,
+           f"{'exists' if POSITION_FILE.exists() else 'idle — no active position'}")
+
+    # 10. Risk state
+    risk_file = _STATE_DIR / "kite_bot_risk_state.json"
+    if risk_file.exists():
+        try:
+            rd = json.loads(risk_file.read_text())
+            _check("Risk state", True,
+                   f"capital=₹{rd.get('current_capital',0):,.0f} peak=₹{rd.get('peak_capital',0):,.0f}")
+        except Exception:
+            _check("Risk state", True, "exists but unreadable", warn=True)
+    else:
+        _check("Risk state", True, "fresh — no persisted state", warn=False)
+
+    # 11. Shared modules
+    for mod_name in ["shared.indicators", "shared.regime_detector", "shared.orb_engine",
+                     "shared.vwap_reclaim_engine", "bot.risk_manager"]:
+        try:
+            importlib.import_module(mod_name)
+            _check(f"Module: {mod_name.split('.')[-1]}", True)
+        except Exception as e:
+            _check(f"Module: {mod_name.split('.')[-1]}", False, str(e)[:50])
+
+    # 12. Paper mode
+    mode = "PAPER" if settings.paper_mode else "LIVE"
+    _check(f"Trading mode: {mode}", True,
+           f"lot_size={settings.lot_size}, max_lots={settings.max_lots}")
+
+    # 13. Risk parameters
+    daily_limit = settings.capital * settings.max_daily_loss_pct
+    _check("Risk config", True,
+           f"daily_limit=₹{daily_limit:,.0f}, drawdown_halt={settings.max_drawdown_pct}%, "
+           f"risk/trade={settings.risk_per_trade_pct*100:.1f}%")
+
+    # 14. Execution settings
+    _check("Execution config", True,
+           f"limit_orders={'ON' if settings.use_limit_orders else 'OFF'}, "
+           f"SL-M={'ON' if settings.use_slm_exit else 'OFF'}, "
+           f"buffer={settings.limit_price_buffer_pct*100:.1f}%")
+
+    # Summary
+    total = diag["passed"] + diag["failed"] + diag["warnings"]
+    _log("-" * 60)
+    summary = f"  {diag['passed']}/{total} passed"
+    if diag["warnings"]:
+        summary += f", {diag['warnings']} warnings"
+    if diag["failed"]:
+        summary += f", {diag['failed']} FAILED"
+    _log(summary)
+    _log("=" * 60 + "\n")
+
+    return diag
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Start background task to poll events and broadcast
     import asyncio
+    diag = _run_startup_diagnostics()
+    append_bot_event("SYSTEM_READY", {
+        "message": "API server started — diagnostics complete",
+        "paper_mode": settings.paper_mode,
+        "capital": settings.capital,
+        "kite_configured": bool(settings.kite_api_key),
+        "checks_passed": diag["passed"],
+        "checks_failed": diag["failed"],
+        "checks_warnings": diag["warnings"],
+        "checks": diag["checks"],
+    })
     task = asyncio.create_task(broadcast_loop())
+    hb_task = asyncio.create_task(heartbeat_loop())
     yield
     task.cancel()
+    hb_task.cancel()
 
 
 app = FastAPI(
@@ -89,7 +239,6 @@ async def broadcast_loop():
                             "events": events,
                         })
 
-            # Broadcast position state
             pos = read_position()
             await manager.broadcast({
                 "type": "POSITION_UPDATE",
@@ -99,6 +248,143 @@ async def broadcast_loop():
         except Exception:
             pass
         await asyncio.sleep(2)
+
+
+async def heartbeat_loop():
+    """Emit a HEARTBEAT event every ~10s with full system state."""
+    import asyncio
+    while True:
+        try:
+            now = datetime.now()
+            h, m = now.hour, now.minute
+
+            # Market status
+            is_market_day = now.weekday() < 5
+            pre_market = is_market_day and 8 <= h < 9
+            market_open = is_market_day and ((h == 9 and m >= 15) or (10 <= h <= 14) or (h == 15 and m <= 30))
+            post_market = is_market_day and h == 15 and m > 30
+            market_closed = not market_open
+
+            if market_open:
+                market_status = "OPEN"
+            elif pre_market:
+                market_status = "PRE_MARKET"
+            elif post_market:
+                market_status = "POST_MARKET"
+            elif not is_market_day:
+                market_status = "WEEKEND"
+            else:
+                market_status = "CLOSED"
+
+            # Kite connection
+            kite_status = _kite_connection_status()
+
+            # Position state
+            pos = read_position()
+            pos_state = pos.get("state", "IDLE")
+
+            # Risk state
+            risk_file = _STATE_DIR / "kite_bot_risk_state.json"
+            risk_data = {}
+            if risk_file.exists():
+                try:
+                    risk_data = json.loads(risk_file.read_text())
+                except Exception:
+                    pass
+
+            # Strategy state
+            strat_file = _STATE_DIR / "kite_bot_strategy_state.json"
+            strat_data = {"orb_enabled": True, "vwap_enabled": True}
+            if strat_file.exists():
+                try:
+                    strat_data = json.loads(strat_file.read_text())
+                except Exception:
+                    pass
+
+            # Today's trades
+            today_str = now.strftime("%Y-%m-%d")
+            all_trades = get_trades_from_events()
+            today_trades = [t for t in all_trades if str(t.get("trade_date", t.get("entry_ts", "")))[:10] == today_str]
+            today_pnl = sum(t.get("net_pnl", 0) for t in today_trades)
+
+            # Halt flag
+            halt_active = (_STATE_DIR / "kite_bot_halt.flag").exists()
+
+            # Bot process check
+            bot_running = POSITION_FILE.exists() and pos_state != "IDLE"
+
+            # Nifty price (from cache, not a live call)
+            nifty_price = None
+            try:
+                token = (os.environ.get("KITE_ACCESS_TOKEN") or "").strip()
+                if not token:
+                    from kite_broker.token_manager import load_cached_token
+                    token = load_cached_token() or ""
+                if token and settings.kite_api_key:
+                    from kiteconnect import KiteConnect
+                    k = KiteConnect(api_key=settings.kite_api_key)
+                    k.set_access_token(token)
+                    q = k.ltp(["NSE:NIFTY 50"])
+                    nifty_price = q.get("NSE:NIFTY 50", {}).get("last_price")
+            except Exception:
+                pass
+
+            # Decide "thinking" message
+            if halt_active:
+                thinking = "HALTED — emergency stop active"
+            elif market_status == "WEEKEND":
+                thinking = "Weekend — markets closed, resting"
+            elif market_status == "CLOSED":
+                thinking = "Markets closed — waiting for next session"
+            elif market_status == "PRE_MARKET":
+                thinking = "Pre-market — warming up, checking token & instruments"
+            elif market_status == "POST_MARKET":
+                thinking = f"Post-market — today: {len(today_trades)} trades, P&L ₹{today_pnl:,.0f}"
+            elif pos_state == "ACTIVE":
+                sym = pos.get("symbol", "?")
+                entry = pos.get("entry_price", 0)
+                thinking = f"IN TRADE — {sym} entry ₹{entry:.1f}, managing position"
+            elif len(today_trades) >= settings.max_trades_per_day:
+                thinking = f"Max trades reached ({len(today_trades)}/{settings.max_trades_per_day}) — done for today"
+            elif today_pnl <= -(settings.capital * settings.max_daily_loss_pct):
+                thinking = f"Daily loss limit hit (₹{today_pnl:,.0f}) — halted"
+            else:
+                strategies_on = []
+                if strat_data.get("orb_enabled"):
+                    strategies_on.append("ORB")
+                if strat_data.get("vwap_enabled"):
+                    strategies_on.append("VWAP")
+                strat_str = "+".join(strategies_on) if strategies_on else "none"
+                thinking = f"Scanning for entry — {strat_str} active, {len(today_trades)}/{settings.max_trades_per_day} trades used"
+
+            payload = {
+                "state": pos_state,
+                "market_status": market_status,
+                "market_open": market_open,
+                "thinking": thinking,
+                "nifty_price": nifty_price,
+                "kite_connected": kite_status.get("kite_connected", False),
+                "kite_token_saved": kite_status.get("kite_token_saved", False),
+                "trades_today": len(today_trades),
+                "max_trades": settings.max_trades_per_day,
+                "daily_pnl": round(today_pnl, 2),
+                "current_capital": risk_data.get("current_capital", settings.capital),
+                "peak_capital": risk_data.get("peak_capital", settings.capital),
+                "drawdown_pct": round(
+                    ((risk_data.get("peak_capital", settings.capital) - risk_data.get("current_capital", settings.capital))
+                     / max(risk_data.get("peak_capital", settings.capital), 1)) * 100, 1
+                ) if risk_data else 0.0,
+                "halt_active": halt_active,
+                "strategies": strat_data,
+                "paper_mode": settings.paper_mode,
+                "consecutive_losses": risk_data.get("consecutive_losses", 0),
+            }
+
+            append_bot_event("HEARTBEAT", payload)
+
+        except Exception:
+            pass
+        await asyncio.sleep(10)
 
 
 # ── Helpers ───────────────────────────────────────────────────────
@@ -121,6 +407,58 @@ def read_recent_events(n: int = 50) -> List[dict]:
 
 def read_all_events() -> List[dict]:
     return read_recent_events(10000)
+
+
+def append_bot_event(event_type: str, payload: dict) -> None:
+    """Append one line to kite_bot_events.jsonl (same format as trading bot)."""
+    entry = {"ts": datetime.now().isoformat(), "event": event_type, **payload}
+    try:
+        EVENTS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(EVENTS_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, default=str) + "\n")
+    except Exception:
+        pass
+
+
+_kite_verified = False  # set True after explicit verify succeeds
+
+
+def _verify_kite_token(token: str) -> tuple:
+    """Network call to Kite — only use for explicit auth actions, not on every page load."""
+    global _kite_verified
+    from shared.config import settings
+    if not settings.kite_api_key:
+        return False, "KITE_API_KEY missing in .env"
+    try:
+        from kiteconnect import KiteConnect
+        k = KiteConnect(api_key=settings.kite_api_key)
+        k.set_access_token(token)
+        k.profile()
+        _kite_verified = True
+        return True, ""
+    except Exception as e:
+        _kite_verified = False
+        return False, str(e)
+
+
+def _kite_connection_status() -> dict:
+    """Fast check — no network call. Token presence + last verify result."""
+    from shared.config import settings
+
+    api_ok = bool(settings.kite_api_key and settings.kite_api_secret)
+    token = (os.environ.get("KITE_ACCESS_TOKEN") or "").strip()
+    if not token:
+        try:
+            from kite_broker.token_manager import load_cached_token
+            token = load_cached_token() or ""
+        except Exception:
+            token = ""
+    token_saved = bool(token)
+    return {
+        "kite_api_configured": api_ok,
+        "kite_token_saved": token_saved,
+        "kite_connected": token_saved and _kite_verified,
+    }
 
 
 def read_position() -> dict:
@@ -160,6 +498,11 @@ def root():
     return {"status": "ok", "service": "NIFTY Alpha Bot API"}
 
 
+@app.get("/api/health")
+def health():
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
+
 @app.get("/api/status")
 def status():
     pos = read_position()
@@ -168,6 +511,7 @@ def status():
         "position": pos,
         "daily_pnl": pnl,
         "timestamp": datetime.now().isoformat(),
+        **_kite_connection_status(),
     }
 
 
@@ -185,6 +529,40 @@ def trades_today():
     all_trades = get_trades_from_events()
     today_trades = [t for t in all_trades if str(t.get("trade_date", t.get("entry_ts", "")))[:10] == today]
     return {"trades": today_trades, "date": today}
+
+
+@app.get("/api/slippage/sl")
+def sl_slippage_stats():
+    """SL slippage report: shows planned vs actual SL fill for every SL_HIT trade."""
+    trades = get_trades_from_events()
+    sl_trades = [t for t in trades if t.get("exit_reason") == "SL_HIT" and "sl_trigger_price" in t]
+    slm_events = [e for e in read_all_events() if e.get("event") == "SLM_EXECUTED"]
+
+    items = []
+    for t in sl_trades:
+        items.append({
+            "date": str(t.get("trade_date", t.get("entry_ts", "")))[:10],
+            "symbol": t.get("symbol", ""),
+            "trigger_price": t.get("sl_trigger_price"),
+            "fill_price": t.get("sl_fill_price"),
+            "slippage": t.get("sl_slippage"),
+            "slippage_pct": t.get("sl_slippage_pct"),
+            "extra_loss": t.get("sl_extra_loss"),
+        })
+
+    total_extra_loss = sum(i["extra_loss"] or 0 for i in items)
+    avg_slip_pct = (
+        sum(abs(i["slippage_pct"] or 0) for i in items) / len(items) if items else 0
+    )
+    worst = max(items, key=lambda x: abs(x["slippage_pct"] or 0)) if items else None
+
+    return {
+        "total_sl_trades": len(items),
+        "total_extra_loss": round(total_extra_loss, 2),
+        "avg_slippage_pct": round(avg_slip_pct, 3),
+        "worst_slip": worst,
+        "trades": items,
+    }
 
 
 @app.get("/api/pnl/daily")
@@ -220,16 +598,16 @@ def position():
 @app.post("/api/emergency-stop")
 def emergency_stop():
     """Trigger emergency stop — write a halt file the bot polls."""
-    HALT_FILE = Path("/tmp/kite_bot_halt.flag")
-    HALT_FILE.write_text(datetime.now().isoformat())
+    halt_file = _STATE_DIR / "kite_bot_halt.flag"
+    halt_file.write_text(datetime.now().isoformat())
     return {"status": "EMERGENCY_STOP_TRIGGERED", "timestamp": datetime.now().isoformat()}
 
 
 @app.delete("/api/emergency-stop")
 def clear_emergency_stop():
-    HALT_FILE = Path("/tmp/kite_bot_halt.flag")
-    if HALT_FILE.exists():
-        HALT_FILE.unlink()
+    halt_file = _STATE_DIR / "kite_bot_halt.flag"
+    if halt_file.exists():
+        halt_file.unlink()
     return {"status": "CLEARED"}
 
 
@@ -261,39 +639,287 @@ def set_kite_token(body: dict):
     token = body.get("access_token", "")
     if not token:
         raise HTTPException(400, "access_token required")
+    ok, detail = _verify_kite_token(token)
+    if not ok:
+        raise HTTPException(401, f"Invalid token: {detail}")
     os.environ["KITE_ACCESS_TOKEN"] = token
     from kite_broker.token_manager import save_token
     save_token(token)
-    return {"status": "TOKEN_UPDATED", "timestamp": datetime.now().isoformat()}
+    append_bot_event("KITE_AUTH", {"method": "manual_paste", "message": "Access token saved and verified"})
+    return {"status": "TOKEN_UPDATED", "timestamp": datetime.now().isoformat(), "kite_connected": True}
+
+
+@app.get("/api/kite/verify")
+def verify_kite():
+    """Explicitly test if the saved Kite token is valid (calls profile())."""
+    token = (os.environ.get("KITE_ACCESS_TOKEN") or "").strip()
+    if not token:
+        try:
+            from kite_broker.token_manager import load_cached_token
+            token = load_cached_token() or ""
+        except Exception:
+            token = ""
+    if not token:
+        return {"kite_connected": False, "error": "No token saved"}
+    ok, detail = _verify_kite_token(token)
+    return {"kite_connected": ok, "error": detail if not ok else None}
+
+
+@app.get("/api/nifty/quote")
+def nifty_quote():
+    """Get live NIFTY 50 price from Kite. Falls back gracefully if not connected."""
+    token = (os.environ.get("KITE_ACCESS_TOKEN") or "").strip()
+    if not token:
+        try:
+            from kite_broker.token_manager import load_cached_token
+            token = load_cached_token() or ""
+        except Exception:
+            token = ""
+    if not token:
+        return {"price": None, "change": None, "change_pct": None, "error": "No token"}
+    from shared.config import settings
+    try:
+        from kiteconnect import KiteConnect
+        k = KiteConnect(api_key=settings.kite_api_key)
+        k.set_access_token(token)
+        q = k.quote(["NSE:NIFTY 50"])
+        d = q.get("NSE:NIFTY 50", {})
+        ltp = d.get("last_price", 0)
+        ohlc = d.get("ohlc", {})
+        prev_close = ohlc.get("close", ltp)
+        change = ltp - prev_close if prev_close else 0
+        change_pct = (change / prev_close * 100) if prev_close else 0
+        return {
+            "price": ltp,
+            "change": round(change, 2),
+            "change_pct": round(change_pct, 2),
+            "open": ohlc.get("open"),
+            "high": ohlc.get("high"),
+            "low": ohlc.get("low"),
+            "close": prev_close,
+        }
+    except Exception as e:
+        return {"price": None, "error": str(e)}
+
+
+@app.get("/api/kite/auth-url")
+def kite_auth_url():
+    """Return the Kite Connect login URL for OAuth flow."""
+    from shared.config import settings
+    if not settings.kite_api_key:
+        raise HTTPException(400, "KITE_API_KEY not configured in .env")
+    url = f"https://kite.trade/connect/login?api_key={settings.kite_api_key}&v=3"
+    return {"url": url, "api_key": settings.kite_api_key}
+
+
+@app.get("/callback")
+@app.get("/api/kite/callback")
+def kite_callback(request_token: str = "", status: str = "", type: str = "", action: str = ""):
+    """
+    Kite OAuth callback — exchanges request_token for access_token.
+    After Kite login, browser redirects here with ?request_token=XXX&status=success.
+    Returns an HTML page that auto-closes and notifies the parent window.
+    """
+    from fastapi.responses import HTMLResponse
+    import html as html_module
+
+    if status != "success" or not request_token:
+        append_bot_event("KITE_AUTH", {"method": "oauth", "message": "Kite redirect missing request_token", "success": False})
+        fail_msg = json.dumps({"type": "KITE_AUTH_FAIL", "error": "Kite did not return request_token"})
+        html = f"""<html><body><h2>Authentication failed</h2>
+        <p>Kite did not return a valid token.</p>
+        <script>
+          if (window.opener) {{ window.opener.postMessage({fail_msg}, '*'); }}
+          setTimeout(() => window.close(), 3000);
+        </script></body></html>"""
+        return HTMLResponse(html)
+
+    from shared.config import settings
+    try:
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=settings.kite_api_key)
+        session = kite.generate_session(request_token, api_secret=settings.kite_api_secret)
+        access_token = session["access_token"]
+
+        os.environ["KITE_ACCESS_TOKEN"] = access_token
+        from kite_broker.token_manager import save_token
+        save_token(access_token)
+        append_bot_event("KITE_AUTH", {"method": "oauth", "message": "Access token saved via Kite login popup", "success": True})
+
+        ok_msg = json.dumps({"type": "KITE_AUTH_OK", "token_prefix": access_token[:8] + "..."})
+        html = f"""<html><body style="font-family:system-ui;text-align:center;padding:60px;background:#0d1117;color:#c9d1d9">
+        <h2 style="color:#3fb950">Authentication Successful</h2>
+        <p>Token has been saved. This window will close automatically.</p>
+        <script>
+          if (window.opener) {{ window.opener.postMessage({ok_msg}, '*'); }}
+          setTimeout(() => window.close(), 2000);
+        </script></body></html>"""
+        return HTMLResponse(html)
+
+    except Exception as e:
+        err_txt = str(e)
+        append_bot_event("KITE_AUTH", {"method": "oauth", "message": "Token exchange failed", "success": False, "error": err_txt})
+        fail_msg = json.dumps({"type": "KITE_AUTH_FAIL", "error": err_txt})
+        esc = html_module.escape(err_txt)
+        html = f"""<html><body style="font-family:system-ui;text-align:center;padding:60px;background:#0d1117;color:#c9d1d9">
+        <h2 style="color:#f85149">Token Exchange Failed</h2>
+        <p>{esc}</p>
+        <script>
+          if (window.opener) {{ window.opener.postMessage({fail_msg}, '*'); }}
+          setTimeout(() => window.close(), 5000);
+        </script></body></html>"""
+        return HTMLResponse(html)
+
+
+@app.post("/api/kite/auto-auth")
+def auto_auth_kite():
+    """Trigger automated TOTP login via Playwright headless browser."""
+    from shared.config import settings
+    if not settings.kite_totp_secret:
+        raise HTTPException(400, "KITE_TOTP_SECRET not configured in .env")
+    from kite_broker.token_manager import get_token_automated
+    token = get_token_automated(
+        api_key=settings.kite_api_key,
+        api_secret=settings.kite_api_secret,
+        user_id=settings.kite_user_id,
+        password=settings.kite_user_password,
+        totp_secret=settings.kite_totp_secret,
+    )
+    if not token:
+        raise HTTPException(500, "Auto-auth failed — check TOTP secret and credentials")
+    os.environ["KITE_ACCESS_TOKEN"] = token
+    append_bot_event("KITE_AUTH", {"method": "totp_auto", "message": "Access token via server TOTP automation", "success": True})
+    return {"status": "AUTO_AUTH_SUCCESS", "message": "Token refreshed via TOTP automation", "timestamp": datetime.now().isoformat()}
 
 
 @app.post("/api/backtest/run")
+@app.post("/api/backtest")
 async def run_backtest_api(body: dict):
     """
-    Trigger a backtest run. Returns results when complete.
-    For long runs, use async task pattern.
+    Trigger a backtest run. Accepts strategy, start_date, end_date, months, capital.
     """
+    strategy = body.get("strategy", "BOTH")
     months = body.get("months", 6)
     capital = body.get("capital", 100_000.0)
+    start_date = body.get("start_date")
+    end_date = body.get("end_date")
     try:
         import asyncio
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, _run_backtest_sync, months, capital)
+        result = await loop.run_in_executor(
+            None, _run_backtest_sync, months, capital, strategy, start_date, end_date
+        )
         return result
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(500, str(e))
 
 
-def _run_backtest_sync(months: int, capital: float) -> dict:
-    from backtest.data_downloader import download_nifty_spot, download_india_vix
+def _run_backtest_sync(months: int, capital: float, strategy: str = "BOTH",
+                       start_date_str: Optional[str] = None,
+                       end_date_str: Optional[str] = None) -> dict:
+    from backtest.data_downloader import download_nifty_spot, download_nifty_daily, download_india_vix
     from backtest.backtest_engine import BacktestConfig, run_backtest
-    nifty_df = download_nifty_spot(months=months)
-    vix_df = download_india_vix(months=months)
-    cfg = BacktestConfig(capital=capital)
-    result = run_backtest(nifty_df, vix_df, cfg, verbose=False)
-    # Remove equity curve from API response (too large)
-    result["metrics"].pop("equity_curve", None)
+    from backtest.daily_backtest_engine import DailyBacktestConfig, run_daily_backtest
+    from datetime import date as date_cls
+
+    sd = None
+    ed = None
+    if start_date_str:
+        sd = date_cls.fromisoformat(start_date_str)
+    if end_date_str:
+        ed = date_cls.fromisoformat(end_date_str)
+
+    if sd and ed:
+        diff_months = max(1, ((ed.year - sd.year) * 12 + ed.month - sd.month) + 1)
+    else:
+        diff_months = months
+
+    vix_df = download_india_vix(months=max(diff_months, 24))
+
+    # Auto-select: use daily candles for > 2 months, 5m for recent data
+    use_daily = diff_months > 2
+
+    if use_daily:
+        nifty_df = download_nifty_daily(months=diff_months, force_refresh=True)
+        cfg = DailyBacktestConfig(capital=capital)
+        result = run_daily_backtest(nifty_df, vix_df, cfg, start_date=sd, end_date=ed, verbose=True, strategy_filter=strategy)
+    else:
+        nifty_df = download_nifty_spot(months=diff_months)
+        cfg = BacktestConfig(capital=capital)
+        if strategy == "ORB":
+            cfg.enable_vwap_reclaim = False
+        elif strategy == "VWAP":
+            cfg.enable_vwap_reclaim = True
+        result = run_backtest(nifty_df, vix_df, cfg, start_date=sd, end_date=ed, verbose=False)
+
+    eq = result["metrics"].get("equity_curve", [])
+    trades_list = result.get("trades", [])
+
+    # Build equity curve with dates from trades
+    eq_with_dates = []
+    if eq and trades_list:
+        eq_with_dates.append({"date": "Start", "equity": eq[0]})
+        for i, t in enumerate(trades_list):
+            td = t.get("trade_date", t.get("entry_ts", ""))
+            date_str = td.isoformat() if hasattr(td, "isoformat") else str(td)[:10]
+            if i + 1 < len(eq):
+                eq_with_dates.append({"date": date_str, "equity": eq[i + 1]})
+        if len(eq) > len(trades_list) + 1:
+            eq_with_dates.append({"date": "End", "equity": eq[-1]})
+    elif eq:
+        eq_with_dates = [{"date": str(i), "equity": v} for i, v in enumerate(eq)]
+
+    if len(eq_with_dates) > 500:
+        step = max(1, len(eq_with_dates) // 300)
+        eq_with_dates = eq_with_dates[::step] + [eq_with_dates[-1]]
+    result["equity_curve"] = eq_with_dates
+
+    monthly = result["metrics"].get("monthly_breakdown", [])
+    result["monthly"] = [{"month": m["month"], "return": m["net_pnl"], **m} for m in monthly]
+
+    for t in trades_list:
+        for k, v in list(t.items()):
+            if hasattr(v, "isoformat"):
+                t[k] = v.isoformat()
+            elif isinstance(v, float) and (v != v):
+                t[k] = 0
+
     return result
+
+
+# ── Logs endpoint — full event log with scan details ──────────
+@app.get("/api/logs")
+def get_logs(limit: int = 500, event_type: Optional[str] = None):
+    """Return detailed bot logs for the Logs panel."""
+    events = read_all_events()
+    if event_type:
+        events = [e for e in events if e.get("event") == event_type]
+    return {"logs": events[-limit:], "total": len(events)}
+
+
+# ── Strategy toggle ───────────────────────────────────────────
+STRATEGY_STATE_FILE = _STATE_DIR / "kite_bot_strategy_state.json"
+
+@app.get("/api/strategy/state")
+def get_strategy_state():
+    if STRATEGY_STATE_FILE.exists():
+        try:
+            return json.loads(STRATEGY_STATE_FILE.read_text())
+        except Exception:
+            pass
+    return {"orb_enabled": True, "vwap_enabled": True}
+
+@app.post("/api/strategy/toggle")
+def toggle_strategy(body: dict):
+    state = get_strategy_state()
+    if "orb_enabled" in body:
+        state["orb_enabled"] = bool(body["orb_enabled"])
+    if "vwap_enabled" in body:
+        state["vwap_enabled"] = bool(body["vwap_enabled"])
+    STRATEGY_STATE_FILE.write_text(json.dumps(state))
+    return state
 
 
 # ── WebSocket ─────────────────────────────────────────────────────

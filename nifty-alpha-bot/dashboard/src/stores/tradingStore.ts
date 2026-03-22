@@ -22,6 +22,17 @@ export interface Trade {
   vix: number
   trade_date: string
   filter_log?: Record<string, any>
+  // Execution realism fields
+  signal_ltp?: number
+  slippage_pct?: number
+  entry_latency_ms?: number
+  order_type?: string
+  slm_order_id?: string
+  sl_trigger_price?: number
+  sl_fill_price?: number
+  sl_slippage?: number
+  sl_slippage_pct?: number
+  sl_extra_loss?: number
 }
 
 export interface Position {
@@ -50,6 +61,22 @@ export interface DailyPnL {
   win_rate: number
 }
 
+export interface SlippageStats {
+  total_sl_trades: number
+  total_extra_loss: number
+  avg_slippage_pct: number
+  worst_slip: { date: string; symbol: string; slippage_pct: number; extra_loss: number } | null
+  trades: Array<{
+    date: string
+    symbol: string
+    trigger_price: number
+    fill_price: number
+    slippage: number
+    slippage_pct: number
+    extra_loss: number
+  }>
+}
+
 interface TradingStore {
   connected: boolean
   position: Position
@@ -58,6 +85,7 @@ interface TradingStore {
   dailyPnl: DailyPnL | null
   emergencyStop: boolean
   lastUpdate: string
+  slippageStats: SlippageStats | null
 
   setConnected: (v: boolean) => void
   setPosition: (p: Position) => void
@@ -66,6 +94,7 @@ interface TradingStore {
   setDailyPnl: (p: DailyPnL) => void
   setEmergencyStop: (v: boolean) => void
   setLastUpdate: (s: string) => void
+  setSlippageStats: (s: SlippageStats) => void
 }
 
 export const useTradingStore = create<TradingStore>((set) => ({
@@ -76,6 +105,7 @@ export const useTradingStore = create<TradingStore>((set) => ({
   dailyPnl: null,
   emergencyStop: false,
   lastUpdate: '',
+  slippageStats: null,
 
   setConnected: (v) => set({ connected: v }),
   setPosition: (p) => set({ position: p }),
@@ -84,4 +114,5 @@ export const useTradingStore = create<TradingStore>((set) => ({
   setDailyPnl: (p) => set({ dailyPnl: p }),
   setEmergencyStop: (v) => set({ emergencyStop: v }),
   setLastUpdate: (s) => set({ lastUpdate: s }),
+  setSlippageStats: (s) => set({ slippageStats: s }),
 }))

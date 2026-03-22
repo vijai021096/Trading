@@ -1,188 +1,111 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { ChevronDown, ArrowUpRight, ArrowDownRight, Clock, Filter as FilterIcon } from 'lucide-react'
 import clsx from 'clsx'
-import { ChevronDown, ChevronRight, TrendingUp, TrendingDown } from 'lucide-react'
 import { Trade } from '../../stores/tradingStore'
 import { FilterVisualizer } from './FilterVisualizer'
 
-export function TradeLogTable({ trades, maxRows }: { trades: Trade[]; maxRows?: number }) {
-  const [expanded, setExpanded] = useState<string | null>(null)
-  const rows = maxRows ? trades.slice(0, maxRows) : trades
+export function TradeLogTable({ trades, showDateCol = false }: { trades: Trade[]; showDateCol?: boolean }) {
+  const [expanded, setExpanded] = useState<number | null>(null)
 
-  if (!rows.length) {
+  if (!trades.length) {
     return (
-      <div className="flex flex-col items-center justify-center py-10 text-text3">
-        <svg width="36" height="28" viewBox="0 0 36 28" fill="none" className="mb-3 opacity-40">
-          <rect x="1" y="16" width="6" height="10" rx="1.5" fill="currentColor" />
-          <rect x="10" y="9" width="6" height="17" rx="1.5" fill="currentColor" />
-          <rect x="19" y="12" width="6" height="14" rx="1.5" fill="currentColor" />
-          <rect x="28" y="3" width="6" height="23" rx="1.5" fill="currentColor" />
-        </svg>
-        <p className="text-sm font-medium text-text2">No trades yet</p>
-        <p className="text-xs mt-1">Trades appear here during market hours</p>
+      <div className="glass-card rounded-2xl p-12 text-center">
+        <BarChartIcon />
+        <p className="text-text2 mt-3 font-medium">No trades yet</p>
+        <p className="text-text3 text-[12px] mt-1">Trades appear here during market hours</p>
       </div>
     )
   }
 
   return (
-    <div className="w-full overflow-x-auto">
-      <table className="w-full border-collapse">
-        <thead>
-          <tr className="border-b border-line">
-            <th className="w-8 py-2.5 px-3" />
-            {['Date','Direction','Strategy','Entry','Exit','SL','Target','Reason','P&L'].map(h => (
-              <th key={h} className="py-2.5 px-3 text-left text-[11px] font-semibold tracking-wider uppercase text-text3 whitespace-nowrap">
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((t, i) => {
-            const id  = `${t.entry_ts}-${i}`
-            const open = expanded === id
-            const pos  = (t.net_pnl ?? 0) >= 0
-
-            return (
-              <React.Fragment key={id}>
-                <tr
-                  onClick={() => setExpanded(open ? null : id)}
-                  className={clsx(
-                    'border-b border-line/50 cursor-pointer transition-colors group',
-                    open ? 'bg-cardHigh' : 'hover:bg-card/60'
-                  )}
-                >
-                  <td className="py-3 px-3 text-text3 group-hover:text-text2">
-                    {open ? <ChevronDown size={13}/> : <ChevronRight size={13}/>}
+    <div className="glass-card rounded-2xl overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead>
+            <tr className="border-b border-line/30">
+              {showDateCol && <th className="text-left py-3 px-4 text-[10px] font-bold tracking-wider text-text3 uppercase">Date</th>}
+              <th className="text-left py-3 px-4 text-[10px] font-bold tracking-wider text-text3 uppercase">Time</th>
+              <th className="text-left py-3 px-4 text-[10px] font-bold tracking-wider text-text3 uppercase">Symbol</th>
+              <th className="text-left py-3 px-4 text-[10px] font-bold tracking-wider text-text3 uppercase">Dir</th>
+              <th className="text-right py-3 px-4 text-[10px] font-bold tracking-wider text-text3 uppercase">Entry</th>
+              <th className="text-right py-3 px-4 text-[10px] font-bold tracking-wider text-text3 uppercase">Exit</th>
+              <th className="text-left py-3 px-4 text-[10px] font-bold tracking-wider text-text3 uppercase">Reason</th>
+              <th className="text-right py-3 px-4 text-[10px] font-bold tracking-wider text-text3 uppercase">SL Slip</th>
+              <th className="text-right py-3 px-4 text-[10px] font-bold tracking-wider text-text3 uppercase">Latency</th>
+              <th className="text-right py-3 px-4 text-[10px] font-bold tracking-wider text-text3 uppercase">P&L</th>
+              <th className="w-8 py-3 px-3"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {trades.map((t, i) => {
+              const isUp = t.net_pnl >= 0
+              const isExp = expanded === i
+              return (
+                <motion.tr key={i} className={clsx('border-b border-line/15 hover:bg-card/50 transition-colors cursor-pointer group',
+                  isExp && 'bg-card/60')}
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.02 }}
+                  onClick={() => setExpanded(isExp ? null : i)}>
+                  {showDateCol && <td className="py-2.5 px-4 font-mono text-text3">{t.trade_date}</td>}
+                  <td className="py-2.5 px-4 font-mono text-text2 whitespace-nowrap">{new Date(t.entry_ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</td>
+                  <td className="py-2.5 px-4">
+                    <div className="flex items-center gap-1.5">
+                      <span className={clsx('w-1 h-4 rounded-full', t.option_type === 'CE' ? 'bg-green' : 'bg-red')} />
+                      <span className="font-mono font-semibold text-text1">{t.symbol?.slice(-12) ?? t.strategy}</span>
+                    </div>
                   </td>
-
-                  <td className="py-3 px-3 font-mono text-xs text-text2 whitespace-nowrap">
-                    {t.trade_date ?? t.entry_ts?.slice(0,10) ?? '--'}
-                  </td>
-
-                  <td className="py-3 px-3">
-                    <span className={clsx(
-                      'inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded border',
-                      t.direction === 'CALL'
-                        ? 'bg-greenDim border-green/25 text-green'
-                        : 'bg-redDim border-red/25 text-red'
-                    )}>
-                      {t.direction === 'CALL'
-                        ? <TrendingUp size={10}/>
-                        : <TrendingDown size={10}/>}
-                      {t.direction} {t.option_type}
+                  <td className="py-2.5 px-4">
+                    <span className={clsx('inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold',
+                      t.direction === 'CALL' ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>
+                      {t.direction === 'CALL' ? <ArrowUpRight size={9} /> : <ArrowDownRight size={9} />}
+                      {t.direction}
                     </span>
                   </td>
-
-                  <td className="py-3 px-3">
-                    <span className={clsx(
-                      'text-[11px] font-bold px-2 py-0.5 rounded border',
-                      (t.strategy ?? '').includes('ORB')
-                        ? 'bg-accentDim border-accent/25 text-accent'
-                        : 'bg-amberDim border-amber/25 text-amber'
-                    )}>
-                      {t.strategy?.replace('_DAILY','').replace('VWAP_RECLAIM','VWAP') ?? '--'}
+                  <td className="py-2.5 px-4 text-right font-mono text-text2">₹{t.entry_price.toFixed(1)}</td>
+                  <td className="py-2.5 px-4 text-right font-mono text-text2">{t.exit_price ? `₹${t.exit_price.toFixed(1)}` : '--'}</td>
+                  <td className="py-2.5 px-4">
+                    <span className={clsx('inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold',
+                      t.exit_reason === 'TARGET' ? 'bg-green/10 text-green' :
+                      t.exit_reason === 'SL_HIT' ? 'bg-red/10 text-red' : 'bg-surface text-text3')}>
+                      {t.exit_reason?.replace(/_/g, ' ') ?? '--'}
                     </span>
                   </td>
-
-                  <td className="py-3 px-3 font-mono text-sm text-text1 font-medium">₹{t.entry_price?.toFixed(0) ?? '--'}</td>
-                  <td className="py-3 px-3 font-mono text-sm text-text2">{t.exit_price ? `₹${t.exit_price.toFixed(0)}` : '--'}</td>
-                  <td className="py-3 px-3 font-mono text-sm text-red/80">₹{t.sl_price?.toFixed(0) ?? '--'}</td>
-                  <td className="py-3 px-3 font-mono text-sm text-green/80">₹{t.target_price?.toFixed(0) ?? '--'}</td>
-
-                  <td className="py-3 px-3">
-                    <ExitBadge reason={t.exit_reason} />
+                  <td className="py-2.5 px-4 text-right font-mono">
+                    {t.exit_reason === 'SL_HIT' && t.sl_slippage_pct != null ? (
+                      <span className={clsx('font-bold text-[10px]', Math.abs(t.sl_slippage_pct) > 1 ? 'text-red' : 'text-amber')}>
+                        {t.sl_slippage_pct > 0 ? '-' : '+'}{Math.abs(t.sl_slippage_pct).toFixed(1)}%
+                      </span>
+                    ) : <span className="text-text3 text-[10px]">--</span>}
                   </td>
-
-                  <td className={clsx('py-3 px-3 font-mono text-sm font-bold whitespace-nowrap', pos ? 'text-green' : 'text-red')}>
-                    {pos ? '+' : ''}₹{Math.abs(t.net_pnl ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  <td className="py-2.5 px-4 text-right font-mono">
+                    {t.entry_latency_ms != null ? (
+                      <span className={clsx('font-bold text-[10px]', t.entry_latency_ms > 2000 ? 'text-red' : t.entry_latency_ms > 500 ? 'text-amber' : 'text-green')}>
+                        {t.entry_latency_ms}ms
+                      </span>
+                    ) : <span className="text-text3 text-[10px]">--</span>}
                   </td>
-                </tr>
-
-                {open && (
-                  <tr>
-                    <td colSpan={10} className="bg-bg px-4 py-4 border-b border-line">
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        <TradeDetail trade={t} />
-                        {t.filter_log && (
-                          <FilterVisualizer
-                            filters={t.filter_log}
-                            title={`${t.strategy?.replace('_DAILY','')} · ${t.direction} Filters`}
-                          />
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            )
-          })}
-        </tbody>
-      </table>
+                  <td className={clsx('py-2.5 px-4 text-right font-mono font-bold', isUp ? 'text-green' : 'text-red')}>
+                    {isUp ? '+' : ''}₹{t.net_pnl.toLocaleString('en-IN')}
+                  </td>
+                  <td className="py-2.5 px-3">
+                    <ChevronDown size={12} className={clsx('text-text3 transition-transform', isExp && 'rotate-180')} />
+                  </td>
+                </motion.tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
 
-function ExitBadge({ reason }: { reason?: string }) {
-  if (!reason) return <span className="text-text3 text-xs">—</span>
-
-  const cfg: Record<string, string> = {
-    TARGET_HIT: 'bg-greenDim border-green/25 text-green',
-    SL_HIT:     'bg-redDim border-red/25 text-red',
-    TRAIL:      'bg-accentDim border-accent/25 text-accent',
-    FORCE_EXIT: 'bg-amberDim border-amber/25 text-amber',
-    EXPIRY:     'bg-amberDim border-amber/25 text-amber',
-  }
-  const key = Object.keys(cfg).find(k => reason.includes(k)) ?? ''
+function BarChartIcon() {
   return (
-    <span className={clsx(
-      'text-[11px] font-bold px-2 py-0.5 rounded border whitespace-nowrap',
-      cfg[key] ?? 'bg-card border-line text-text3'
-    )}>
-      {reason.replace(/_/g,' ')}
-    </span>
-  )
-}
-
-function TradeDetail({ trade }: { trade: Trade }) {
-  const cols = [
-    ['Option', [
-      ['Strike',   trade.strike ? `₹${trade.strike}` : '--'],
-      ['Expiry',   trade.expiry ?? '--'],
-      ['Lots',     String(trade.lots ?? '--')],
-      ['Delta',    trade.delta_at_entry?.toFixed(3) ?? '--'],
-    ]],
-    ['Execution', [
-      ['Entry',    trade.entry_ts?.slice(11,19) ?? '--'],
-      ['Exit',     trade.exit_ts?.slice(11,19) ?? '--'],
-      ['Spot',     trade.spot_at_entry ? `₹${trade.spot_at_entry.toFixed(0)}` : '--'],
-      ['VIX',      trade.vix?.toFixed(2) ?? '--'],
-    ]],
-    ['P&L', [
-      ['Gross',    trade.gross_pnl != null ? `₹${trade.gross_pnl.toFixed(2)}` : '--'],
-      ['Charges',  trade.charges   != null ? `₹${trade.charges.toFixed(2)}`   : '--'],
-      ['Net',      trade.net_pnl   != null ? `₹${trade.net_pnl.toFixed(2)}`   : '--'],
-      ['Slippage', (trade as any).slippage_pct != null ? `${(trade as any).slippage_pct}%` : '--'],
-    ]],
-  ] as [string, [string,string][]][]
-
-  return (
-    <div className="bg-card rounded-xl border border-line p-4">
-      <p className="text-sm font-semibold text-text1 mb-4">Trade Detail</p>
-      <div className="grid grid-cols-3 gap-4">
-        {cols.map(([title, rows]) => (
-          <div key={title}>
-            <p className="text-[11px] font-semibold tracking-widest uppercase text-text3 mb-3">{title}</p>
-            <div className="space-y-2">
-              {rows.map(([label, val]) => (
-                <div key={label} className="flex items-baseline justify-between gap-2">
-                  <span className="text-xs text-text3 whitespace-nowrap">{label}</span>
-                  <span className="font-mono text-xs text-text1 font-medium text-right">{val}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
+    <div className="w-12 h-12 rounded-xl bg-surface border border-line/30 flex items-center justify-center mx-auto">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-text3">
+        <rect x="3" y="12" width="4" height="8" rx="1" /><rect x="10" y="8" width="4" height="12" rx="1" /><rect x="17" y="4" width="4" height="16" rx="1" />
+      </svg>
     </div>
   )
 }

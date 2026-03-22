@@ -1,71 +1,73 @@
-import React from 'react'
+import { motion } from 'framer-motion'
+import { CheckCircle2, XCircle, Clock, Filter } from 'lucide-react'
 import clsx from 'clsx'
-import { Check, X } from 'lucide-react'
 
-interface FilterState { passed: boolean; value?: any; detail?: string }
-interface Props { filters: Record<string, FilterState>; title?: string }
-
-const LABELS: Record<string, string> = {
-  orb_range: 'ORB Range', breakout: 'Breakout', candle_body: 'Candle Body',
-  volume_surge: 'Volume Surge', vwap: 'VWAP', ema_trend: 'EMA Trend',
-  rsi: 'RSI', vix: 'VIX', vwap_cross: 'VWAP Cross',
-  rejection_magnitude: 'Rejection', supertrend: 'Supertrend',
+interface Props {
+  filterLog: Record<string, any>
+  compact?: boolean
 }
 
-export function FilterVisualizer({ filters, title = 'Signal Filters' }: Props) {
-  const entries = Object.entries(filters)
-  const passed  = entries.filter(([, v]) => v.passed).length
-  const allPass = passed === entries.length
+export function FilterVisualizer({ filterLog, compact = false }: Props) {
+  const entries = Object.entries(filterLog || {})
+  if (!entries.length) return null
 
-  return (
-    <div className="bg-card rounded-xl border border-line p-4">
-      <div className="flex items-center justify-between mb-4">
-        <span className="text-sm font-semibold text-text1">{title}</span>
-        <span className={clsx(
-          'flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full border',
-          allPass
-            ? 'bg-greenDim border-green/30 text-green'
-            : 'bg-bg border-line text-text3'
-        )}>
-          {allPass
-            ? <span className="w-1.5 h-1.5 rounded-full bg-green inline-block" />
-            : <span className="w-1.5 h-1.5 rounded-full bg-text3 inline-block" />}
-          {passed}/{entries.length}
+  const passed = entries.filter(([, v]) => v === true || v?.passed).length
+  const total  = entries.length
+  const pct    = total > 0 ? (passed / total * 100) : 0
+  const allPass = passed === total
+
+  if (compact) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
+          {entries.slice(0, 6).map(([key, v], i) => {
+            const ok = v === true || v?.passed
+            return <div key={i} className={clsx('w-1.5 h-4 rounded-full', ok ? 'bg-green' : 'bg-red/60')} />
+          })}
+        </div>
+        <span className={clsx('text-[10px] font-bold', allPass ? 'text-green' : 'text-text3')}>
+          {passed}/{total}
         </span>
       </div>
+    )
+  }
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {entries.map(([key, state]) => (
-          <div
-            key={key}
-            title={state.detail ?? ''}
-            className={clsx(
-              'flex items-center gap-2 px-3 py-2 rounded-lg border text-xs',
-              state.passed
-                ? 'bg-greenDim/60 border-green/20'
-                : 'bg-redDim/60 border-red/20'
-            )}
-          >
-            <div className={clsx(
-              'flex-shrink-0 w-4 h-4 rounded-full flex items-center justify-center',
-              state.passed ? 'bg-green/20' : 'bg-red/20'
-            )}>
-              {state.passed
-                ? <Check size={9} className="text-green" strokeWidth={3} />
-                : <X size={9} className="text-red" strokeWidth={3} />}
-            </div>
-            <div className="min-w-0">
-              <div className={clsx('font-semibold truncate', state.passed ? 'text-text1' : 'text-text2')}>
-                {LABELS[key] ?? key}
-              </div>
-              {state.value !== undefined && (
-                <div className="font-mono text-[10px] text-text3 truncate mt-0.5">
-                  {typeof state.value === 'object' ? JSON.stringify(state.value) : String(state.value)}
-                </div>
-              )}
-            </div>
+  return (
+    <div className="glass-card rounded-2xl p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-accent/10 flex items-center justify-center">
+            <Filter size={13} className="text-accent" />
           </div>
-        ))}
+          <span className="text-[11px] font-bold tracking-[0.15em] uppercase text-text3">Entry Filters</span>
+        </div>
+        <div className={clsx('flex items-center gap-1.5 px-2 py-0.5 rounded-lg text-[10px] font-bold',
+          allPass ? 'bg-green/10 text-green' : 'bg-amber/10 text-amber')}>
+          {allPass ? <CheckCircle2 size={10} /> : <Clock size={10} />}
+          {passed}/{total} passed
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      <div className="h-1.5 rounded-full bg-surface overflow-hidden mb-4">
+        <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.6 }}
+          className={clsx('h-full rounded-full', allPass ? 'bg-green' : 'bg-amber')} />
+      </div>
+
+      {/* Filters grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {entries.map(([key, v], i) => {
+          const ok = v === true || v?.passed
+          return (
+            <motion.div key={key} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: i * 0.03 }}
+              className={clsx('flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium',
+                ok ? 'bg-green/5 border-green/15 text-green' : 'bg-red/5 border-red/15 text-red-l/70')}>
+              {ok ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+              <span className="truncate capitalize">{key.replace(/_/g, ' ')}</span>
+            </motion.div>
+          )
+        })}
       </div>
     </div>
   )

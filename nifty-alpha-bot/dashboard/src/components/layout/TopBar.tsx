@@ -1,29 +1,40 @@
-import React from 'react'
-import { Activity, BarChart2, FlaskConical, Settings, AlertTriangle, Wifi, WifiOff } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { motion } from 'framer-motion'
+import { Activity, BarChart2, FlaskConical, Settings, AlertTriangle, WifiOff, Clock, ScrollText, Play, BookOpen } from 'lucide-react'
 import { useTradingStore } from '../../stores/tradingStore'
 import axios from 'axios'
 import clsx from 'clsx'
 
-type Page = 'dashboard' | 'trades' | 'backtest' | 'settings'
-
-const NAV: { id: Page; label: string; icon: React.ComponentType<any> }[] = [
-  { id: 'dashboard', label: 'Live',     icon: Activity },
-  { id: 'trades',    label: 'Trades',   icon: BarChart2 },
-  { id: 'backtest',  label: 'Backtest', icon: FlaskConical },
-  { id: 'settings',  label: 'Settings', icon: Settings },
+type Page = 'dashboard' | 'trades' | 'backtest' | 'logs' | 'replay' | 'journal' | 'settings'
+const NAV: { id: Page; label: string; icon: typeof Activity }[] = [
+  { id: 'dashboard', label: 'Live',      icon: Activity },
+  { id: 'trades',    label: 'Trades',    icon: BarChart2 },
+  { id: 'backtest',  label: 'Backtest',  icon: FlaskConical },
+  { id: 'logs',      label: 'Logs',      icon: ScrollText },
+  { id: 'replay',    label: 'Replay',    icon: Play },
+  { id: 'journal',   label: 'Journal',   icon: BookOpen },
+  { id: 'settings',  label: 'Settings',  icon: Settings },
 ]
 
-interface Props { currentPage: Page; onNavigate: (p: Page) => void }
+export function TopBar({ currentPage, onNavigate }: { currentPage: Page; onNavigate: (p: Page) => void }) {
+  const { connected, dailyPnl, emergencyStop, setEmergencyStop } = useTradingStore()
+  const [clock, setClock] = useState('')
 
-export function TopBar({ currentPage, onNavigate }: Props) {
-  const { connected, dailyPnl, emergencyStop, setEmergencyStop, lastUpdate } = useTradingStore()
+  useEffect(() => {
+    const tick = () => setClock(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }))
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [])
 
-  const pnl     = dailyPnl?.net_pnl ?? 0
-  const pnlPos  = pnl >= 0
+  const pnl = dailyPnl?.net_pnl ?? 0
+  const pnlPos = pnl >= 0
+  const h = new Date().getHours()
+  const marketOpen = h >= 9 && h < 16
 
   const handleStop = async () => {
     if (!emergencyStop) {
-      if (!confirm('Trigger EMERGENCY STOP? This halts all trading immediately.')) return
+      if (!confirm('EMERGENCY STOP — halt all trading immediately?')) return
       await axios.post('/api/emergency-stop')
       setEmergencyStop(true)
     } else {
@@ -33,81 +44,73 @@ export function TopBar({ currentPage, onNavigate }: Props) {
   }
 
   return (
-    <header className="sticky top-0 z-50 flex items-center justify-between h-14 px-5 bg-panel border-b border-line">
+    <header className="sticky top-0 z-50 glass border-b border-line/30">
+      <div className="flex items-center justify-between h-[64px] px-5 lg:px-8 max-w-[1640px] mx-auto">
 
-      {/* Logo */}
-      <div className="flex items-center gap-3 shrink-0">
-        <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <polyline points="1,13 5,8 9,10 15,3" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-            <circle cx="15" cy="3" r="1.8" fill="white"/>
-          </svg>
-        </div>
-        <div className="leading-tight">
-          <div className="text-sm font-bold text-text1 tracking-tight">Nifty Alpha</div>
-          <div className="text-[10px] font-semibold tracking-widest text-text3 uppercase">Kite Bot</div>
-        </div>
-      </div>
-
-      {/* Nav tabs */}
-      <nav className="flex items-center gap-1 bg-bg rounded-xl p-1 border border-line">
-        {NAV.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            onClick={() => onNavigate(id)}
-            className={clsx(
-              'flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150',
-              currentPage === id
-                ? 'bg-card text-text1 shadow-sm border border-line'
-                : 'text-text3 hover:text-text2 hover:bg-card/50'
-            )}
-          >
-            <Icon size={13} />
-            <span className="hidden sm:inline">{label}</span>
-          </button>
-        ))}
-      </nav>
-
-      {/* Right side */}
-      <div className="flex items-center gap-3 shrink-0">
-
-        {/* P&L badge */}
-        <div className={clsx(
-          'hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold font-mono',
-          pnlPos
-            ? 'bg-greenDim border-green/30 text-green'
-            : 'bg-redDim border-red/30 text-red'
-        )}>
-          <span className="text-text3 font-sans font-medium">P&L</span>
-          {pnlPos ? '+' : ''}₹{Math.abs(pnl).toLocaleString('en-IN')}
+        {/* Logo */}
+        <div className="flex items-center gap-3 shrink-0">
+          <motion.div className="w-10 h-10 rounded-xl flex items-center justify-center"
+            style={{ background: 'linear-gradient(135deg, #6366f1, #22d3ee)' }}
+            whileHover={{ scale: 1.08, rotate: 3 }} whileTap={{ scale: 0.92 }}>
+            <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
+              <polyline points="1,13 5,7 9,10 15,3" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <circle cx="15" cy="3" r="2" fill="white"/>
+            </svg>
+          </motion.div>
+          <div className="hidden sm:block">
+            <div className="text-base font-black tracking-tight text-gradient leading-none">Nifty Alpha</div>
+            <div className="text-[10px] font-bold tracking-[0.25em] text-text3 uppercase mt-0.5">Trading Terminal</div>
+          </div>
         </div>
 
-        {/* Connection */}
-        <div className="flex items-center gap-1.5">
-          {connected
-            ? <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green opacity-60"/>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-green"/>
+        {/* Nav */}
+        <nav className="flex items-center gap-0.5 bg-surface/90 rounded-2xl p-1 border border-line/25 overflow-x-auto">
+          {NAV.map(({ id, label, icon: Icon }) => (
+            <button key={id} onClick={() => onNavigate(id)}
+              className={clsx('relative flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap',
+                currentPage === id ? 'text-text1' : 'text-text3 hover:text-text2')}>
+              {currentPage === id && (
+                <motion.div layoutId="tab" className="absolute inset-0 rounded-xl bg-card border border-accent/20"
+                  transition={{ type: 'spring', stiffness: 500, damping: 35 }} />
+              )}
+              <span className="relative z-10 flex items-center gap-1.5">
+                <Icon size={14} />
+                <span className="hidden md:inline">{label}</span>
               </span>
-            : <span className="h-2 w-2 rounded-full bg-text3"/>}
-          <span className={clsx('text-xs font-semibold hidden lg:block', connected ? 'text-green' : 'text-text3')}>
-            {connected ? 'Live' : 'Offline'}
-          </span>
-        </div>
+            </button>
+          ))}
+        </nav>
 
-        {/* Emergency stop */}
-        <button
-          onClick={handleStop}
-          className={clsx(
-            'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all',
-            emergencyStop
-              ? 'bg-amberDim text-amber border-amber/40 animate-pulse'
-              : 'bg-redDim text-red border-red/30 hover:bg-red/20'
-          )}
-        >
-          <AlertTriangle size={12} />
-          <span className="hidden sm:inline">{emergencyStop ? 'ACTIVE' : 'STOP'}</span>
-        </button>
+        {/* Right */}
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-surface/60 border border-line/20">
+            <Clock size={12} className="text-text3" />
+            <span className="font-mono text-sm text-text2 tabular-nums">{clock}</span>
+          </div>
+
+          <motion.div key={pnl.toFixed(0)} initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+            className={clsx('hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-bold font-mono border',
+              pnlPos ? 'bg-green/10 border-green/20 text-green-l' : 'bg-red/10 border-red/20 text-red-l')}>
+            <span className="text-text3 font-sans font-medium text-[10px] uppercase tracking-wider">P&L</span>
+            {pnlPos ? '+' : ''}₹{Math.abs(pnl).toLocaleString('en-IN')}
+          </motion.div>
+
+          <div className={clsx('flex items-center gap-1.5', connected ? 'text-green' : 'text-text3')}>
+            {connected ? (
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute h-full w-full rounded-full bg-green opacity-40"/>
+                <span className="relative rounded-full h-2.5 w-2.5 bg-green glow-dot"/>
+              </span>
+            ) : <WifiOff size={14} />}
+          </div>
+
+          <motion.button onClick={handleStop} whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.92 }}
+            className={clsx('flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all',
+              emergencyStop ? 'bg-amber/15 text-amber border-amber/30 animate-pulse' : 'bg-red/10 text-red border-red/20 hover:bg-red/15')}>
+            <AlertTriangle size={13} />
+            <span className="hidden sm:inline">{emergencyStop ? 'HALT' : 'STOP'}</span>
+          </motion.button>
+        </div>
       </div>
     </header>
   )

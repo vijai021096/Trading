@@ -2,6 +2,9 @@
 Pure indicator functions — no I/O, no dependencies on broker or config.
 All functions operate on a list of OHLCV candle dicts:
   {"ts": datetime, "open": float, "high": float, "low": float, "close": float, "volume": float}
+
+All series-level computations use Wilder's smoothing (RMA) for ATR/RSI
+and standard EMA elsewhere.
 """
 from __future__ import annotations
 
@@ -80,7 +83,7 @@ def orb_levels(
     }
 
 
-# ─── VWAP ─────────────────────────────────────────────────────────────────────
+# ─── VWAP (session-cumulative, volume-weighted) ──────────────────────────────
 
 def vwap_at(candles: List[Dict[str, Any]], ts: datetime) -> Optional[float]:
     """Cumulative VWAP from session start up to and including `ts`."""
@@ -104,12 +107,11 @@ def ema_at(
     ts: datetime,
     period: int = 9,
 ) -> Optional[float]:
-    """Exponential moving average up to `ts`."""
+    """EMA up to `ts` with fixed alpha regardless of warmup length."""
     subset = [c for c in candles if c["ts"] <= ts]
-    if len(subset) < 3:
+    if len(subset) < period:
         return None
-    effective = min(period, len(subset))
-    alpha = 2.0 / (effective + 1.0)
+    alpha = 2.0 / (period + 1.0)
     ema = float(subset[0]["close"])
     for c in subset[1:]:
         ema = float(c["close"]) * alpha + ema * (1.0 - alpha)
@@ -129,31 +131,46 @@ def ema_series(candles: List[Dict[str, Any]], period: int = 9) -> List[float]:
     return result
 
 
-# ─── RSI ──────────────────────────────────────────────────────────────────────
+# ─── RSI (Wilder's smoothing / RMA) ──────────────────────────────────────────
 
 def rsi_at(
     candles: List[Dict[str, Any]],
     ts: datetime,
     period: int = 14,
 ) -> Optional[float]:
+    """Wilder RSI up to `ts`."""
     subset = [c for c in candles if c["ts"] <= ts]
-    if len(subset) < max(4, period + 1):
+    if len(subset) < period + 1:
         return None
-    effective = min(period, len(subset) - 1)
-    gains, losses = [], []
-    for i in range(1, len(subset)):
-        delta = float(subset[i]["close"]) - float(subset[i - 1]["close"])
-        gains.append(max(0.0, delta))
-        losses.append(max(0.0, -delta))
-    avg_gain = sum(gains[-effective:]) / effective
-    avg_loss = sum(losses[-effective:]) / effective
+    closes = [float(c["close"]) for c in subset]
+    return _rsi_from_closes(closes, period)
+
+
+def _rsi_from_closes(closes: list, period: int) -> Optional[float]:
+    if len(closes) < period + 1:
+        return None
+    gains, losses = 0.0, 0.0
+    for i in range(1, period + 1):
+        d = closes[i] - closes[i - 1]
+        if d > 0:
+            gains += d
+        else:
+            losses += abs(d)
+    avg_gain = gains / period
+    avg_loss = losses / period
+
+    for i in range(period + 1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        avg_gain = (avg_gain * (period - 1) + max(0.0, d)) / period
+        avg_loss = (avg_loss * (period - 1) + max(0.0, -d)) / period
+
     if avg_loss == 0.0:
         return 100.0
     rs = avg_gain / avg_loss
     return 100.0 - (100.0 / (1.0 + rs))
 
 
-# ─── ATR ──────────────────────────────────────────────────────────────────────
+# ─── ATR (Wilder's smoothing) ────────────────────────────────────────────────
 
 def atr_at(
     candles: List[Dict[str, Any]],
@@ -164,15 +181,17 @@ def atr_at(
     if len(subset) < period + 1:
         return None
     trs = []
-    prev_close = float(subset[0]["close"])
-    for c in subset[1:]:
-        hi, lo = float(c["high"]), float(c["low"])
-        tr = max(hi - lo, abs(hi - prev_close), abs(lo - prev_close))
-        trs.append(tr)
-        prev_close = float(c["close"])
+    for i in range(1, len(subset)):
+        hi = float(subset[i]["high"])
+        lo = float(subset[i]["low"])
+        pc = float(subset[i - 1]["close"])
+        trs.append(max(hi - lo, abs(hi - pc), abs(lo - pc)))
     if len(trs) < period:
         return None
-    return sum(trs[-period:]) / period
+    atr = sum(trs[:period]) / period
+    for tr in trs[period:]:
+        atr = (atr * (period - 1) + tr) / period
+    return atr
 
 
 def atr_series(candles: List[Dict[str, Any]], period: int = 14) -> List[Optional[float]]:
@@ -190,10 +209,6 @@ def supertrend_series(
     period: int = 10,
     multiplier: float = 3.0,
 ) -> List[Dict[str, Any]]:
-    """
-    Returns list of dicts: {"trend": "UP"/"DOWN", "line": float}
-    One entry per candle.
-    """
     n = len(candles)
     if n < period + 1:
         return [{"trend": "UNKNOWN", "line": 0.0}] * n
@@ -260,6 +275,12 @@ def volume_surge_ratio(
     return float(candle.get("volume", 0.0)) / avg
 
 
+def has_volume_data(candles: List[Dict[str, Any]], lookback: int = 20) -> bool:
+    """Check if the recent candles have non-zero volume."""
+    recent = candles[-lookback:] if len(candles) >= lookback else candles
+    return any(float(c.get("volume", 0)) > 0 for c in recent)
+
+
 # ─── Candle body quality ─────────────────────────────────────────────────────
 
 def body_ratio(candle: Dict[str, Any]) -> float:
@@ -285,13 +306,11 @@ def is_bearish_candle(candle: Dict[str, Any]) -> bool:
 def vwap_cross_up(
     candles: List[Dict[str, Any]],
     idx: int,
-    lookback: int = 3,
+    lookback: int = 2,
 ) -> bool:
-    """
-    Returns True if price crossed above VWAP at candle[idx],
-    having been below for the previous `lookback` candles.
-    """
-    if idx < lookback:
+    """True if price crossed above VWAP at candle[idx],
+    having been below for at least 1 of the previous `lookback` candles."""
+    if idx < 1:
         return False
     current = candles[idx]
     vwap_now = vwap_at(candles, current["ts"])
@@ -299,23 +318,22 @@ def vwap_cross_up(
         return False
     if float(current["close"]) <= vwap_now:
         return False
-    # Check previous candles were below VWAP
-    below_count = 0
-    for j in range(idx - lookback, idx):
+    lb = min(lookback, idx)
+    for j in range(idx - lb, idx):
         c = candles[j]
         v = vwap_at(candles, c["ts"])
         if v is not None and float(c["close"]) < v:
-            below_count += 1
-    return below_count >= lookback - 1
+            return True
+    return False
 
 
 def vwap_cross_down(
     candles: List[Dict[str, Any]],
     idx: int,
-    lookback: int = 3,
+    lookback: int = 2,
 ) -> bool:
-    """Returns True if price crossed below VWAP at candle[idx]."""
-    if idx < lookback:
+    """True if price crossed below VWAP at candle[idx]."""
+    if idx < 1:
         return False
     current = candles[idx]
     vwap_now = vwap_at(candles, current["ts"])
@@ -323,10 +341,10 @@ def vwap_cross_down(
         return False
     if float(current["close"]) >= vwap_now:
         return False
-    above_count = 0
-    for j in range(idx - lookback, idx):
+    lb = min(lookback, idx)
+    for j in range(idx - lb, idx):
         c = candles[j]
         v = vwap_at(candles, c["ts"])
         if v is not None and float(c["close"]) > v:
-            above_count += 1
-    return above_count >= lookback - 1
+            return True
+    return False
