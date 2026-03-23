@@ -7,7 +7,7 @@ import {
   Activity, Clock, Eye, AlertCircle, ArrowUpRight, ArrowDownRight,
   Crosshair, ShieldCheck, TrendingUp, TrendingDown, Radio, Layers,
   Zap, Target, BarChart3, LineChart, Gauge, Timer, Trophy, Flame,
-  ChevronRight, Power, ToggleLeft, ToggleRight, AlertOctagon, Ruler, Flame,
+  ChevronRight, Power, ToggleLeft, ToggleRight, AlertOctagon, Ruler,
   Brain, Compass, Waves, ChevronUp, ChevronDown, Minus
 } from 'lucide-react'
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
