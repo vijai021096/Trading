@@ -276,6 +276,103 @@ def get_htf_direction(
     return "NEUTRAL"
 
 
+def get_daily_bias(
+    nifty_df,
+    trade_date,
+    *,
+    bias_threshold: int = 3,   # net score needed to declare BULL or BEAR
+) -> str:
+    """
+    Multi-factor daily bias — determines whether to only take CALL, only PUT,
+    or allow both directions today.
+
+    Three independent factors are scored:
+
+      Factor 1 — 5-day return (primary trend signal, most weight):
+        > +1.5%  → +3   (strong bull swing)
+        > +0.5%  → +1
+        < -1.5%  → -3   (strong bear swing — captures Sep/May corrections)
+        < -0.5%  → -1
+
+      Factor 2 — Yesterday's candle (momentum continuation):
+        > +0.5%  → +2
+        > +0.2%  → +1
+        < -0.5%  → -2
+        < -0.2%  → -1
+
+      Factor 3 — 5-day SMA slope (is trend accelerating?):
+        SMA5 (now) vs SMA5 (5 days ago)
+        Rising >0.3%  → +1
+        Falling <-0.3% → -1
+
+    Total score ≥ +3 → BULL  (only CALL trades allowed today)
+    Total score ≤ -3 → BEAR  (only PUT trades allowed today)
+    Otherwise        → NEUTRAL (use intraday trend as normal)
+    """
+    all_dates = sorted(nifty_df["ts"].dt.date.unique())
+    prev_dates = [d for d in all_dates if d < trade_date]
+
+    if len(prev_dates) < 10:
+        return "NEUTRAL"
+
+    # Build daily OHLCV from 5-min candles
+    daily = []
+    for d in prev_dates[-12:]:
+        day_df = nifty_df[nifty_df["ts"].dt.date == d]
+        if len(day_df) < 10:
+            continue
+        d_open  = float(day_df.iloc[0]["open"])
+        d_close = float(day_df.iloc[-1]["close"])
+        if d_open > 0:
+            daily.append({"date": d, "open": d_open, "close": d_close,
+                          "ret": (d_close - d_open) / d_open})
+
+    if len(daily) < 6:
+        return "NEUTRAL"
+
+    score = 0
+
+    # ── Factor 1: 5-day return (captures sustained corrections/rallies) ──
+    if len(daily) >= 5:
+        ret_5d = (daily[-1]["close"] - daily[-5]["close"]) / daily[-5]["close"]
+        if ret_5d > 0.015:
+            score += 3
+        elif ret_5d > 0.005:
+            score += 1
+        elif ret_5d < -0.015:
+            score -= 3
+        elif ret_5d < -0.005:
+            score -= 1
+
+    # ── Factor 2: yesterday's return ────────────────────────────────────
+    yest = daily[-1]["ret"]
+    if yest > 0.005:
+        score += 2
+    elif yest > 0.002:
+        score += 1
+    elif yest < -0.005:
+        score -= 2
+    elif yest < -0.002:
+        score -= 1
+
+    # ── Factor 3: SMA5 slope ─────────────────────────────────────────────
+    if len(daily) >= 10:
+        sma5_now  = sum(d["close"] for d in daily[-5:]) / 5
+        sma5_prev = sum(d["close"] for d in daily[-10:-5]) / 5
+        if sma5_prev > 0:
+            slope = (sma5_now - sma5_prev) / sma5_prev
+            if slope > 0.003:
+                score += 1
+            elif slope < -0.003:
+                score -= 1
+
+    if score >= bias_threshold:
+        return "BULL"
+    elif score <= -bias_threshold:
+        return "BEAR"
+    return "NEUTRAL"
+
+
 def get_dynamic_blocklist(
     trend_state: str,
     is_choppy: bool,

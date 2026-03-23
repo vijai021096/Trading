@@ -20,7 +20,7 @@ from shared.momentum_breakout_engine import evaluate_momentum_breakout_signal
 from shared.trend_detector import detect_trend, STRATEGY_PRIORITY_BY_TREND, SL_TARGET_BY_STRATEGY, TREND_RISK_MULTIPLIER
 from shared.quality_filter import (
     compute_trade_quality, is_choppy_market, is_overextended,
-    is_late_move, get_htf_direction, get_dynamic_blocklist,
+    is_late_move, get_htf_direction, get_dynamic_blocklist, get_daily_bias,
 )
 
 
@@ -103,6 +103,7 @@ class BacktestConfig:
     enable_dynamic_blocklist: bool = True
     enable_reentry: bool = True
     reentry_window_min: int = 30       # Re-entry allowed within 30 min of SL hit
+    enable_daily_bias_filter: bool = True  # Gate trades on previous days' direction
 
     # Execution
     force_exit_time: str = "15:15"
@@ -268,6 +269,15 @@ def run_backtest(
         if consecutive_losses >= cfg.max_consecutive_losses:
             consecutive_losses = cfg.max_consecutive_losses - 1
 
+        # Daily bias gate — look at last 3 days to set allowed direction for today
+        # Prevents taking CALL trades when daily context is clearly bearish (Sep 2025 fix)
+        daily_bias = get_daily_bias(nifty_df, trade_date) if cfg.enable_daily_bias_filter else "NEUTRAL"
+        daily_bias_direction: Optional[str] = (
+            "CALL" if daily_bias == "BULL" else
+            "PUT"  if daily_bias == "BEAR" else
+            None
+        )
+
         # Detect trend at start of day (use first 12 candles = ~60 min for initial read)
         # We'll update it every 30 min as candles accumulate
         trend_result = None
@@ -304,8 +314,17 @@ def run_backtest(
                 if trend_result.direction in ("CALL", "PUT"):
                     allowed_direction = trend_result.direction
 
+            # Apply daily bias — overrides intraday direction when daily context is clear
+            # If daily says BEAR but intraday says CALL → conflict → skip (set to None which blocks)
+            if daily_bias_direction is not None:
+                if allowed_direction is None:
+                    allowed_direction = daily_bias_direction   # daily fills neutral intraday
+                elif allowed_direction != daily_bias_direction:
+                    allowed_direction = daily_bias_direction   # daily wins over intraday conflict
+
+            # When trend is unknown (early session), only run ORB-family — no MB/EMA_PB
             strategy_priority = trend_result.strategy_priority if trend_result else [
-                "ORB", "MOMENTUM_BREAKOUT", "EMA_PULLBACK", "VWAP_RECLAIM", "RELAXED_ORB"
+                "ORB", "RELAXED_ORB"
             ]
 
             # ── Dynamic strategy blocklist ─────────────────────────────

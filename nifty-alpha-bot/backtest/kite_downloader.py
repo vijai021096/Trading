@@ -203,13 +203,21 @@ def run_kite_backtest(months: int = 12, verbose: bool = False):
     cfg = BacktestConfig(
         capital=100_000.0,
         lots=1,
-        vix_max=22.0,
+        vix_max=20.0,                          # skip chaotic/high-volatility days
+        max_trades_per_day=1,                  # highest-conviction setup only
+        max_consecutive_losses=3,              # halt after 3 losses, not 5
         enable_quality_filter=True,
+        min_quality_score=3,
         enable_choppy_filter=True,
         enable_htf_filter=True,
         enable_overextended_filter=True,
         enable_dynamic_blocklist=True,
-        enable_reentry=True,
+        enable_daily_bias_filter=True,         # KEY FIX: only trade in daily trend direction
+        enable_reentry=False,                  # re-entry had 0% WR
+        momentum_breakout_window_start="10:00",   # wait for trend confirmation (post 10:15)
+        momentum_breakout_window_end="11:30",     # avoid midday chop
+        ema_pullback_window_start="10:00",        # wait for trend confirmation
+        ema_pullback_window_end="12:30",
     )
 
     result = run_backtest(nifty_df, vix_df, cfg, verbose=verbose)
