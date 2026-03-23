@@ -1,0 +1,280 @@
+{
+  "metrics": {
+    "total_trades": 43,
+    "win_count": 26,
+    "loss_count": 17,
+    "win_rate_pct": 60.5,
+    "avg_win": 18190.81,
+    "avg_loss": -5180.71,
+    "profit_factor": 5.37,
+    "total_net_pnl": 384889.2,
+    "total_gross_pnl": 390126.76,
+    "total_charges": 5237.47,
+    "max_drawdown_abs": 37559.92,
+    "max_drawdown_pct": 37.56,
+    "sharpe_ratio": 10.592,
+    "calmar_ratio": 60.054,
+    "consecutive_losses_max": 5,
+    "avg_trade_duration_min": 345.0,
+    "exit_reasons": {
+      "TARGET_HIT": 23,
+      "SL_HIT": 17,
+      "EOD_EXIT": 1,
+      "EOD_PROFIT": 2
+    },
+    "equity_curve": [
+      100000.0,
+      105371.49,
+      120612.55,
+      138436.55,
+      155565.37,
+      180444.58,
+      198869.23,
+      208114.9,
+      228777.05,
+      224698.79,
+      219694.67,
+      237660.28,
+      259706.5,
+      287599.8,
+      283493.98,
+      301879.69,
+      298646.02,
+      289824.91,
+      282262.91,
+      274889.16,
+      271347.23,
+      286275.75,
+      279186.06,
+      275571.99,
+      272687.49,
+      264319.77,
+      275628.24,
+      313397.55,
+      316822.53,
+      350506.78,
+      368366.77,
+      364653.59,
+      374976.68,
+      385805.5,
+      382540.74,
+      401496.08,
+      397729.92,
+      412215.33,
+      436498.92,
+      431476.19,
+      450110.3,
+      443481.78,
+      478059.33,
+      484889.2
+    ],
+    "final_capital": 484889.2,
+    "return_pct": 384.89,
+    "monthly_breakdown": [
+      {
+        "month": "2024-06",
+        "trades": 4,
+        "net_pnl": 55565.37,
+        "wins": 4,
+        "win_rate": 100.0
+      },
+      {
+        "month": "2024-07",
+        "trades": 2,
+        "net_pnl": 43303.86,
+        "wins": 2,
+        "win_rate": 100.0
+      },
+      {
+        "month": "2024-08",
+        "trades": 3,
+        "net_pnl": 25829.56,
+        "wins": 2,
+        "win_rate": 66.7
+      },
+      {
+        "month": "2024-10",
+        "trades": 3,
+        "net_pnl": 35007.71,
+        "wins": 2,
+        "win_rate": 66.7
+      },
+      {
+        "month": "2024-11",
+        "trades": 4,
+        "net_pnl": 38939.52,
+        "wins": 2,
+        "win_rate": 50.0
+      },
+      {
+        "month": "2024-12",
+        "trades": 1,
+        "net_pnl": -8821.11,
+        "wins": 0,
+        "win_rate": 0.0
+      },
+      {
+        "month": "2025-01",
+        "trades": 1,
+        "net_pnl": -7562.0,
+        "wins": 0,
+        "win_rate": 0.0
+      },
+      {
+        "month": "2025-02",
+        "trades": 2,
+        "net_pnl": -10915.68,
+        "wins": 0,
+        "win_rate": 0.0
+      },
+      {
+        "month": "2025-03",
+        "trades": 3,
+        "net_pnl": 4224.76,
+        "wins": 1,
+        "win_rate": 33.3
+      },
+      {
+        "month": "2025-04",
+        "trades": 2,
+        "net_pnl": -11252.22,
+        "wins": 0,
+        "win_rate": 0.0
+      },
+      {
+        "month": "2025-05",
+        "trades": 2,
+        "net_pnl": 49077.78,
+        "wins": 2,
+        "win_rate": 100.0
+      },
+      {
+        "month": "2025-06",
+        "trades": 4,
+        "net_pnl": 51256.04,
+        "wins": 3,
+        "win_rate": 75.0
+      },
+      {
+        "month": "2025-07",
+        "trades": 1,
+        "net_pnl": 10323.09,
+        "wins": 1,
+        "win_rate": 100.0
+      },
+      {
+        "month": "2025-08",
+        "trades": 3,
+        "net_pnl": 26519.4,
+        "wins": 2,
+        "win_rate": 66.7
+      },
+      {
+        "month": "2025-09",
+        "trades": 2,
+        "net_pnl": 10719.25,
+        "wins": 1,
+        "win_rate": 50.0
+      },
+      {
+        "month": "2025-10",
+        "trades": 1,
+        "net_pnl": 24283.59,
+        "wins": 1,
+        "win_rate": 100.0
+      },
+      {
+        "month": "2025-11",
+        "trades": 1,
+        "net_pnl": -5022.73,
+        "wins": 0,
+        "win_rate": 0.0
+      },
+      {
+        "month": "2025-12",
+        "trades": 2,
+        "net_pnl": 12005.59,
+        "wins": 1,
+        "win_rate": 50.0
+      },
+      {
+        "month": "2026-01",
+        "trades": 2,
+        "net_pnl": 41407.42,
+        "wins": 2,
+        "win_rate": 100.0
+      }
+    ],
+    "trading_days": 43
+  },
+  "config": {
+    "capital": 100000.0,
+    "lot_size": 75,
+    "lots": 3,
+    "ema_fast": 8,
+    "ema_slow": 21,
+    "ema_trend": 50,
+    "rsi_period": 14,
+    "atr_period": 14,
+    "vwap_lookback": 5,
+    "bb_period": 20,
+    "bb_std": 2.0,
+    "sl_pct_tc": 0.22,
+    "target_pct_tc": 0.6,
+    "sl_pct_bm": 0.2,
+    "target_pct_bm": 0.55,
+    "sl_pct_rs": 0.2,
+    "target_pct_rs": 0.55,
+    "sl_pct_gf": 0.22,
+    "target_pct_gf": 0.52,
+    "sl_pct_rb": 0.18,
+    "target_pct_rb": 0.48,
+    "sl_pct_ib": 0.18,
+    "target_pct_ib": 0.48,
+    "sl_pct_vc": 0.2,
+    "target_pct_vc": 0.55,
+    "break_even_trigger_pct": 0.1,
+    "vix_max": 24.0,
+    "slippage_pct": 0.005,
+    "max_trades_per_day": 1,
+    "max_consecutive_losses": 4,
+    "max_daily_loss_pct": 0.035,
+    "strike_step": 50,
+    "lot_scaling_step": 40000.0,
+    "adx_strong_trend": 0.38,
+    "adx_mild_trend": 0.25,
+    "atr_volatile_mult": 1.7,
+    "atr_squeeze_mult": 0.65,
+    "vix_volatile": 22.0,
+    "enable_trend_continuation": true,
+    "enable_breakout_momentum": true,
+    "enable_reversal_snap": true,
+    "enable_gap_fade": true,
+    "enable_range_bounce": true,
+    "enable_inside_bar_break": true,
+    "enable_vwap_cross": true
+  },
+  "start_date": "2024-06-12",
+  "end_date": "2026-03-23",
+  "timeframe": "daily",
+  "regime_counts": {
+    "STRONG_TREND_UP": 21,
+    "STRONG_TREND_DOWN": 7,
+    "MILD_TREND": 73,
+    "MEAN_REVERT": 330,
+    "BREAKOUT": 0,
+    "VOLATILE": 8
+  },
+  "strategy_counts": {
+    "GAP_FADE": 15,
+    "RANGE_BOUNCE": 5,
+    "TREND_CONTINUATION": 14,
+    "INSIDE_BAR_BREAK": 4,
+    "VWAP_CROSS": 5
+  },
+  "skip_reasons": {
+    "no_signal": 396,
+    "consec_loss": 3
+  },
+  "total_trades": 43
+}

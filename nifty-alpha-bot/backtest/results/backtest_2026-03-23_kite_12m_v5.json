@@ -1,0 +1,2638 @@
+{
+  "trades": [
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 22250,
+      "expiry": "2025-03-06",
+      "entry_ts": "2025-03-05T10:25:00",
+      "exit_ts": "2025-03-05T11:45:00",
+      "entry_price": 74.62,
+      "exit_price": 121.27,
+      "sl_price": 52.23,
+      "target_price": 123.12,
+      "exit_reason": "TARGET_HIT",
+      "gross_pnl": 3032.55,
+      "charges": 60.25,
+      "net_pnl": 2972.3,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 22251.1,
+      "delta_at_entry": 0.5146,
+      "iv_at_entry": 0.14,
+      "vix": 14.0,
+      "trade_date": "2025-03-06",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 22232.44,
+            "slow": 22195.9,
+            "gap_pct": 0.165
+          },
+          "detail": "EMA9=22232.4 > EMA21=22195.9 (gap=0.16%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=22231.9 near EMA21=22176.7 (+0.25%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.67,
+          "detail": "Body=0.67 (need>=0.38), directional=True, close=above EMA21=22195.9"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 69.1,
+          "detail": "RSI=69.1 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 22091.3,
+          "detail": "Close=22251.1 above VWAP=22091.3: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 14.0,
+          "detail": "VIX=14.0 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "STRONG_BULL"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 22250,
+      "expiry": "2025-03-13",
+      "entry_ts": "2025-03-05T10:20:00",
+      "exit_ts": "2025-03-05T12:30:00",
+      "entry_price": 117.96,
+      "exit_price": 193.08,
+      "sl_price": 82.57,
+      "target_price": 194.64,
+      "exit_reason": "TARGET_HIT",
+      "gross_pnl": 4882.77,
+      "charges": 67.94,
+      "net_pnl": 4814.82,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 22236.6,
+      "delta_at_entry": 0.5019,
+      "iv_at_entry": 0.14,
+      "vix": 14.0,
+      "trade_date": "2025-03-11",
+      "entry_slippage_pct": 0.8,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 22227.78,
+            "slow": 22190.38,
+            "gap_pct": 0.169
+          },
+          "detail": "EMA9=22227.8 > EMA21=22190.4 (gap=0.17%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=22233.6 near EMA21=22169.2 (+0.29%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.65,
+          "detail": "Body=0.65 (need>=0.38), directional=True, close=above EMA21=22190.4"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 66.6,
+          "detail": "RSI=66.6 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 22089.58,
+          "detail": "Close=22236.6 above VWAP=22089.6: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 14.0,
+          "detail": "VIX=14.0 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 22550,
+      "expiry": "2025-03-20",
+      "entry_ts": "2025-03-17T09:55:00",
+      "exit_ts": "2025-03-17T10:15:00",
+      "entry_price": 99.23,
+      "exit_price": 68.7,
+      "sl_price": 69.46,
+      "target_price": 163.73,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1984.63,
+      "charges": 57.02,
+      "net_pnl": -2041.65,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 22546.1,
+      "delta_at_entry": 0.5112,
+      "iv_at_entry": 0.133,
+      "vix": 13.3,
+      "trade_date": "2025-03-19",
+      "entry_slippage_pct": 1.1,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 22522.11,
+            "slow": 22484.04,
+            "gap_pct": 0.169
+          },
+          "detail": "EMA9=22522.1 > EMA21=22484.0 (gap=0.17%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=22540.6 near EMA21=22457.5 (+0.37%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.66,
+          "detail": "Body=0.66 (need>=0.38), directional=True, close=above EMA21=22484.0"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 68.4,
+          "detail": "RSI=68.4 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 22445.89,
+          "detail": "Close=22546.1 above VWAP=22445.9: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 13.3,
+          "detail": "VIX=13.3 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 23250,
+      "expiry": "2025-03-27",
+      "entry_ts": "2025-03-21T09:40:00",
+      "exit_ts": "2025-03-21T11:10:00",
+      "entry_price": 92.11,
+      "exit_price": 113.83,
+      "sl_price": 64.47,
+      "target_price": 151.98,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 1412.06,
+      "charges": 60.39,
+      "net_pnl": 1351.67,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 23273.85,
+      "delta_at_entry": 0.5637,
+      "iv_at_entry": 0.133,
+      "vix": 13.3,
+      "trade_date": "2025-03-27",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 23218.51,
+            "slow": 23199.78,
+            "gap_pct": 0.081
+          },
+          "detail": "EMA9=23218.5 > EMA21=23199.8 (gap=0.08%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=23157.7 near EMA21=23181.8 (-0.10%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.65,
+          "detail": "Body=0.65 (need>=0.38), directional=True, close=above EMA21=23199.8"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 69.5,
+          "detail": "RSI=69.5 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 23111.21,
+          "detail": "Close=23273.8 above VWAP=23111.2: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 13.3,
+          "detail": "VIX=13.3 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 22500,
+      "expiry": "2025-04-17",
+      "entry_ts": "2025-04-08T12:05:00",
+      "exit_ts": "2025-04-08T12:15:00",
+      "entry_price": 98.66,
+      "exit_price": 108.84,
+      "sl_price": 69.06,
+      "target_price": 162.79,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 662.05,
+      "charges": 60.27,
+      "net_pnl": 601.79,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 22486.7,
+      "delta_at_entry": 0.4927,
+      "iv_at_entry": 0.1587,
+      "vix": 15.87,
+      "trade_date": "2025-04-16",
+      "entry_slippage_pct": 1.1,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 22425.39,
+            "slow": 22397.66,
+            "gap_pct": 0.124
+          },
+          "detail": "EMA9=22425.4 > EMA21=22397.7 (gap=0.12%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=22353.7 near EMA21=22373.5 (-0.09%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.82,
+          "detail": "Body=0.82 (need>=0.38), directional=True, close=above EMA21=22397.7"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 63.0,
+          "detail": "RSI=63.0 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 22120.65,
+          "detail": "Close=22486.7 above VWAP=22120.6: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 15.87,
+          "detail": "VIX=15.9 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 22550,
+      "expiry": "2025-04-17",
+      "entry_ts": "2025-04-08T12:20:00",
+      "exit_ts": "2025-04-08T12:30:00",
+      "entry_price": 65.18,
+      "exit_price": 105.93,
+      "sl_price": 45.62,
+      "target_price": 107.54,
+      "exit_reason": "TARGET_HIT",
+      "gross_pnl": 2648.92,
+      "charges": 58.6,
+      "net_pnl": 2590.32,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 22550.65,
+      "delta_at_entry": 0.5106,
+      "iv_at_entry": 0.1547,
+      "vix": 15.47,
+      "trade_date": "2025-04-17",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 22480.69,
+            "slow": 22444.54,
+            "gap_pct": 0.161
+          },
+          "detail": "EMA9=22480.7 > EMA21=22444.5 (gap=0.16%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=22418.8 near EMA21=22406.1 (+0.06%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.89,
+          "detail": "Body=0.89 (need>=0.38), directional=True, close=above EMA21=22444.5"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 61.8,
+          "detail": "RSI=61.8 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 22424.81,
+          "detail": "Close=22550.7 above VWAP=22424.8: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 15.47,
+          "detail": "VIX=15.5 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 24050,
+      "expiry": "2025-04-24",
+      "entry_ts": "2025-04-21T10:25:00",
+      "exit_ts": "2025-04-21T11:35:00",
+      "entry_price": 90.24,
+      "exit_price": 107.12,
+      "sl_price": 63.17,
+      "target_price": 148.9,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 1096.81,
+      "charges": 59.77,
+      "net_pnl": 1037.05,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 24045.65,
+      "delta_at_entry": 0.5031,
+      "iv_at_entry": 0.1625,
+      "vix": 16.25,
+      "trade_date": "2025-04-24",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 24021.61,
+            "slow": 23975.67,
+            "gap_pct": 0.192
+          },
+          "detail": "EMA9=24021.6 > EMA21=23975.7 (gap=0.19%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=24039.0 near EMA21=23951.3 (+0.37%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.91,
+          "detail": "Body=0.91 (need>=0.38), directional=True, close=above EMA21=23975.7"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 69.4,
+          "detail": "RSI=69.4 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 23536.34,
+          "detail": "Close=24045.7 above VWAP=23536.3: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 16.25,
+          "detail": "VIX=16.2 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 24750,
+      "expiry": "2025-05-15",
+      "entry_ts": "2025-05-14T09:40:00",
+      "exit_ts": "2025-05-14T10:50:00",
+      "entry_price": 102.36,
+      "exit_price": 70.58,
+      "sl_price": 71.65,
+      "target_price": 168.9,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -2065.94,
+      "charges": 57.31,
+      "net_pnl": -2123.25,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 24742.8,
+      "delta_at_entry": 0.5001,
+      "iv_at_entry": 0.1689,
+      "vix": 16.89,
+      "trade_date": "2025-05-15",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 24671.46,
+            "slow": 24640.97,
+            "gap_pct": 0.124
+          },
+          "detail": "EMA9=24671.5 > EMA21=24641.0 (gap=0.12%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=24659.6 near EMA21=24611.2 (+0.20%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.94,
+          "detail": "Body=0.94 (need>=0.38), directional=True, close=above EMA21=24641.0"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 65.5,
+          "detail": "RSI=65.5 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 24463.36,
+          "detail": "Close=24742.8 above VWAP=24463.4: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 16.89,
+          "detail": "VIX=16.9 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 24850,
+      "expiry": "2025-06-12",
+      "entry_ts": "2025-06-06T10:30:00",
+      "exit_ts": "2025-06-06T11:40:00",
+      "entry_price": 116.6,
+      "exit_price": 190.27,
+      "sl_price": 81.62,
+      "target_price": 192.39,
+      "exit_reason": "TARGET_HIT",
+      "gross_pnl": 4788.7,
+      "charges": 67.66,
+      "net_pnl": 4721.05,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 24860.55,
+      "delta_at_entry": 0.5328,
+      "iv_at_entry": 0.1367,
+      "vix": 13.67,
+      "trade_date": "2025-06-11",
+      "entry_slippage_pct": 1.1,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 24783.46,
+            "slow": 24758.5,
+            "gap_pct": 0.101
+          },
+          "detail": "EMA9=24783.5 > EMA21=24758.5 (gap=0.10%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=24723.9 near EMA21=24732.7 (-0.04%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.71,
+          "detail": "Body=0.71 (need>=0.38), directional=True, close=above EMA21=24758.5"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 68.6,
+          "detail": "RSI=68.6 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 24679.49,
+          "detail": "Close=24860.5 above VWAP=24679.5: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 13.67,
+          "detail": "VIX=13.7 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 24850,
+      "expiry": "2025-06-12",
+      "entry_ts": "2025-06-06T10:30:00",
+      "exit_ts": "2025-06-06T11:00:00",
+      "entry_price": 87.7,
+      "exit_price": 142.54,
+      "sl_price": 61.39,
+      "target_price": 144.71,
+      "exit_reason": "TARGET_HIT",
+      "gross_pnl": 3564.43,
+      "charges": 62.54,
+      "net_pnl": 3501.9,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 24860.55,
+      "delta_at_entry": 0.5334,
+      "iv_at_entry": 0.1402,
+      "vix": 14.02,
+      "trade_date": "2025-06-12",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 24783.46,
+            "slow": 24758.5,
+            "gap_pct": 0.101
+          },
+          "detail": "EMA9=24783.5 > EMA21=24758.5 (gap=0.10%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=24723.9 near EMA21=24732.7 (-0.04%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.71,
+          "detail": "Body=0.71 (need>=0.38), directional=True, close=above EMA21=24758.5"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 68.6,
+          "detail": "RSI=68.6 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 24747.02,
+          "detail": "Close=24860.5 above VWAP=24747.0: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 14.02,
+          "detail": "VIX=14.0 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "PUT",
+      "option_type": "PE",
+      "strike": 24850,
+      "expiry": "2025-06-19",
+      "entry_ts": "2025-06-18T10:30:00",
+      "exit_ts": "2025-06-18T11:35:00",
+      "entry_price": 76.13,
+      "exit_price": 94.84,
+      "sl_price": 57.1,
+      "target_price": 125.61,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 1216.21,
+      "charges": 58.16,
+      "net_pnl": 1158.04,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 24854.35,
+      "delta_at_entry": -0.4795,
+      "iv_at_entry": 0.1426,
+      "vix": 14.26,
+      "trade_date": "2025-06-19",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "VWAP_RECLAIM",
+      "filter_log": {
+        "vwap_cross": {
+          "passed": true,
+          "direction": "PUT",
+          "detail": "PUT: price 24854.3 crossed below VWAP 24863.7"
+        },
+        "rejection_magnitude": {
+          "passed": true,
+          "value": 19.0,
+          "detail": "Rejection 19.0pt (need>=15.0pt)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.91,
+          "detail": "Body ratio 0.91 (need>=0.40), directional=True"
+        },
+        "supertrend": {
+          "passed": true,
+          "value": "DOWN",
+          "detail": "Supertrend=DOWN, need DOWN"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 40.5,
+          "detail": "RSI=40.5 (need 40.0-65.0)"
+        },
+        "volume_surge": {
+          "passed": true,
+          "value": null,
+          "detail": "Volume data unavailable \u2014 filter skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 14.26,
+          "detail": "VIX=14.3 (max=22.0)"
+        },
+        "hold_confirmation": {
+          "passed": true,
+          "detail": "Hold check passed \u2014 prev candle must sustain VWAP position"
+        }
+      },
+      "risk_multiplier": 0.85,
+      "regime": "SKIP_RANGING"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 24900,
+      "expiry": "2025-06-26",
+      "entry_ts": "2025-06-20T10:00:00",
+      "exit_ts": "2025-06-20T10:15:00",
+      "entry_price": 66.32,
+      "exit_price": 107.79,
+      "sl_price": 46.43,
+      "target_price": 109.43,
+      "exit_reason": "TARGET_HIT",
+      "gross_pnl": 2695.47,
+      "charges": 58.8,
+      "net_pnl": 2636.67,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 24876.6,
+      "delta_at_entry": 0.4633,
+      "iv_at_entry": 0.1259,
+      "vix": 12.59,
+      "trade_date": "2025-06-26",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 24857.63,
+            "slow": 24837.47,
+            "gap_pct": 0.081
+          },
+          "detail": "EMA9=24857.6 > EMA21=24837.5 (gap=0.08%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=24832.0 near EMA21=24819.5 (+0.05%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.71,
+          "detail": "Body=0.71 (need>=0.38), directional=True, close=above EMA21=24837.5"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 61.1,
+          "detail": "RSI=61.1 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 24813.8,
+          "detail": "Close=24876.6 above VWAP=24813.8: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 12.59,
+          "detail": "VIX=12.6 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "PUT",
+      "option_type": "PE",
+      "strike": 25250,
+      "expiry": "2025-07-17",
+      "entry_ts": "2025-07-11T10:10:00",
+      "exit_ts": "2025-07-11T11:10:00",
+      "entry_price": 119.19,
+      "exit_price": 143.0,
+      "sl_price": 83.43,
+      "target_price": 196.67,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 1547.38,
+      "charges": 63.92,
+      "net_pnl": 1483.46,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25256.75,
+      "delta_at_entry": -0.4657,
+      "iv_at_entry": 0.1198,
+      "vix": 11.98,
+      "trade_date": "2025-07-14",
+      "entry_slippage_pct": 0.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25284.76,
+            "slow": 25314.57,
+            "gap_pct": 0.118
+          },
+          "detail": "EMA9=25284.8 < EMA21=25314.6 (gap=0.12%, need>=0.08%): OK \u2192 PUT"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "High=25303.9 near EMA21=25336.6 (+0.13%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.75,
+          "detail": "Body=0.75 (need>=0.38), directional=True, close=below EMA21=25314.6"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 30.5,
+          "detail": "RSI=30.5 (need 30.0-62.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25449.06,
+          "detail": "Close=25256.8 below VWAP=25449.1: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 11.98,
+          "detail": "VIX=12.0 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BEAR_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "PUT",
+      "option_type": "PE",
+      "strike": 25250,
+      "expiry": "2025-07-17",
+      "entry_ts": "2025-07-11T10:10:00",
+      "exit_ts": "2025-07-11T11:10:00",
+      "entry_price": 100.17,
+      "exit_price": 128.02,
+      "sl_price": 70.12,
+      "target_price": 165.29,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 1810.02,
+      "charges": 61.89,
+      "net_pnl": 1748.13,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25256.75,
+      "delta_at_entry": -0.4666,
+      "iv_at_entry": 0.1148,
+      "vix": 11.48,
+      "trade_date": "2025-07-15",
+      "entry_slippage_pct": 0.8,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25284.76,
+            "slow": 25314.57,
+            "gap_pct": 0.118
+          },
+          "detail": "EMA9=25284.8 < EMA21=25314.6 (gap=0.12%, need>=0.08%): OK \u2192 PUT"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "High=25303.9 near EMA21=25336.6 (+0.13%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.75,
+          "detail": "Body=0.75 (need>=0.38), directional=True, close=below EMA21=25314.6"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 30.5,
+          "detail": "RSI=30.5 (need 30.0-62.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25449.25,
+          "detail": "Close=25256.8 below VWAP=25449.3: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 11.48,
+          "detail": "VIX=11.5 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BEAR_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "PUT",
+      "option_type": "PE",
+      "strike": 25250,
+      "expiry": "2025-07-17",
+      "entry_ts": "2025-07-11T10:10:00",
+      "exit_ts": "2025-07-11T11:05:00",
+      "entry_price": 81.85,
+      "exit_price": 133.57,
+      "sl_price": 57.3,
+      "target_price": 135.06,
+      "exit_reason": "TARGET_HIT",
+      "gross_pnl": 3361.77,
+      "charges": 61.56,
+      "net_pnl": 3300.21,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25256.75,
+      "delta_at_entry": -0.4681,
+      "iv_at_entry": 0.1124,
+      "vix": 11.24,
+      "trade_date": "2025-07-16",
+      "entry_slippage_pct": 1.1,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25284.76,
+            "slow": 25314.57,
+            "gap_pct": 0.118
+          },
+          "detail": "EMA9=25284.8 < EMA21=25314.6 (gap=0.12%, need>=0.08%): OK \u2192 PUT"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "High=25303.9 near EMA21=25336.6 (+0.13%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.75,
+          "detail": "Body=0.75 (need>=0.38), directional=True, close=below EMA21=25314.6"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 30.5,
+          "detail": "RSI=30.5 (need 30.0-62.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25442.52,
+          "detail": "Close=25256.8 below VWAP=25442.5: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 11.24,
+          "detail": "VIX=11.2 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BEAR_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25200,
+      "expiry": "2025-07-17",
+      "entry_ts": "2025-07-16T12:30:00",
+      "exit_ts": "2025-07-16T13:30:00",
+      "entry_price": 53.59,
+      "exit_price": 39.39,
+      "sl_price": 40.2,
+      "target_price": 88.43,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -923.17,
+      "charges": 52.69,
+      "net_pnl": -975.86,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25203.7,
+      "delta_at_entry": 0.523,
+      "iv_at_entry": 0.1124,
+      "vix": 11.24,
+      "trade_date": "2025-07-17",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "VWAP_RECLAIM",
+      "filter_log": {
+        "vwap_cross": {
+          "passed": true,
+          "direction": "CALL",
+          "detail": "CALL: price 25203.7 crossed above VWAP 25201.1"
+        },
+        "rejection_magnitude": {
+          "passed": true,
+          "value": 16.1,
+          "detail": "Rejection 16.1pt (need>=15.0pt)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.83,
+          "detail": "Body ratio 0.83 (need>=0.40), directional=True"
+        },
+        "supertrend": {
+          "passed": true,
+          "value": "UP",
+          "detail": "Supertrend=UP, need UP"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 63.3,
+          "detail": "RSI=63.3 (need 40.0-65.0)"
+        },
+        "volume_surge": {
+          "passed": true,
+          "value": null,
+          "detail": "Volume data unavailable \u2014 filter skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 11.24,
+          "detail": "VIX=11.2 (max=22.0)"
+        },
+        "hold_confirmation": {
+          "passed": true,
+          "detail": "Hold check passed \u2014 prev candle must sustain VWAP position"
+        }
+      },
+      "risk_multiplier": 0.85,
+      "regime": "SKIP_RANGING"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "PUT",
+      "option_type": "PE",
+      "strike": 24900,
+      "expiry": "2025-07-31",
+      "entry_ts": "2025-07-25T10:05:00",
+      "exit_ts": "2025-07-25T10:40:00",
+      "entry_price": 78.36,
+      "exit_price": 90.7,
+      "sl_price": 54.85,
+      "target_price": 129.3,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 801.62,
+      "charges": 57.92,
+      "net_pnl": 743.7,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 24911.9,
+      "delta_at_entry": -0.4585,
+      "iv_at_entry": 0.1121,
+      "vix": 11.21,
+      "trade_date": "2025-07-30",
+      "entry_slippage_pct": 1.1,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 24941.29,
+            "slow": 24981.76,
+            "gap_pct": 0.162
+          },
+          "detail": "EMA9=24941.3 < EMA21=24981.8 (gap=0.16%, need>=0.08%): OK \u2192 PUT"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "High=24937.2 near EMA21=25009.1 (+0.29%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.89,
+          "detail": "Body=0.89 (need>=0.38), directional=True, close=below EMA21=24981.8"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 31.1,
+          "detail": "RSI=31.1 (need 30.0-62.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25118.34,
+          "detail": "Close=24911.9 below VWAP=25118.3: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 11.21,
+          "detail": "VIX=11.2 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 0.85,
+      "regime": "BEAR_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 24800,
+      "expiry": "2025-08-07",
+      "entry_ts": "2025-07-31T12:10:00",
+      "exit_ts": "2025-07-31T13:25:00",
+      "entry_price": 119.68,
+      "exit_price": 152.32,
+      "sl_price": 89.76,
+      "target_price": 197.47,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 2122.16,
+      "charges": 64.7,
+      "net_pnl": 2057.46,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 24819.35,
+      "delta_at_entry": 0.5516,
+      "iv_at_entry": 0.1171,
+      "vix": 11.71,
+      "trade_date": "2025-08-05",
+      "entry_slippage_pct": 0.8,
+      "otm_offset": 0,
+      "strategy": "VWAP_RECLAIM",
+      "filter_log": {
+        "vwap_cross": {
+          "passed": true,
+          "direction": "CALL",
+          "detail": "CALL: price 24819.3 crossed above VWAP 24775.9"
+        },
+        "rejection_magnitude": {
+          "passed": true,
+          "value": 15.4,
+          "detail": "Rejection 15.4pt (need>=15.0pt)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 1.0,
+          "detail": "Body ratio 1.00 (need>=0.40), directional=True"
+        },
+        "supertrend": {
+          "passed": true,
+          "value": "UP",
+          "detail": "Supertrend=UP, need UP"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 61.2,
+          "detail": "RSI=61.2 (need 40.0-65.0)"
+        },
+        "volume_surge": {
+          "passed": true,
+          "value": null,
+          "detail": "Volume data unavailable \u2014 filter skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 11.71,
+          "detail": "VIX=11.7 (max=22.0)"
+        },
+        "hold_confirmation": {
+          "passed": true,
+          "detail": "Hold check passed \u2014 prev candle must sustain VWAP position"
+        }
+      },
+      "risk_multiplier": 0.6,
+      "regime": "SKIP_RANGING"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 24450,
+      "expiry": "2025-08-14",
+      "entry_ts": "2025-08-11T11:20:00",
+      "exit_ts": "2025-08-11T11:35:00",
+      "entry_price": 76.09,
+      "exit_price": 56.21,
+      "sl_price": 57.07,
+      "target_price": 125.55,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1292.12,
+      "charges": 55.02,
+      "net_pnl": -1347.14,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 24470.15,
+      "delta_at_entry": 0.5635,
+      "iv_at_entry": 0.1236,
+      "vix": 12.36,
+      "trade_date": "2025-08-14",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "VWAP_RECLAIM",
+      "filter_log": {
+        "vwap_cross": {
+          "passed": true,
+          "direction": "CALL",
+          "detail": "CALL: price 24470.2 crossed above VWAP 24443.4"
+        },
+        "rejection_magnitude": {
+          "passed": true,
+          "value": 18.2,
+          "detail": "Rejection 18.2pt (need>=15.0pt)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.56,
+          "detail": "Body ratio 0.56 (need>=0.40), directional=True"
+        },
+        "supertrend": {
+          "passed": true,
+          "value": "UP",
+          "detail": "Supertrend=UP, need UP"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 63.0,
+          "detail": "RSI=63.0 (need 40.0-65.0)"
+        },
+        "volume_surge": {
+          "passed": true,
+          "value": null,
+          "detail": "Volume data unavailable \u2014 filter skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 12.36,
+          "detail": "VIX=12.4 (max=22.0)"
+        },
+        "hold_confirmation": {
+          "passed": true,
+          "detail": "Hold check passed \u2014 prev candle must sustain VWAP position"
+        }
+      },
+      "risk_multiplier": 0.85,
+      "regime": "SKIP_RANGING"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 24800,
+      "expiry": "2025-09-11",
+      "entry_ts": "2025-09-08T09:30:00",
+      "exit_ts": "2025-09-08T10:15:00",
+      "entry_price": 80.45,
+      "exit_price": 55.47,
+      "sl_price": 56.32,
+      "target_price": 132.75,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1623.77,
+      "charges": 55.15,
+      "net_pnl": -1678.91,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 24823.6,
+      "delta_at_entry": 0.5756,
+      "iv_at_entry": 0.1036,
+      "vix": 10.36,
+      "trade_date": "2025-09-11",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 24773.26,
+            "slow": 24752.67,
+            "gap_pct": 0.083
+          },
+          "detail": "EMA9=24773.3 > EMA21=24752.7 (gap=0.08%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=24734.5 near EMA21=24733.9 (+0.00%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.88,
+          "detail": "Body=0.88 (need>=0.38), directional=True, close=above EMA21=24752.7"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 69.8,
+          "detail": "RSI=69.8 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 24762.43,
+          "detail": "Close=24823.6 above VWAP=24762.4: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 10.36,
+          "detail": "VIX=10.4 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25300,
+      "expiry": "2025-09-18",
+      "entry_ts": "2025-09-17T09:55:00",
+      "exit_ts": "2025-09-17T14:00:00",
+      "entry_price": 99.77,
+      "exit_price": 69.07,
+      "sl_price": 69.84,
+      "target_price": 164.63,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1995.52,
+      "charges": 57.08,
+      "net_pnl": -2052.6,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25320.05,
+      "delta_at_entry": 0.5602,
+      "iv_at_entry": 0.1025,
+      "vix": 10.25,
+      "trade_date": "2025-09-17",
+      "entry_slippage_pct": 1.1,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25308.28,
+            "slow": 25275.6,
+            "gap_pct": 0.129
+          },
+          "detail": "EMA9=25308.3 > EMA21=25275.6 (gap=0.13%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=25315.6 near EMA21=25254.8 (+0.24%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.51,
+          "detail": "Body=0.51 (need>=0.38), directional=True, close=above EMA21=25275.6"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 69.8,
+          "detail": "RSI=69.8 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25074.63,
+          "detail": "Close=25320.0 above VWAP=25074.6: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 10.25,
+          "detail": "VIX=10.2 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25350,
+      "expiry": "2025-09-25",
+      "entry_ts": "2025-09-17T10:20:00",
+      "exit_ts": "2025-09-17T14:25:00",
+      "entry_price": 114.15,
+      "exit_price": 79.51,
+      "sl_price": 79.91,
+      "target_price": 188.35,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -2251.95,
+      "charges": 58.54,
+      "net_pnl": -2310.49,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25326.6,
+      "delta_at_entry": 0.4967,
+      "iv_at_entry": 0.1056,
+      "vix": 10.56,
+      "trade_date": "2025-09-22",
+      "entry_slippage_pct": 0.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25315.69,
+            "slow": 25292.22,
+            "gap_pct": 0.093
+          },
+          "detail": "EMA9=25315.7 > EMA21=25292.2 (gap=0.09%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=25312.2 near EMA21=25280.2 (+0.13%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.88,
+          "detail": "Body=0.88 (need>=0.38), directional=True, close=above EMA21=25292.2"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 67.0,
+          "detail": "RSI=67.0 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25149.54,
+          "detail": "Close=25326.6 above VWAP=25149.5: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 10.56,
+          "detail": "VIX=10.6 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 24950,
+      "expiry": "2025-10-09",
+      "entry_ts": "2025-10-06T09:35:00",
+      "exit_ts": "2025-10-06T13:30:00",
+      "entry_price": 110.89,
+      "exit_price": 182.05,
+      "sl_price": 77.62,
+      "target_price": 182.96,
+      "exit_reason": "TARGET_HIT",
+      "gross_pnl": 4625.46,
+      "charges": 66.74,
+      "net_pnl": 4558.72,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 24926.85,
+      "delta_at_entry": 0.4975,
+      "iv_at_entry": 0.1019,
+      "vix": 10.19,
+      "trade_date": "2025-10-06",
+      "entry_slippage_pct": 0.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 24906.55,
+            "slow": 24885.63,
+            "gap_pct": 0.084
+          },
+          "detail": "EMA9=24906.6 > EMA21=24885.6 (gap=0.08%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=24905.5 near EMA21=24872.1 (+0.13%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.66,
+          "detail": "Body=0.66 (need>=0.38), directional=True, close=above EMA21=24885.6"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 67.3,
+          "detail": "RSI=67.3 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 24734.88,
+          "detail": "Close=24926.8 above VWAP=24734.9: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 10.19,
+          "detail": "VIX=10.2 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 24950,
+      "expiry": "2025-10-09",
+      "entry_ts": "2025-10-06T09:35:00",
+      "exit_ts": "2025-10-06T11:15:00",
+      "entry_price": 93.73,
+      "exit_price": 113.35,
+      "sl_price": 65.61,
+      "target_price": 154.65,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 1275.27,
+      "charges": 60.42,
+      "net_pnl": 1214.85,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 24926.85,
+      "delta_at_entry": 0.4889,
+      "iv_at_entry": 0.1005,
+      "vix": 10.05,
+      "trade_date": "2025-10-07",
+      "entry_slippage_pct": 0.8,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 24906.55,
+            "slow": 24885.63,
+            "gap_pct": 0.084
+          },
+          "detail": "EMA9=24906.6 > EMA21=24885.6 (gap=0.08%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=24905.5 near EMA21=24872.1 (+0.13%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.66,
+          "detail": "Body=0.66 (need>=0.38), directional=True, close=above EMA21=24885.6"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 67.3,
+          "detail": "RSI=67.3 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 24733.31,
+          "detail": "Close=24926.8 above VWAP=24733.3: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 10.05,
+          "detail": "VIX=10.1 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 24950,
+      "expiry": "2025-10-09",
+      "entry_ts": "2025-10-06T09:35:00",
+      "exit_ts": "2025-10-06T10:50:00",
+      "entry_price": 77.92,
+      "exit_price": 87.28,
+      "sl_price": 54.55,
+      "target_price": 128.57,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 608.42,
+      "charges": 57.63,
+      "net_pnl": 550.79,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 24926.85,
+      "delta_at_entry": 0.4778,
+      "iv_at_entry": 0.1031,
+      "vix": 10.31,
+      "trade_date": "2025-10-08",
+      "entry_slippage_pct": 1.1,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 24906.55,
+            "slow": 24885.63,
+            "gap_pct": 0.084
+          },
+          "detail": "EMA9=24906.6 > EMA21=24885.6 (gap=0.08%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=24905.5 near EMA21=24872.1 (+0.13%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.66,
+          "detail": "Body=0.66 (need>=0.38), directional=True, close=above EMA21=24885.6"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 67.3,
+          "detail": "RSI=67.3 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 24744.02,
+          "detail": "Close=24926.8 above VWAP=24744.0: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 10.31,
+          "detail": "VIX=10.3 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25250,
+      "expiry": "2025-10-23",
+      "entry_ts": "2025-10-15T10:10:00",
+      "exit_ts": "2025-10-15T14:00:00",
+      "entry_price": 117.23,
+      "exit_price": 141.7,
+      "sl_price": 82.06,
+      "target_price": 193.43,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 1590.57,
+      "charges": 63.73,
+      "net_pnl": 1526.84,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25251.25,
+      "delta_at_entry": 0.5258,
+      "iv_at_entry": 0.113,
+      "vix": 11.3,
+      "trade_date": "2025-10-21",
+      "entry_slippage_pct": 0.8,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25225.22,
+            "slow": 25202.85,
+            "gap_pct": 0.089
+          },
+          "detail": "EMA9=25225.2 > EMA21=25202.9 (gap=0.09%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=25209.1 near EMA21=25190.3 (+0.07%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.94,
+          "detail": "Body=0.94 (need>=0.38), directional=True, close=above EMA21=25202.9"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 67.1,
+          "detail": "RSI=67.1 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25167.1,
+          "detail": "Close=25251.2 above VWAP=25167.1: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 11.3,
+          "detail": "VIX=11.3 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "PUT",
+      "option_type": "PE",
+      "strike": 25900,
+      "expiry": "2025-11-06",
+      "entry_ts": "2025-10-30T10:40:00",
+      "exit_ts": "2025-10-30T11:10:00",
+      "entry_price": 61.06,
+      "exit_price": 41.89,
+      "sl_price": 42.74,
+      "target_price": 100.75,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1246.24,
+      "charges": 53.21,
+      "net_pnl": -1299.45,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25917.8,
+      "delta_at_entry": -0.4473,
+      "iv_at_entry": 0.1241,
+      "vix": 12.41,
+      "trade_date": "2025-11-06",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25932.74,
+            "slow": 25955.53,
+            "gap_pct": 0.088
+          },
+          "detail": "EMA9=25932.7 < EMA21=25955.5 (gap=0.09%, need>=0.08%): OK \u2192 PUT"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "High=25959.4 near EMA21=25969.2 (+0.04%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.68,
+          "detail": "Body=0.68 (need>=0.38), directional=True, close=below EMA21=25955.5"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 38.6,
+          "detail": "RSI=38.6 (need 30.0-62.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 26022.3,
+          "detail": "Close=25917.8 below VWAP=26022.3: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 12.41,
+          "detail": "VIX=12.4 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 0.85,
+      "regime": "BEAR_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25600,
+      "expiry": "2025-11-13",
+      "entry_ts": "2025-11-10T09:45:00",
+      "exit_ts": "2025-11-10T11:40:00",
+      "entry_price": 69.59,
+      "exit_price": 78.19,
+      "sl_price": 48.71,
+      "target_price": 114.83,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 558.78,
+      "charges": 56.53,
+      "net_pnl": 502.25,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25580.65,
+      "delta_at_entry": 0.4733,
+      "iv_at_entry": 0.1216,
+      "vix": 12.16,
+      "trade_date": "2025-11-13",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25547.75,
+            "slow": 25526.79,
+            "gap_pct": 0.082
+          },
+          "detail": "EMA9=25547.8 > EMA21=25526.8 (gap=0.08%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=25515.3 near EMA21=25508.0 (+0.03%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.8,
+          "detail": "Body=0.80 (need>=0.38), directional=True, close=above EMA21=25526.8"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 65.6,
+          "detail": "RSI=65.6 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25504.38,
+          "detail": "Close=25580.7 above VWAP=25504.4: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 12.16,
+          "detail": "VIX=12.2 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 26100,
+      "expiry": "2025-12-04",
+      "entry_ts": "2025-11-26T10:35:00",
+      "exit_ts": "2025-11-26T13:25:00",
+      "entry_price": 111.95,
+      "exit_price": 133.82,
+      "sl_price": 78.36,
+      "target_price": 184.72,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 1421.62,
+      "charges": 62.86,
+      "net_pnl": 1358.76,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 26088.5,
+      "delta_at_entry": 0.507,
+      "iv_at_entry": 0.1123,
+      "vix": 11.23,
+      "trade_date": "2025-12-02",
+      "entry_slippage_pct": 0.8,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 26071.14,
+            "slow": 26037.31,
+            "gap_pct": 0.13
+          },
+          "detail": "EMA9=26071.1 > EMA21=26037.3 (gap=0.13%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=26082.0 near EMA21=26018.3 (+0.25%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.66,
+          "detail": "Body=0.66 (need>=0.38), directional=True, close=above EMA21=26037.3"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 68.1,
+          "detail": "RSI=68.1 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25985.11,
+          "detail": "Close=26088.5 above VWAP=25985.1: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 11.23,
+          "detail": "VIX=11.2 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25850,
+      "expiry": "2025-12-25",
+      "entry_ts": "2025-12-18T11:20:00",
+      "exit_ts": "2025-12-18T14:00:00",
+      "entry_price": 96.96,
+      "exit_price": 69.25,
+      "sl_price": 69.81,
+      "target_price": 159.98,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1800.9,
+      "charges": 56.97,
+      "net_pnl": -1857.87,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25852.0,
+      "delta_at_entry": 0.5304,
+      "iv_at_entry": 0.0938,
+      "vix": 9.38,
+      "trade_date": "2025-12-23",
+      "entry_slippage_pct": 0.8,
+      "otm_offset": 0,
+      "strategy": "VWAP_RECLAIM",
+      "filter_log": {
+        "vwap_cross": {
+          "passed": true,
+          "direction": "CALL",
+          "detail": "CALL: price 25852.0 crossed above VWAP 25849.1"
+        },
+        "rejection_magnitude": {
+          "passed": true,
+          "value": 24.2,
+          "detail": "Rejection 24.2pt (need>=15.0pt)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.94,
+          "detail": "Body ratio 0.94 (need>=0.40), directional=True"
+        },
+        "supertrend": {
+          "passed": true,
+          "value": "UP",
+          "detail": "Supertrend=UP, need UP"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 60.1,
+          "detail": "RSI=60.1 (need 40.0-65.0)"
+        },
+        "volume_surge": {
+          "passed": true,
+          "value": null,
+          "detail": "Volume data unavailable \u2014 filter skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 9.38,
+          "detail": "VIX=9.4 (max=22.0)"
+        },
+        "hold_confirmation": {
+          "passed": true,
+          "detail": "Hold check passed \u2014 prev candle must sustain VWAP position"
+        }
+      },
+      "risk_multiplier": 0.6,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25850,
+      "expiry": "2025-12-25",
+      "entry_ts": "2025-12-18T11:20:00",
+      "exit_ts": "2025-12-18T14:00:00",
+      "entry_price": 96.96,
+      "exit_price": 69.25,
+      "sl_price": 69.81,
+      "target_price": 159.98,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1800.9,
+      "charges": 56.97,
+      "net_pnl": -1857.87,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25852.0,
+      "delta_at_entry": 0.5304,
+      "iv_at_entry": 0.0938,
+      "vix": 9.38,
+      "trade_date": "2025-12-23",
+      "entry_slippage_pct": 0.8,
+      "otm_offset": 0,
+      "strategy": "VWAP_RECLAIM_REENTRY",
+      "filter_log": {
+        "vwap_cross": {
+          "passed": true,
+          "direction": "CALL",
+          "detail": "CALL: price 25852.0 crossed above VWAP 25849.1"
+        },
+        "rejection_magnitude": {
+          "passed": true,
+          "value": 24.2,
+          "detail": "Rejection 24.2pt (need>=15.0pt)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.94,
+          "detail": "Body ratio 0.94 (need>=0.40), directional=True"
+        },
+        "supertrend": {
+          "passed": true,
+          "value": "UP",
+          "detail": "Supertrend=UP, need UP"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 60.1,
+          "detail": "RSI=60.1 (need 40.0-65.0)"
+        },
+        "volume_surge": {
+          "passed": true,
+          "value": null,
+          "detail": "Volume data unavailable \u2014 filter skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 9.38,
+          "detail": "VIX=9.4 (max=22.0)"
+        },
+        "hold_confirmation": {
+          "passed": true,
+          "detail": "Hold check passed \u2014 prev candle must sustain VWAP position"
+        }
+      },
+      "risk_multiplier": 0.44999999999999996,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 26250,
+      "expiry": "2026-01-08",
+      "entry_ts": "2026-01-02T10:10:00",
+      "exit_ts": "2026-01-02T15:15:00",
+      "entry_price": 110.86,
+      "exit_price": 126.86,
+      "sl_price": 77.6,
+      "target_price": 182.92,
+      "exit_reason": "FORCE_EXIT",
+      "gross_pnl": 1040.01,
+      "charges": 62.25,
+      "net_pnl": 977.76,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 26254.65,
+      "delta_at_entry": 0.5339,
+      "iv_at_entry": 0.1002,
+      "vix": 10.02,
+      "trade_date": "2026-01-06",
+      "entry_slippage_pct": 0.8,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 26237.7,
+            "slow": 26210.25,
+            "gap_pct": 0.105
+          },
+          "detail": "EMA9=26237.7 > EMA21=26210.2 (gap=0.10%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=26253.8 near EMA21=26191.8 (+0.24%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.84,
+          "detail": "Body=0.84 (need>=0.38), directional=True, close=above EMA21=26210.2"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 68.2,
+          "detail": "RSI=68.2 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 26065.11,
+          "detail": "Close=26254.7 above VWAP=26065.1: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 10.02,
+          "detail": "VIX=10.0 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "PUT",
+      "option_type": "PE",
+      "strike": 25200,
+      "expiry": "2026-01-22",
+      "entry_ts": "2026-01-21T09:50:00",
+      "exit_ts": "2026-01-21T10:40:00",
+      "entry_price": 118.27,
+      "exit_price": 193.0,
+      "sl_price": 82.79,
+      "target_price": 195.15,
+      "exit_reason": "TARGET_HIT",
+      "gross_pnl": 4857.39,
+      "charges": 67.95,
+      "net_pnl": 4789.45,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25177.55,
+      "delta_at_entry": -0.5149,
+      "iv_at_entry": 0.1378,
+      "vix": 13.78,
+      "trade_date": "2026-01-21",
+      "entry_slippage_pct": 1.1,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25209.54,
+            "slow": 25252.48,
+            "gap_pct": 0.17
+          },
+          "detail": "EMA9=25209.5 < EMA21=25252.5 (gap=0.17%, need>=0.08%): OK \u2192 PUT"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "High=25248.2 near EMA21=25281.1 (+0.13%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.51,
+          "detail": "Body=0.51 (need>=0.38), directional=True, close=below EMA21=25252.5"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 32.0,
+          "detail": "RSI=32.0 (need 30.0-62.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25623.27,
+          "detail": "Close=25177.5 below VWAP=25623.3: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 13.78,
+          "detail": "VIX=13.8 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 0.85,
+      "regime": "STRONG_BEAR"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "PUT",
+      "option_type": "PE",
+      "strike": 25200,
+      "expiry": "2026-01-22",
+      "entry_ts": "2026-01-21T09:50:00",
+      "exit_ts": "2026-01-21T10:40:00",
+      "entry_price": 90.36,
+      "exit_price": 146.86,
+      "sl_price": 63.25,
+      "target_price": 149.09,
+      "exit_reason": "TARGET_HIT",
+      "gross_pnl": 3672.31,
+      "charges": 63.0,
+      "net_pnl": 3609.31,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25177.55,
+      "delta_at_entry": -0.5311,
+      "iv_at_entry": 0.1335,
+      "vix": 13.35,
+      "trade_date": "2026-01-22",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25209.54,
+            "slow": 25252.48,
+            "gap_pct": 0.17
+          },
+          "detail": "EMA9=25209.5 < EMA21=25252.5 (gap=0.17%, need>=0.08%): OK \u2192 PUT"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "High=25248.2 near EMA21=25281.1 (+0.13%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.51,
+          "detail": "Body=0.51 (need>=0.38), directional=True, close=below EMA21=25252.5"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 32.0,
+          "detail": "RSI=32.0 (need 30.0-62.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25598.75,
+          "detail": "Close=25177.5 below VWAP=25598.8: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 13.35,
+          "detail": "VIX=13.3 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 0.85,
+      "regime": "BEAR_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25350,
+      "expiry": "2026-02-05",
+      "entry_ts": "2026-01-29T13:00:00",
+      "exit_ts": "2026-01-29T14:05:00",
+      "entry_price": 87.51,
+      "exit_price": 108.99,
+      "sl_price": 61.26,
+      "target_price": 144.4,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 1396.25,
+      "charges": 59.8,
+      "net_pnl": 1336.45,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25351.3,
+      "delta_at_entry": 0.5182,
+      "iv_at_entry": 0.1225,
+      "vix": 12.25,
+      "trade_date": "2026-02-04",
+      "entry_slippage_pct": 1.1,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25310.1,
+            "slow": 25287.42,
+            "gap_pct": 0.09
+          },
+          "detail": "EMA9=25310.1 > EMA21=25287.4 (gap=0.09%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=25281.2 near EMA21=25268.6 (+0.05%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.95,
+          "detail": "Body=0.95 (need>=0.38), directional=True, close=above EMA21=25287.4"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 68.4,
+          "detail": "RSI=68.4 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25250.79,
+          "detail": "Close=25351.3 above VWAP=25250.8: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 12.25,
+          "detail": "VIX=12.2 (max=22.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    }
+  ],
+  "metrics": {
+    "total_trades": 35,
+    "win_count": 25,
+    "loss_count": 10,
+    "win_rate_pct": 71.4,
+    "avg_win": 2205.75,
+    "avg_loss": -1754.51,
+    "profit_factor": 3.14,
+    "total_net_pnl": 37598.66,
+    "total_gross_pnl": 39703.86,
+    "total_charges": 2105.24,
+    "max_drawdown_abs": 7389.14,
+    "max_drawdown_pct": 7.39,
+    "sharpe_ratio": 7.753,
+    "calmar_ratio": 37.714,
+    "consecutive_losses_max": 4,
+    "avg_trade_duration_min": 94.3,
+    "exit_reasons": {
+      "TARGET_HIT": 10,
+      "SL_HIT": 24,
+      "FORCE_EXIT": 1
+    },
+    "equity_curve": [
+      100000.0,
+      102972.3,
+      107787.12,
+      105745.47,
+      107097.14,
+      107698.93,
+      110289.25,
+      111326.3,
+      109203.05,
+      113924.1,
+      117426.0,
+      118584.04,
+      121220.71,
+      122704.17,
+      124452.3,
+      127752.51,
+      126776.65,
+      127520.35,
+      129577.81,
+      128230.67,
+      126551.76,
+      124499.16,
+      122188.67,
+      126747.39,
+      127962.24,
+      128513.03,
+      130039.87,
+      128740.42,
+      129242.67,
+      130601.43,
+      128743.56,
+      126885.69,
+      127863.45,
+      132652.9,
+      136262.21,
+      137598.66
+    ],
+    "final_capital": 137598.66,
+    "return_pct": 37.6,
+    "monthly_breakdown": [
+      {
+        "month": "2025-03",
+        "trades": 4,
+        "net_pnl": 7097.14,
+        "wins": 3,
+        "win_rate": 75.0
+      },
+      {
+        "month": "2025-04",
+        "trades": 3,
+        "net_pnl": 4229.16,
+        "wins": 3,
+        "win_rate": 100.0
+      },
+      {
+        "month": "2025-05",
+        "trades": 1,
+        "net_pnl": -2123.25,
+        "wins": 0,
+        "win_rate": 0.0
+      },
+      {
+        "month": "2025-06",
+        "trades": 4,
+        "net_pnl": 12017.66,
+        "wins": 4,
+        "win_rate": 100.0
+      },
+      {
+        "month": "2025-07",
+        "trades": 5,
+        "net_pnl": 6299.64,
+        "wins": 4,
+        "win_rate": 80.0
+      },
+      {
+        "month": "2025-08",
+        "trades": 2,
+        "net_pnl": 710.32,
+        "wins": 1,
+        "win_rate": 50.0
+      },
+      {
+        "month": "2025-09",
+        "trades": 3,
+        "net_pnl": -6042.0,
+        "wins": 0,
+        "win_rate": 0.0
+      },
+      {
+        "month": "2025-10",
+        "trades": 4,
+        "net_pnl": 7851.2,
+        "wins": 4,
+        "win_rate": 100.0
+      },
+      {
+        "month": "2025-11",
+        "trades": 2,
+        "net_pnl": -797.2,
+        "wins": 1,
+        "win_rate": 50.0
+      },
+      {
+        "month": "2025-12",
+        "trades": 3,
+        "net_pnl": -2356.98,
+        "wins": 1,
+        "win_rate": 33.3
+      },
+      {
+        "month": "2026-01",
+        "trades": 3,
+        "net_pnl": 9376.52,
+        "wins": 3,
+        "win_rate": 100.0
+      },
+      {
+        "month": "2026-02",
+        "trades": 1,
+        "net_pnl": 1336.45,
+        "wins": 1,
+        "win_rate": 100.0
+      }
+    ],
+    "trading_days": 34
+  },
+  "config": {
+    "capital": 100000.0,
+    "lot_size": 65,
+    "lots": 1,
+    "orb_start": "09:15",
+    "orb_end": "09:30",
+    "entry_window_close": "10:30",
+    "min_orb_range_points": 20.0,
+    "max_orb_range_points": 200.0,
+    "breakout_buffer_pct": 0.0003,
+    "min_breakout_body_ratio": 0.4,
+    "min_volume_surge_ratio": 1.0,
+    "relaxed_orb_max_range_points": 320.0,
+    "enable_vwap_reclaim": true,
+    "reclaim_window_start": "10:00",
+    "reclaim_window_end": "13:30",
+    "reclaim_min_rejection_points": 15.0,
+    "enable_ema_pullback": true,
+    "ema_pullback_window_start": "09:30",
+    "ema_pullback_window_end": "13:00",
+    "ema_pullback_proximity_pct": 0.006,
+    "ema_pullback_lookback_candles": 4,
+    "enable_momentum_breakout": false,
+    "momentum_breakout_window_start": "09:30",
+    "momentum_breakout_window_end": "12:00",
+    "momentum_breakout_lookback": 20,
+    "momentum_breakout_min_body_ratio": 0.5,
+    "momentum_breakout_rsi_bull_min": 55.0,
+    "momentum_breakout_rsi_bull_max": 78.0,
+    "momentum_breakout_rsi_bear_min": 22.0,
+    "momentum_breakout_rsi_bear_max": 45.0,
+    "momentum_breakout_min_volume_surge": 1.3,
+    "ema_fast": 9,
+    "ema_slow": 21,
+    "rsi_period": 14,
+    "atr_period": 14,
+    "require_vwap_confirmation": true,
+    "vwap_buffer_points": 5.0,
+    "rsi_bull_min": 45.0,
+    "rsi_bear_max": 55.0,
+    "rsi_overbought_skip": 78.0,
+    "rsi_oversold_skip": 22.0,
+    "vix_max": 22.0,
+    "atr_sl_multiplier": 2.0,
+    "atr_sl_min_pct": 0.25,
+    "atr_sl_max_pct": 0.4,
+    "rr_min": 1.6,
+    "trail_trigger_pct": 0.3,
+    "trail_lock_step_pct": 0.15,
+    "break_even_trigger_pct": 0.2,
+    "thursday_max_loss_pct": 0.15,
+    "min_quality_score": 3,
+    "enable_quality_filter": true,
+    "enable_choppy_filter": true,
+    "enable_htf_filter": true,
+    "enable_overextended_filter": true,
+    "max_late_move_pts": 120.0,
+    "enable_dynamic_blocklist": true,
+    "enable_reentry": true,
+    "reentry_window_min": 30,
+    "force_exit_time": "15:15",
+    "max_trades_per_day": 2,
+    "max_consecutive_losses": 5,
+    "max_daily_loss_pct": 0.04,
+    "slippage_pct": 0.005,
+    "strike_step": 50,
+    "enable_regime_classifier": true,
+    "regime_vix_skip_threshold": 22.0,
+    "regime_gap_skip_pct": 0.012,
+    "regime_strong_gap_pct": 0.003,
+    "regime_strong_5d_ret_pct": 0.01,
+    "regime_breakout_prev_range_max": 120.0,
+    "regime_pullback_5d_ret_pct": 0.008,
+    "regime_pullback_flat_open_pct": 0.002,
+    "regime_trend_conflict_after": "10:30",
+    "stop_after_2r_profit": true,
+    "max_entry_option_price": 120.0,
+    "ema_pullback_dead_zone_start": "11:00",
+    "ema_pullback_dead_zone_end": "12:00"
+  },
+  "start_date": "2025-03-04",
+  "end_date": "2026-03-23",
+  "regime_distribution": {
+    "SKIP_RANGING": 125,
+    "STRONG_BULL": 11,
+    "BULL_PULLBACK": 43,
+    "BEAR_PULLBACK": 42,
+    "SKIP_VOLATILE": 14,
+    "BULL_BREAKOUT": 19,
+    "BEAR_BREAKOUT": 3,
+    "STRONG_BEAR": 4
+  }
+}

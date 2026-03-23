@@ -1,0 +1,1402 @@
+{
+  "trades": [
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25150,
+      "expiry": "2026-01-29",
+      "entry_ts": "2026-01-27T11:40:00",
+      "exit_ts": "2026-01-27T11:50:00",
+      "entry_price": 140.44,
+      "exit_price": 104.49,
+      "sl_price": 105.33,
+      "target_price": 231.72,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -2336.88,
+      "charges": 61.69,
+      "net_pnl": -2398.57,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25154.65,
+      "delta_at_entry": 0.5244,
+      "iv_at_entry": 0.1445,
+      "vix": 14.449999809265137,
+      "trade_date": "2026-01-27",
+      "entry_slippage_pct": 0.8,
+      "otm_offset": 0,
+      "strategy": "VWAP_RECLAIM",
+      "filter_log": {
+        "vwap_cross": {
+          "passed": true,
+          "direction": "CALL",
+          "detail": "CALL: price 25154.7 crossed above VWAP 25070.8"
+        },
+        "rejection_magnitude": {
+          "passed": true,
+          "value": 19.7,
+          "detail": "Rejection 19.7pt (need>=15.0pt)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.81,
+          "detail": "Body ratio 0.81 (need>=0.40), directional=True"
+        },
+        "supertrend": {
+          "passed": true,
+          "value": "UP",
+          "detail": "Supertrend=UP, need UP"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 64.9,
+          "detail": "RSI=64.9 (need 40.0-65.0)"
+        },
+        "volume_surge": {
+          "passed": true,
+          "value": null,
+          "detail": "Volume data unavailable \u2014 filter skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 14.45,
+          "detail": "VIX=14.4 (max=18.0)"
+        },
+        "hold_confirmation": {
+          "passed": true,
+          "detail": "Hold check passed \u2014 prev candle must sustain VWAP position"
+        }
+      },
+      "risk_multiplier": 0.6,
+      "regime": "SKIP_RANGING"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25150,
+      "expiry": "2026-01-29",
+      "entry_ts": "2026-01-27T11:40:00",
+      "exit_ts": "2026-01-27T11:45:00",
+      "entry_price": 106.28,
+      "exit_price": 78.83,
+      "sl_price": 79.71,
+      "target_price": 175.36,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1784.05,
+      "charges": 58.15,
+      "net_pnl": -1842.2,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25154.65,
+      "delta_at_entry": 0.5234,
+      "iv_at_entry": 0.1353,
+      "vix": 13.529999732971191,
+      "trade_date": "2026-01-28",
+      "entry_slippage_pct": 1.1,
+      "otm_offset": 0,
+      "strategy": "VWAP_RECLAIM",
+      "filter_log": {
+        "vwap_cross": {
+          "passed": true,
+          "direction": "CALL",
+          "detail": "CALL: price 25154.7 crossed above VWAP 25070.8"
+        },
+        "rejection_magnitude": {
+          "passed": true,
+          "value": 19.7,
+          "detail": "Rejection 19.7pt (need>=15.0pt)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.81,
+          "detail": "Body ratio 0.81 (need>=0.40), directional=True"
+        },
+        "supertrend": {
+          "passed": true,
+          "value": "UP",
+          "detail": "Supertrend=UP, need UP"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 64.9,
+          "detail": "RSI=64.9 (need 40.0-65.0)"
+        },
+        "volume_surge": {
+          "passed": true,
+          "value": null,
+          "detail": "Volume data unavailable \u2014 filter skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 13.53,
+          "detail": "VIX=13.5 (max=18.0)"
+        },
+        "hold_confirmation": {
+          "passed": true,
+          "detail": "Hold check passed \u2014 prev candle must sustain VWAP position"
+        }
+      },
+      "risk_multiplier": 0.6,
+      "regime": "SKIP_RANGING"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25150,
+      "expiry": "2026-01-29",
+      "entry_ts": "2026-01-27T11:40:00",
+      "exit_ts": "2026-01-27T11:45:00",
+      "entry_price": 71.64,
+      "exit_price": 52.93,
+      "sl_price": 53.73,
+      "target_price": 118.21,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1216.6,
+      "charges": 54.56,
+      "net_pnl": -1271.16,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25154.65,
+      "delta_at_entry": 0.5221,
+      "iv_at_entry": 0.1337,
+      "vix": 13.369999885559082,
+      "trade_date": "2026-01-29",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "VWAP_RECLAIM",
+      "filter_log": {
+        "vwap_cross": {
+          "passed": true,
+          "direction": "CALL",
+          "detail": "CALL: price 25154.7 crossed above VWAP 25070.8"
+        },
+        "rejection_magnitude": {
+          "passed": true,
+          "value": 19.7,
+          "detail": "Rejection 19.7pt (need>=15.0pt)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.81,
+          "detail": "Body ratio 0.81 (need>=0.40), directional=True"
+        },
+        "supertrend": {
+          "passed": true,
+          "value": "UP",
+          "detail": "Supertrend=UP, need UP"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 64.9,
+          "detail": "RSI=64.9 (need 40.0-65.0)"
+        },
+        "volume_surge": {
+          "passed": true,
+          "value": null,
+          "detail": "Volume data unavailable \u2014 filter skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 13.37,
+          "detail": "VIX=13.4 (max=18.0)"
+        },
+        "hold_confirmation": {
+          "passed": true,
+          "detail": "Hold check passed \u2014 prev candle must sustain VWAP position"
+        }
+      },
+      "risk_multiplier": 0.6,
+      "regime": "SKIP_RANGING"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25150,
+      "expiry": "2026-02-05",
+      "entry_ts": "2026-01-27T11:40:00",
+      "exit_ts": "2026-01-27T12:45:00",
+      "entry_price": 209.79,
+      "exit_price": 156.55,
+      "sl_price": 157.34,
+      "target_price": 346.15,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -3460.18,
+      "charges": 68.89,
+      "net_pnl": -3529.07,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25154.65,
+      "delta_at_entry": 0.5341,
+      "iv_at_entry": 0.1363,
+      "vix": 13.630000114440918,
+      "trade_date": "2026-01-30",
+      "entry_slippage_pct": 0.5,
+      "otm_offset": 0,
+      "strategy": "VWAP_RECLAIM",
+      "filter_log": {
+        "vwap_cross": {
+          "passed": true,
+          "direction": "CALL",
+          "detail": "CALL: price 25154.7 crossed above VWAP 25070.8"
+        },
+        "rejection_magnitude": {
+          "passed": true,
+          "value": 19.7,
+          "detail": "Rejection 19.7pt (need>=15.0pt)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.81,
+          "detail": "Body ratio 0.81 (need>=0.40), directional=True"
+        },
+        "supertrend": {
+          "passed": true,
+          "value": "UP",
+          "detail": "Supertrend=UP, need UP"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 64.9,
+          "detail": "RSI=64.9 (need 40.0-65.0)"
+        },
+        "volume_surge": {
+          "passed": true,
+          "value": null,
+          "detail": "Volume data unavailable \u2014 filter skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 13.63,
+          "detail": "VIX=13.6 (max=18.0)"
+        },
+        "hold_confirmation": {
+          "passed": true,
+          "detail": "Hold check passed \u2014 prev candle must sustain VWAP position"
+        }
+      },
+      "risk_multiplier": 0.6,
+      "regime": "SKIP_RANGING"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25150,
+      "expiry": "2026-02-05",
+      "entry_ts": "2026-01-27T11:40:00",
+      "exit_ts": "2026-01-27T11:45:00",
+      "entry_price": 96.89,
+      "exit_price": 71.87,
+      "sl_price": 72.67,
+      "target_price": 159.86,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1626.38,
+      "charges": 57.18,
+      "net_pnl": -1683.56,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25154.65,
+      "delta_at_entry": 0.5254,
+      "iv_at_entry": 0.1225,
+      "vix": 12.25,
+      "trade_date": "2026-02-04",
+      "entry_slippage_pct": 1.1,
+      "otm_offset": 0,
+      "strategy": "VWAP_RECLAIM",
+      "filter_log": {
+        "vwap_cross": {
+          "passed": true,
+          "direction": "CALL",
+          "detail": "CALL: price 25154.7 crossed above VWAP 25070.8"
+        },
+        "rejection_magnitude": {
+          "passed": true,
+          "value": 19.7,
+          "detail": "Rejection 19.7pt (need>=15.0pt)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.81,
+          "detail": "Body ratio 0.81 (need>=0.40), directional=True"
+        },
+        "supertrend": {
+          "passed": true,
+          "value": "UP",
+          "detail": "Supertrend=UP, need UP"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 64.9,
+          "detail": "RSI=64.9 (need 40.0-65.0)"
+        },
+        "volume_surge": {
+          "passed": true,
+          "value": null,
+          "detail": "Volume data unavailable \u2014 filter skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 12.25,
+          "detail": "VIX=12.2 (max=18.0)"
+        },
+        "hold_confirmation": {
+          "passed": true,
+          "detail": "Hold check passed \u2014 prev candle must sustain VWAP position"
+        }
+      },
+      "risk_multiplier": 0.6,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25750,
+      "expiry": "2026-02-05",
+      "entry_ts": "2026-02-03T10:15:00",
+      "exit_ts": "2026-02-03T10:40:00",
+      "entry_price": 77.88,
+      "exit_price": 94.51,
+      "sl_price": 58.41,
+      "target_price": 128.5,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": 1081.23,
+      "charges": 58.21,
+      "net_pnl": 1023.02,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25753.35,
+      "delta_at_entry": 0.5211,
+      "iv_at_entry": 0.1217,
+      "vix": 12.170000076293945,
+      "trade_date": "2026-02-05",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25700.22,
+            "slow": 25613.86,
+            "gap_pct": 0.337
+          },
+          "detail": "EMA9=25700.2 > EMA21=25613.9 (gap=0.34%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=25696.9 near EMA21=25571.8 (+0.49%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.91,
+          "detail": "Body=0.91 (need>=0.38), directional=True, close=above EMA21=25613.9"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 68.0,
+          "detail": "RSI=68.0 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25321.05,
+          "detail": "Close=25753.3 above VWAP=25321.1: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 12.17,
+          "detail": "VIX=12.2 (max=18.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25750,
+      "expiry": "2026-02-12",
+      "entry_ts": "2026-02-03T10:15:00",
+      "exit_ts": "2026-02-03T12:35:00",
+      "entry_price": 194.59,
+      "exit_price": 194.0,
+      "sl_price": 145.94,
+      "target_price": 321.07,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -38.07,
+      "charges": 71.29,
+      "net_pnl": -109.36,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25753.35,
+      "delta_at_entry": 0.5373,
+      "iv_at_entry": 0.1194,
+      "vix": 11.9399995803833,
+      "trade_date": "2026-02-06",
+      "entry_slippage_pct": 0.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25700.22,
+            "slow": 25613.86,
+            "gap_pct": 0.337
+          },
+          "detail": "EMA9=25700.2 > EMA21=25613.9 (gap=0.34%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=25696.9 near EMA21=25571.8 (+0.49%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.91,
+          "detail": "Body=0.91 (need>=0.38), directional=True, close=above EMA21=25613.9"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 68.0,
+          "detail": "RSI=68.0 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25338.26,
+          "detail": "Close=25753.3 above VWAP=25338.3: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 11.94,
+          "detail": "VIX=11.9 (max=18.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25850,
+      "expiry": "2026-02-12",
+      "entry_ts": "2026-02-03T11:20:00",
+      "exit_ts": "2026-02-03T12:05:00",
+      "entry_price": 117.21,
+      "exit_price": 116.86,
+      "sl_price": 87.91,
+      "target_price": 193.4,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -22.93,
+      "charges": 61.71,
+      "net_pnl": -84.64,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25798.7,
+      "delta_at_entry": 0.4633,
+      "iv_at_entry": 0.122,
+      "vix": 12.1899995803833,
+      "trade_date": "2026-02-09",
+      "entry_slippage_pct": 0.5,
+      "otm_offset": 1,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25780.98,
+            "slow": 25735.8,
+            "gap_pct": 0.176
+          },
+          "detail": "EMA9=25781.0 > EMA21=25735.8 (gap=0.18%, need>=0.08%): OK \u2192 CALL"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "Low=25778.8 near EMA21=25712.9 (+0.26%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.79,
+          "detail": "Body=0.79 (need>=0.38), directional=True, close=above EMA21=25735.8"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 64.9,
+          "detail": "RSI=64.9 (need 38.0-70.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25416.3,
+          "detail": "Close=25798.7 above VWAP=25416.3: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 12.19,
+          "detail": "VIX=12.2 (max=18.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "STRONG_BULL"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25900,
+      "expiry": "2026-02-12",
+      "entry_ts": "2026-02-03T11:30:00",
+      "exit_ts": "2026-02-03T12:25:00",
+      "entry_price": 121.33,
+      "exit_price": 90.54,
+      "sl_price": 91.0,
+      "target_price": 188.06,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -2001.15,
+      "charges": 59.74,
+      "net_pnl": -2060.89,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25858.4,
+      "delta_at_entry": 0.4747,
+      "iv_at_entry": 0.1219,
+      "vix": 12.1899995803833,
+      "trade_date": "2026-02-09",
+      "entry_slippage_pct": 0.5,
+      "otm_offset": 1,
+      "strategy": "MOMENTUM_BREAKOUT",
+      "filter_log": {
+        "breakout": {
+          "passed": true,
+          "direction": "CALL",
+          "value": 34.3,
+          "detail": "CALL: close=25858.4 beyond high=25824.1 (+34.3pt)"
+        },
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25802.02,
+            "slow": 25753.55
+          },
+          "detail": "EMA9=25802.0 vs EMA21=25753.6: aligned"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.79,
+          "detail": "Body=0.79 (need>=0.5), directional=True"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 70.8,
+          "detail": "RSI=70.8 (momentum zone: 55.0-78.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25424.28,
+          "detail": "Close=25858.4 above VWAP=25424.3: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 12.19,
+          "detail": "VIX=12.2 (max=18.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "STRONG_BULL"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25950,
+      "expiry": "2026-02-12",
+      "entry_ts": "2026-02-10T10:15:00",
+      "exit_ts": "2026-02-10T13:15:00",
+      "entry_price": 108.75,
+      "exit_price": 80.66,
+      "sl_price": 81.56,
+      "target_price": 168.56,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1825.43,
+      "charges": 58.4,
+      "net_pnl": -1883.84,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25966.0,
+      "delta_at_entry": 0.5465,
+      "iv_at_entry": 0.1155,
+      "vix": 11.550000190734863,
+      "trade_date": "2026-02-11",
+      "entry_slippage_pct": 1.1,
+      "otm_offset": 0,
+      "strategy": "MOMENTUM_BREAKOUT",
+      "filter_log": {
+        "breakout": {
+          "passed": true,
+          "direction": "CALL",
+          "value": 1.0,
+          "detail": "CALL: close=25966.0 beyond high=25965.0 (+1.0pt)"
+        },
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25944.73,
+            "slow": 25919.55
+          },
+          "detail": "EMA9=25944.7 vs EMA21=25919.5: aligned"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.73,
+          "detail": "Body=0.73 (need>=0.5), directional=True"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 73.1,
+          "detail": "RSI=73.1 (momentum zone: 55.0-78.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25715.24,
+          "detail": "Close=25966.0 above VWAP=25715.2: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 11.55,
+          "detail": "VIX=11.6 (max=18.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_BREAKOUT"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25950,
+      "expiry": "2026-02-12",
+      "entry_ts": "2026-02-10T10:15:00",
+      "exit_ts": "2026-02-10T11:25:00",
+      "entry_price": 82.69,
+      "exit_price": 61.09,
+      "sl_price": 62.02,
+      "target_price": 128.17,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1404.14,
+      "charges": 55.7,
+      "net_pnl": -1459.83,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25966.0,
+      "delta_at_entry": 0.5503,
+      "iv_at_entry": 0.1173,
+      "vix": 11.729999542236328,
+      "trade_date": "2026-02-12",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "MOMENTUM_BREAKOUT",
+      "filter_log": {
+        "breakout": {
+          "passed": true,
+          "direction": "CALL",
+          "value": 1.0,
+          "detail": "CALL: close=25966.0 beyond high=25965.0 (+1.0pt)"
+        },
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25944.73,
+            "slow": 25919.55
+          },
+          "detail": "EMA9=25944.7 vs EMA21=25919.5: aligned"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.73,
+          "detail": "Body=0.73 (need>=0.5), directional=True"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 73.1,
+          "detail": "RSI=73.1 (momentum zone: 55.0-78.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25703.56,
+          "detail": "Close=25966.0 above VWAP=25703.6: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 11.73,
+          "detail": "VIX=11.7 (max=18.0)"
+        }
+      },
+      "risk_multiplier": 1.0,
+      "regime": "BULL_BREAKOUT"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "PUT",
+      "option_type": "PE",
+      "strike": 25550,
+      "expiry": "2026-02-19",
+      "entry_ts": "2026-02-13T11:05:00",
+      "exit_ts": "2026-02-13T12:25:00",
+      "entry_price": 142.26,
+      "exit_price": 106.16,
+      "sl_price": 106.69,
+      "target_price": 234.73,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -2346.4,
+      "charges": 61.91,
+      "net_pnl": -2408.31,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25536.4,
+      "delta_at_entry": -0.4916,
+      "iv_at_entry": 0.1333,
+      "vix": 13.329999923706055,
+      "trade_date": "2026-02-16",
+      "entry_slippage_pct": 0.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25553.63,
+            "slow": 25582.03,
+            "gap_pct": 0.111
+          },
+          "detail": "EMA9=25553.6 < EMA21=25582.0 (gap=0.11%, need>=0.08%): OK \u2192 PUT"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "High=25573.8 near EMA21=25597.1 (+0.09%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.63,
+          "detail": "Body=0.63 (need>=0.38), directional=True, close=below EMA21=25582.0"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 31.9,
+          "detail": "RSI=31.9 (need 30.0-62.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25869.1,
+          "detail": "Close=25536.4 below VWAP=25869.1: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 13.33,
+          "detail": "VIX=13.3 (max=18.0)"
+        }
+      },
+      "risk_multiplier": 0.85,
+      "regime": "BEAR_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "PUT",
+      "option_type": "PE",
+      "strike": 25550,
+      "expiry": "2026-02-19",
+      "entry_ts": "2026-02-13T11:05:00",
+      "exit_ts": "2026-02-13T12:20:00",
+      "entry_price": 119.33,
+      "exit_price": 88.78,
+      "sl_price": 89.5,
+      "target_price": 196.9,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1985.66,
+      "charges": 59.52,
+      "net_pnl": -2045.17,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25536.4,
+      "delta_at_entry": -0.4971,
+      "iv_at_entry": 0.1267,
+      "vix": 12.670000076293945,
+      "trade_date": "2026-02-17",
+      "entry_slippage_pct": 0.8,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25553.63,
+            "slow": 25582.03,
+            "gap_pct": 0.111
+          },
+          "detail": "EMA9=25553.6 < EMA21=25582.0 (gap=0.11%, need>=0.08%): OK \u2192 PUT"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "High=25573.8 near EMA21=25597.1 (+0.09%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.63,
+          "detail": "Body=0.63 (need>=0.38), directional=True, close=below EMA21=25582.0"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 31.9,
+          "detail": "RSI=31.9 (need 30.0-62.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25877.05,
+          "detail": "Close=25536.4 below VWAP=25877.1: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 12.67,
+          "detail": "VIX=12.7 (max=18.0)"
+        }
+      },
+      "risk_multiplier": 0.85,
+      "regime": "BEAR_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "PUT",
+      "option_type": "PE",
+      "strike": 25550,
+      "expiry": "2026-02-19",
+      "entry_ts": "2026-02-13T11:05:00",
+      "exit_ts": "2026-02-13T12:05:00",
+      "entry_price": 96.56,
+      "exit_price": 71.62,
+      "sl_price": 72.42,
+      "target_price": 159.32,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1620.88,
+      "charges": 57.15,
+      "net_pnl": -1678.02,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25536.4,
+      "delta_at_entry": -0.5054,
+      "iv_at_entry": 0.1222,
+      "vix": 12.220000267028809,
+      "trade_date": "2026-02-18",
+      "entry_slippage_pct": 1.1,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25553.63,
+            "slow": 25582.03,
+            "gap_pct": 0.111
+          },
+          "detail": "EMA9=25553.6 < EMA21=25582.0 (gap=0.11%, need>=0.08%): OK \u2192 PUT"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "High=25573.8 near EMA21=25597.1 (+0.09%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.63,
+          "detail": "Body=0.63 (need>=0.38), directional=True, close=below EMA21=25582.0"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 31.9,
+          "detail": "RSI=31.9 (need 30.0-62.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25847.31,
+          "detail": "Close=25536.4 below VWAP=25847.3: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 12.22,
+          "detail": "VIX=12.2 (max=18.0)"
+        }
+      },
+      "risk_multiplier": 0.85,
+      "regime": "BEAR_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25550,
+      "expiry": "2026-02-26",
+      "entry_ts": "2026-02-16T12:00:00",
+      "exit_ts": "2026-02-16T15:15:00",
+      "entry_price": 151.57,
+      "exit_price": 214.12,
+      "sl_price": 113.68,
+      "target_price": 250.09,
+      "exit_reason": "FORCE_EXIT",
+      "gross_pnl": 4065.9,
+      "charges": 71.09,
+      "net_pnl": 3994.81,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25535.6,
+      "delta_at_entry": 0.5065,
+      "iv_at_entry": 0.1417,
+      "vix": 14.170000076293945,
+      "trade_date": "2026-02-23",
+      "entry_slippage_pct": 0.5,
+      "otm_offset": 0,
+      "strategy": "VWAP_RECLAIM",
+      "filter_log": {
+        "vwap_cross": {
+          "passed": true,
+          "direction": "CALL",
+          "detail": "CALL: price 25535.6 crossed above VWAP 25513.2"
+        },
+        "rejection_magnitude": {
+          "passed": true,
+          "value": 15.9,
+          "detail": "Rejection 15.9pt (need>=15.0pt)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.66,
+          "detail": "Body ratio 0.66 (need>=0.40), directional=True"
+        },
+        "supertrend": {
+          "passed": true,
+          "value": "UP",
+          "detail": "Supertrend=UP, need UP"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 58.1,
+          "detail": "RSI=58.1 (need 40.0-65.0)"
+        },
+        "volume_surge": {
+          "passed": true,
+          "value": null,
+          "detail": "Volume data unavailable \u2014 filter skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 14.17,
+          "detail": "VIX=14.2 (max=18.0)"
+        },
+        "hold_confirmation": {
+          "passed": true,
+          "detail": "Hold check passed \u2014 prev candle must sustain VWAP position"
+        }
+      },
+      "risk_multiplier": 0.6,
+      "regime": "SKIP_RANGING"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "PUT",
+      "option_type": "PE",
+      "strike": 25500,
+      "expiry": "2026-02-26",
+      "entry_ts": "2026-02-24T10:20:00",
+      "exit_ts": "2026-02-24T11:35:00",
+      "entry_price": 109.01,
+      "exit_price": 80.86,
+      "sl_price": 81.76,
+      "target_price": 179.87,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1829.94,
+      "charges": 58.43,
+      "net_pnl": -1888.38,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25488.5,
+      "delta_at_entry": -0.5,
+      "iv_at_entry": 0.1349,
+      "vix": 13.489999771118164,
+      "trade_date": "2026-02-25",
+      "entry_slippage_pct": 1.1,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25513.16,
+            "slow": 25557.13,
+            "gap_pct": 0.172
+          },
+          "detail": "EMA9=25513.2 < EMA21=25557.1 (gap=0.17%, need>=0.08%): OK \u2192 PUT"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "High=25525.3 near EMA21=25585.2 (+0.23%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.43,
+          "detail": "Body=0.43 (need>=0.38), directional=True, close=below EMA21=25557.1"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 30.3,
+          "detail": "RSI=30.3 (need 30.0-62.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25649.47,
+          "detail": "Close=25488.5 below VWAP=25649.5: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 13.49,
+          "detail": "VIX=13.5 (max=18.0)"
+        }
+      },
+      "risk_multiplier": 0.85,
+      "regime": "BEAR_PULLBACK"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "CALL",
+      "option_type": "CE",
+      "strike": 25550,
+      "expiry": "2026-03-05",
+      "entry_ts": "2026-02-26T10:05:00",
+      "exit_ts": "2026-02-26T11:40:00",
+      "entry_price": 224.63,
+      "exit_price": 167.63,
+      "sl_price": 168.47,
+      "target_price": 370.64,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -3704.97,
+      "charges": 70.42,
+      "net_pnl": -3775.39,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25563.3,
+      "delta_at_entry": 0.5414,
+      "iv_at_entry": 0.137,
+      "vix": 13.699999809265137,
+      "trade_date": "2026-02-27",
+      "entry_slippage_pct": 0.5,
+      "otm_offset": 0,
+      "strategy": "VWAP_RECLAIM",
+      "filter_log": {
+        "vwap_cross": {
+          "passed": true,
+          "direction": "CALL",
+          "detail": "CALL: price 25563.3 crossed above VWAP 25560.6"
+        },
+        "rejection_magnitude": {
+          "passed": true,
+          "value": 16.8,
+          "detail": "Rejection 16.8pt (need>=15.0pt)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.87,
+          "detail": "Body ratio 0.87 (need>=0.40), directional=True"
+        },
+        "supertrend": {
+          "passed": true,
+          "value": "UP",
+          "detail": "Supertrend=UP, need UP"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 61.4,
+          "detail": "RSI=61.4 (need 40.0-65.0)"
+        },
+        "volume_surge": {
+          "passed": true,
+          "value": null,
+          "detail": "Volume data unavailable \u2014 filter skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 13.7,
+          "detail": "VIX=13.7 (max=18.0)"
+        },
+        "hold_confirmation": {
+          "passed": true,
+          "detail": "Hold check passed \u2014 prev candle must sustain VWAP position"
+        }
+      },
+      "risk_multiplier": 0.85,
+      "regime": "SKIP_RANGING"
+    },
+    {
+      "status": "COMPLETED",
+      "direction": "PUT",
+      "option_type": "PE",
+      "strike": 25300,
+      "expiry": "2026-03-05",
+      "entry_ts": "2026-02-27T10:40:00",
+      "exit_ts": "2026-02-27T12:00:00",
+      "entry_price": 91.41,
+      "exit_price": 67.53,
+      "sl_price": 68.56,
+      "target_price": 150.83,
+      "exit_reason": "SL_HIT",
+      "gross_pnl": -1552.28,
+      "charges": 56.59,
+      "net_pnl": -1608.88,
+      "qty": 65,
+      "lots": 1,
+      "spot_at_entry": 25315.25,
+      "delta_at_entry": -0.4657,
+      "iv_at_entry": 0.1786,
+      "vix": 17.860000610351562,
+      "trade_date": "2026-03-05",
+      "entry_slippage_pct": 1.5,
+      "otm_offset": 0,
+      "strategy": "EMA_PULLBACK",
+      "filter_log": {
+        "ema_trend": {
+          "passed": true,
+          "value": {
+            "fast": 25328.65,
+            "slow": 25359.03,
+            "gap_pct": 0.12
+          },
+          "detail": "EMA9=25328.6 < EMA21=25359.0 (gap=0.12%, need>=0.08%): OK \u2192 PUT"
+        },
+        "ema_pullback": {
+          "passed": true,
+          "detail": "High=25319.8 near EMA21=25374.7 (+0.22%)"
+        },
+        "candle_body": {
+          "passed": true,
+          "value": 0.85,
+          "detail": "Body=0.85 (need>=0.38), directional=True, close=below EMA21=25359.0"
+        },
+        "rsi": {
+          "passed": true,
+          "value": 33.4,
+          "detail": "RSI=33.4 (need 30.0-62.0)"
+        },
+        "vwap": {
+          "passed": true,
+          "value": 25495.95,
+          "detail": "Close=25315.2 below VWAP=25496.0: OK"
+        },
+        "volume_surge": {
+          "passed": true,
+          "detail": "Volume data unavailable \u2014 skipped"
+        },
+        "vix": {
+          "passed": true,
+          "value": 17.86,
+          "detail": "VIX=17.9 (max=18.0)"
+        }
+      },
+      "risk_multiplier": 0.85,
+      "regime": "BEAR_PULLBACK"
+    }
+  ],
+  "metrics": {
+    "total_trades": 18,
+    "win_count": 2,
+    "loss_count": 16,
+    "win_rate_pct": 11.1,
+    "avg_win": 2508.91,
+    "avg_loss": -1857.95,
+    "profit_factor": 0.17,
+    "total_net_pnl": -24709.44,
+    "total_gross_pnl": -23608.81,
+    "total_charges": 1100.63,
+    "max_drawdown_abs": 24709.44,
+    "max_drawdown_pct": 24.71,
+    "sharpe_ratio": -12.969,
+    "calmar_ratio": -14.824,
+    "consecutive_losses_max": 8,
+    "avg_trade_duration_min": 70.3,
+    "exit_reasons": {
+      "SL_HIT": 17,
+      "FORCE_EXIT": 1
+    },
+    "equity_curve": [
+      100000.0,
+      97601.43,
+      95759.23,
+      94488.07,
+      90959.0,
+      89275.44,
+      90298.46,
+      90189.1,
+      90104.46,
+      88043.57,
+      86159.73,
+      84699.9,
+      82291.59,
+      80246.42,
+      78568.4,
+      82563.21,
+      80674.83,
+      76899.44,
+      75290.56
+    ],
+    "final_capital": 75290.56,
+    "return_pct": -24.71,
+    "monthly_breakdown": [
+      {
+        "month": "2026-01",
+        "trades": 4,
+        "net_pnl": -9041.0,
+        "wins": 0,
+        "win_rate": 0.0
+      },
+      {
+        "month": "2026-02",
+        "trades": 13,
+        "net_pnl": -14059.56,
+        "wins": 2,
+        "win_rate": 15.4
+      },
+      {
+        "month": "2026-03",
+        "trades": 1,
+        "net_pnl": -1608.88,
+        "wins": 0,
+        "win_rate": 0.0
+      }
+    ],
+    "trading_days": 17
+  },
+  "config": {
+    "capital": 100000.0,
+    "lot_size": 65,
+    "lots": 1,
+    "orb_start": "09:15",
+    "orb_end": "09:30",
+    "entry_window_close": "10:30",
+    "min_orb_range_points": 20.0,
+    "max_orb_range_points": 200.0,
+    "breakout_buffer_pct": 0.0003,
+    "min_breakout_body_ratio": 0.4,
+    "min_volume_surge_ratio": 1.0,
+    "relaxed_orb_max_range_points": 320.0,
+    "enable_vwap_reclaim": true,
+    "reclaim_window_start": "10:00",
+    "reclaim_window_end": "13:30",
+    "reclaim_min_rejection_points": 15.0,
+    "enable_ema_pullback": true,
+    "ema_pullback_window_start": "09:30",
+    "ema_pullback_window_end": "13:00",
+    "ema_pullback_proximity_pct": 0.006,
+    "ema_pullback_lookback_candles": 4,
+    "enable_momentum_breakout": true,
+    "momentum_breakout_window_start": "09:30",
+    "momentum_breakout_window_end": "12:00",
+    "momentum_breakout_lookback": 20,
+    "momentum_breakout_min_body_ratio": 0.5,
+    "momentum_breakout_rsi_bull_min": 55.0,
+    "momentum_breakout_rsi_bull_max": 78.0,
+    "momentum_breakout_rsi_bear_min": 22.0,
+    "momentum_breakout_rsi_bear_max": 45.0,
+    "momentum_breakout_min_volume_surge": 1.3,
+    "ema_fast": 9,
+    "ema_slow": 21,
+    "rsi_period": 14,
+    "atr_period": 14,
+    "require_vwap_confirmation": true,
+    "vwap_buffer_points": 5.0,
+    "rsi_bull_min": 45.0,
+    "rsi_bear_max": 55.0,
+    "rsi_overbought_skip": 78.0,
+    "rsi_oversold_skip": 22.0,
+    "vix_max": 18.0,
+    "atr_sl_multiplier": 2.0,
+    "atr_sl_min_pct": 0.25,
+    "atr_sl_max_pct": 0.12,
+    "rr_min": 2.5,
+    "trail_trigger_pct": 0.3,
+    "trail_lock_step_pct": 0.15,
+    "break_even_trigger_pct": 0.2,
+    "thursday_max_loss_pct": 0.15,
+    "min_quality_score": 3,
+    "enable_quality_filter": true,
+    "enable_choppy_filter": true,
+    "enable_htf_filter": true,
+    "enable_overextended_filter": true,
+    "max_late_move_pts": 120.0,
+    "enable_dynamic_blocklist": true,
+    "enable_reentry": true,
+    "reentry_window_min": 30,
+    "force_exit_time": "15:15",
+    "max_trades_per_day": 2,
+    "max_consecutive_losses": 5,
+    "max_daily_loss_pct": 0.04,
+    "slippage_pct": 0.005,
+    "strike_step": 50,
+    "enable_regime_classifier": true,
+    "regime_vix_skip_threshold": 22.0,
+    "regime_gap_skip_pct": 0.012,
+    "regime_strong_gap_pct": 0.003,
+    "regime_strong_5d_ret_pct": 0.01,
+    "regime_breakout_prev_range_max": 120.0,
+    "regime_pullback_5d_ret_pct": 0.008,
+    "regime_pullback_flat_open_pct": 0.002,
+    "regime_trend_conflict_after": "10:30",
+    "stop_after_2r_profit": true
+  },
+  "start_date": "2026-01-27",
+  "end_date": "2026-03-20",
+  "regime_distribution": {
+    "SKIP_RANGING": 14,
+    "SKIP_VOLATILE": 7,
+    "BULL_PULLBACK": 3,
+    "STRONG_BULL": 1,
+    "BULL_BREAKOUT": 2,
+    "BEAR_PULLBACK": 9,
+    "STRONG_BEAR": 1
+  }
+}
