@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Activity, BarChart2, FlaskConical, Settings, AlertTriangle, WifiOff, Clock, ScrollText, Play, BookOpen } from 'lucide-react'
+import { Activity, BarChart2, FlaskConical, Settings, AlertTriangle, WifiOff, Clock, ScrollText, Play, BookOpen, Radar } from 'lucide-react'
 import { useTradingStore } from '../../stores/tradingStore'
 import axios from 'axios'
 import clsx from 'clsx'
 
-type Page = 'dashboard' | 'trades' | 'backtest' | 'logs' | 'replay' | 'journal' | 'settings'
+type Page = 'dashboard' | 'trades' | 'backtest' | 'watch' | 'logs' | 'replay' | 'journal' | 'settings'
 const NAV: { id: Page; label: string; icon: typeof Activity }[] = [
   { id: 'dashboard', label: 'Live',      icon: Activity },
   { id: 'trades',    label: 'Trades',    icon: BarChart2 },
   { id: 'backtest',  label: 'Backtest',  icon: FlaskConical },
+  { id: 'watch',     label: 'Watch',     icon: Radar },
   { id: 'logs',      label: 'Logs',      icon: ScrollText },
   { id: 'replay',    label: 'Replay',    icon: Play },
   { id: 'journal',   label: 'Journal',   icon: BookOpen },

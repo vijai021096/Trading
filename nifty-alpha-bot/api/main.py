@@ -349,13 +349,24 @@ async def heartbeat_loop():
             elif today_pnl <= -(settings.capital * settings.max_daily_loss_pct):
                 thinking = f"Daily loss limit hit (₹{today_pnl:,.0f}) — halted"
             else:
-                strategies_on = []
-                if strat_data.get("orb_enabled"):
-                    strategies_on.append("ORB")
-                if strat_data.get("vwap_enabled"):
-                    strategies_on.append("VWAP")
-                strat_str = "+".join(strategies_on) if strategies_on else "none"
-                thinking = f"Scanning for entry — {strat_str} active, {len(today_trades)}/{settings.max_trades_per_day} trades used"
+                if settings.trading_engine.strip().lower() == "daily_adaptive":
+                    thinking = (
+                        f"Daily adaptive — entry window {settings.daily_adaptive_window_start}–"
+                        f"{settings.daily_adaptive_window_end} IST | "
+                        f"{len(today_trades)}/{settings.max_trades_per_day} trades | "
+                        f"filter={settings.daily_strategy_filter}"
+                    )
+                else:
+                    strategies_on = []
+                    if strat_data.get("orb_enabled"):
+                        strategies_on.append("ORB")
+                    if strat_data.get("vwap_enabled"):
+                        strategies_on.append("VWAP")
+                    strat_str = "+".join(strategies_on) if strategies_on else "none"
+                    thinking = (
+                        f"Scanning for entry — {strat_str} active, "
+                        f"{len(today_trades)}/{settings.max_trades_per_day} trades used"
+                    )
 
             # Market intelligence (trend + regime from bot events)
             mkt_state = get_latest_market_state()
@@ -387,6 +398,8 @@ async def heartbeat_loop():
                 "halt_active": halt_active,
                 "strategies": strat_data,
                 "paper_mode": settings.paper_mode,
+                "trading_engine": settings.trading_engine,
+                "daily_strategy_filter": settings.daily_strategy_filter,
                 "consecutive_losses": risk_data.get("consecutive_losses", 0),
                 "risk_per_trade_pct": settings.risk_per_trade_pct,
                 "max_daily_loss_pct": settings.max_daily_loss_pct,
@@ -562,8 +575,97 @@ def status():
         "position": pos,
         "daily_pnl": pnl,
         "timestamp": datetime.now().isoformat(),
+        "trading_engine": settings.trading_engine,
+        "daily_strategy_filter": settings.daily_strategy_filter,
         **_kite_connection_status(),
     }
+
+
+@app.get("/api/daily-watch")
+def daily_watch():
+    """
+    Live daily-adaptive evaluation (parity with daily backtest): regime, planned legs,
+    breakout watch levels. Uses Kite daily history + live VIX when token present; else yfinance cache.
+    """
+    import pandas as pd
+
+    token = (os.environ.get("KITE_ACCESS_TOKEN") or "").strip()
+    if not token:
+        try:
+            from kite_broker.token_manager import load_cached_token
+            token = load_cached_token() or ""
+        except Exception:
+            token = ""
+
+    vix = 14.0
+    df = None
+    if token and settings.kite_api_key:
+        try:
+            from kite_broker.client import KiteClient
+            from datetime import timedelta
+
+            c = KiteClient.from_token(settings.kite_api_key, token)
+            vix_q = c.get_quote("INDIA VIX", "NSE")
+            if vix_q and vix_q > 0:
+                vix = float(vix_q)
+            tid = c.get_nifty_token()
+            if tid:
+                to_dt = datetime.now()
+                from_dt = to_dt - timedelta(days=520)
+                raw = c.get_candles(tid, from_dt, to_dt, "day")
+                if raw:
+                    df = pd.DataFrame(raw)
+        except Exception:
+            pass
+
+    if df is None or len(df) < 60:
+        try:
+            from backtest.data_downloader import download_nifty_daily
+
+            df = download_nifty_daily(months=24, force_refresh=False)
+        except Exception as e:
+            return {"ok": False, "error": f"no_daily_data: {e}"}
+
+    cap = float(settings.capital)
+    peak = float(settings.capital)
+    cons = 0
+    risk_file = _STATE_DIR / "kite_bot_risk_state.json"
+    if risk_file.exists():
+        try:
+            rd = json.loads(risk_file.read_text())
+            cap = float(rd.get("current_capital", cap))
+            peak = float(rd.get("peak_capital", peak))
+            cons = int(rd.get("consecutive_losses", 0))
+        except Exception:
+            pass
+
+    try:
+        from backtest.daily_backtest_engine import evaluate_live_daily_adaptive
+        from bot.daily_adaptive_support import daily_backtest_config_from_settings, load_anchor_ym
+
+        dcfg = daily_backtest_config_from_settings(settings)
+        anchor = load_anchor_ym()
+        out = evaluate_live_daily_adaptive(
+            df,
+            vix,
+            dcfg,
+            strategy_filter=settings.daily_strategy_filter,
+            drop_incomplete_today=True,
+            anchor_ym=anchor,
+            capital=cap,
+            peak_equity=peak,
+            consecutive_losses=cons,
+        )
+        out["trading_engine"] = settings.trading_engine
+        out["daily_strategy_filter"] = settings.daily_strategy_filter
+        out["anchor_ym"] = list(anchor) if anchor else None
+        out["window"] = {
+            "start": settings.daily_adaptive_window_start,
+            "end": settings.daily_adaptive_window_end,
+        }
+        return out
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 @app.get("/api/trades")
@@ -696,6 +798,12 @@ def get_config():
             "use_limit_orders": settings.use_limit_orders,
             "use_slm_exit": settings.use_slm_exit,
             "limit_price_buffer_pct": settings.limit_price_buffer_pct,
+            "trading_engine": settings.trading_engine,
+            "daily_strategy_filter": settings.daily_strategy_filter,
+            "nifty_option_lot_size": settings.nifty_option_lot_size,
+            "daily_base_lots": settings.daily_base_lots,
+            "daily_adaptive_window_start": settings.daily_adaptive_window_start,
+            "daily_adaptive_window_end": settings.daily_adaptive_window_end,
             "sl_target_by_strategy": {
                 k: {"sl_pct": v[0], "target_pct": v[1]} for k, v in SL_TARGET_BY_STRATEGY.items()
             },
@@ -917,7 +1025,6 @@ def _run_backtest_sync(months: int, capital: float, strategy: str = "BOTH",
 
     vix_df = download_india_vix(months=max(diff_months, 24))
 
-    # Auto-select: use daily candles for > 2 months, 5m for recent data
     use_daily = diff_months > 2
 
     if use_daily:

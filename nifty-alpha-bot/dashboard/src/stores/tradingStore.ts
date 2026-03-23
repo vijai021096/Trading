@@ -109,6 +109,8 @@ export interface BotStatus {
   max_drawdown_pct: number
   halt_active: boolean
   paper_mode: boolean
+  trading_engine?: string
+  daily_strategy_filter?: string
   consecutive_losses: number
   risk_per_trade_pct: number
   max_daily_loss_pct: number
@@ -144,6 +146,12 @@ export interface StrategyConfig {
   sl_target_by_strategy: Record<string, { sl_pct: number; target_pct: number }>
   strategy_priority_by_trend: Record<string, string[]>
   backtest_stats: Record<string, { win_rate: number; profit_factor: number }>
+  trading_engine?: string
+  daily_strategy_filter?: string
+  nifty_option_lot_size?: number
+  daily_base_lots?: number
+  daily_adaptive_window_start?: string
+  daily_adaptive_window_end?: string
 }
 
 interface TradingStore {

@@ -7,10 +7,11 @@ import { TradeHistory } from './pages/TradeHistory'
 import { BacktestPage } from './pages/BacktestPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { LogsPage } from './pages/LogsPage'
+import { WatchPage } from './pages/WatchPage'
 import { TradeReplayPage } from './pages/TradeReplayPage'
 import { JournalPage } from './pages/JournalPage'
 
-type Page = 'dashboard' | 'trades' | 'backtest' | 'logs' | 'replay' | 'journal' | 'settings'
+type Page = 'dashboard' | 'trades' | 'backtest' | 'watch' | 'logs' | 'replay' | 'journal' | 'settings'
 
 export default function App() {
   useWebSocket()
@@ -42,6 +43,7 @@ export default function App() {
             {page === 'dashboard' && <Dashboard />}
             {page === 'trades'    && <TradeHistory />}
             {page === 'backtest'  && <BacktestPage />}
+            {page === 'watch'    && <WatchPage />}
             {page === 'logs'      && <LogsPage />}
             {page === 'replay'    && <TradeReplayPage />}
             {page === 'journal'   && <JournalPage />}

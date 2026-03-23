@@ -63,6 +63,27 @@ SL_TARGET_BY_STRATEGY: Dict[str, tuple] = {
     "MOMENTUM_BREAKOUT":  (0.22, 0.55),
 }
 
+# ── Tier System ────────────────────────────────────────────────────
+# All tiers use SAME wide SL/target (trail mechanism = edge).
+# Tiers only differ in POSITION SIZE (risk_pct).
+# Tier 1 = High Conviction: quality >= 4, strong trend -> big size
+# Tier 2 = Standard:        quality  = 3 -> normal size
+# Tier 3 = Exploratory:     quality  = 2 -> small size
+TIER_PARAMS: Dict[int, Dict[str, float]] = {
+    1: {"sl_pct": 0.28, "target_pct": 0.60, "trail_trigger": 0.30, "trail_lock": 0.15, "risk_pct": 0.025},
+    2: {"sl_pct": 0.28, "target_pct": 0.60, "trail_trigger": 0.30, "trail_lock": 0.15, "risk_pct": 0.018},
+    3: {"sl_pct": 0.28, "target_pct": 0.60, "trail_trigger": 0.30, "trail_lock": 0.15, "risk_pct": 0.010},
+}
+
+
+def assign_tier(quality_score: int, trend_state: "TrendState") -> int:
+    """Assign trade tier based on quality score and trend strength."""
+    if quality_score >= 4 and trend_state in (TrendState.STRONG_BULL, TrendState.STRONG_BEAR, TrendState.BULL, TrendState.BEAR):
+        return 1
+    if quality_score >= 3:
+        return 2
+    return 3
+
 
 @dataclass
 class TrendResult:

@@ -5,7 +5,7 @@ import axios from 'axios'
 import {
   Settings, Key, Shield, CheckCircle2, XCircle, AlertCircle, Copy, Eye, EyeOff,
   RefreshCw, Loader2, BookOpen, Terminal, Globe, Lock, Zap, Clock, BarChart3,
-  ChevronRight, Layers, SlidersHorizontal, Radio
+  ChevronRight, Layers, SlidersHorizontal,   Radio, Radar
 } from 'lucide-react'
 
 export function SettingsPage() {
@@ -185,6 +185,8 @@ export function SettingsPage() {
             </div>
           </motion.div>
 
+          <TradingEnginePanel />
+
           {/* Strategy Parameters — from API */}
           <StrategyParamsPanel />
 
@@ -232,6 +234,68 @@ export function SettingsPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+/* ── Trading engine (live from API / .env) ───────────────── */
+function TradingEnginePanel() {
+  const [cfg, setCfg] = useState<any>(null)
+  useEffect(() => { axios.get('/api/strategy/config').then(r => setCfg(r.data)).catch(() => {}) }, [])
+
+  if (!cfg) return null
+  const eng = String(cfg.trading_engine || 'intraday')
+  const isDaily = eng.toLowerCase() === 'daily_adaptive'
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+      className={clsx(
+        'glass-card rounded-2xl p-5 neon-border border-l-[3px]',
+        isDaily ? 'border-l-cyan' : 'border-l-amber',
+      )}>
+      <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-cyan/10 flex items-center justify-center">
+            <Radar size={13} className="text-cyan" />
+          </div>
+          <span className="text-[12px] font-bold text-text1">Trading engine</span>
+        </div>
+        <span className={clsx(
+          'text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-lg border',
+          isDaily ? 'bg-cyan/10 border-cyan/25 text-cyan' : 'bg-amber/10 border-amber/25 text-amber',
+        )}>
+          {eng.replace(/_/g, ' ')}
+        </span>
+      </div>
+      <p className="text-[11px] text-text3 leading-relaxed mb-4">
+        {isDaily ? (
+          <>
+            <span className="text-text2 font-semibold">Daily adaptive</span> matches the daily backtest stack (regime + 7 strategies + adaptive scan order).
+            Live entries use the last <strong>completed</strong> daily candle and today&apos;s VIX; size uses anchor month + DD tiers (see <code className="text-accent">Watch</code> tab).
+          </>
+        ) : (
+          <>
+            <span className="text-text2 font-semibold">Intraday</span> uses 5m ORB / VWAP / EMA / momentum with trend + daily regime filters.
+          </>
+        )}
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+        {[
+          { k: 'Strategy filter', v: cfg.daily_strategy_filter ?? '—', hint: 'DAILY_STRATEGY_FILTER' },
+          { k: 'Entry window', v: `${cfg.daily_adaptive_window_start || '—'} – ${cfg.daily_adaptive_window_end || '—'}`, hint: 'IST' },
+          { k: 'Nifty opt lot', v: String(cfg.nifty_option_lot_size ?? '—'), hint: 'units / lot' },
+          { k: 'Base lots', v: String(cfg.daily_base_lots ?? '—'), hint: 'DAILY_BASE_LOTS' },
+        ].map(({ k, v, hint }) => (
+          <div key={k} className="rounded-xl border border-line/15 bg-surface/35 p-3">
+            <div className="text-[9px] font-bold text-text3 uppercase">{k}</div>
+            <div className="text-[13px] font-mono font-bold text-text1 mt-0.5">{v}</div>
+            <div className="text-[9px] text-text3 mt-1 font-mono">{hint}</div>
+          </div>
+        ))}
+      </div>
+      <p className="text-[10px] text-text3 mt-3">
+        Set <code className="text-amber">TRADING_ENGINE=daily_adaptive</code> or <code className="text-amber">intraday</code> in <code>.env</code> and restart the bot + API.
+      </p>
+    </motion.div>
   )
 }
 
@@ -391,6 +455,7 @@ function SystemInfoPanel() {
 
   const items = cfg ? [
     ['Bot Version', 'v3.0.0'],
+    ['Trading engine', String(cfg.trading_engine || '—').replace(/_/g, ' ')],
     ['API', 'FastAPI + WebSocket'],
     ['Exchange', 'NSE / NFO'],
     ['Instrument', 'NIFTY Index Options'],

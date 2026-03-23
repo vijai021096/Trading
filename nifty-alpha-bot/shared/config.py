@@ -37,16 +37,24 @@ class Settings(BaseSettings):
     # ── Capital & Risk ────────────────────────────────────────────
     # At 25k with min 1 lot, actual risk per trade ~₹2,500-3,500.
     # Daily limit must allow at least 2 trades before stopping.
-    capital: float = 25_000.0
+    capital: float = 25000.0
     max_daily_loss_pct: float = 0.25           # 25% = ₹6,250 (allows 2 full SL hits)
-    max_daily_loss_hard: float = 7_000.0       # ₹7,000 absolute hard stop
-    max_trades_per_day: int = 3
+    max_daily_loss_hard: float = 2000.0       # ₹7,000 absolute hard stop
+    max_trades_per_day: int = 4
     max_open_positions: int = 1
     lot_size: int = 65
     live_max_lots: int = 1
     max_lots: int = 1
     thursday_max_lots: int = 1
     paper_mode: bool = False
+
+    # ── Engine: intraday (5m ORB/VWAP/…) vs daily_adaptive (same as daily backtest) ──
+    trading_engine: str = "daily_adaptive"
+    daily_strategy_filter: str = "BOTH"
+    nifty_option_lot_size: int = 65
+    daily_base_lots: int = 1
+    daily_adaptive_window_start: str = "09:16"
+    daily_adaptive_window_end: str = "10:30"
 
     # ── Per-Trade Risk Sizing ─────────────────────────────────────
     risk_per_trade_pct: float = 0.02           # 2% target (but min 1 lot floor applies)

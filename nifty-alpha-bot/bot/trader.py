@@ -18,6 +18,8 @@ from datetime import date, datetime, time as dtime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
+
 from kite_broker.client import KiteClient
 from kite_broker.token_manager import get_valid_token, schedule_daily_refresh
 from bot.risk_manager import RiskManager
@@ -30,9 +32,19 @@ from shared.momentum_breakout_engine import evaluate_momentum_breakout_signal
 from shared.regime_detector import detect_regime, RegimeResult, SL_TARGET_MAP, STRATEGY_PRIORITY
 from shared.trend_detector import (
     detect_trend, TrendResult, TrendState, STRATEGY_PRIORITY_BY_TREND,
-    SL_TARGET_BY_STRATEGY, compute_signal_confidence,
+    SL_TARGET_BY_STRATEGY, TIER_PARAMS, assign_tier, compute_signal_confidence,
 )
+from shared.quality_filter import compute_trade_quality
 from shared.black_scholes import charges_estimate
+from shared.regime_classifier import (
+    classify_regime_live, DailyRegime, RegimeClassifierConfig, regime_conflicts_with_trend,
+)
+from backtest.daily_backtest_engine import evaluate_live_daily_adaptive
+from bot.daily_adaptive_support import (
+    daily_backtest_config_from_settings,
+    load_anchor_ym,
+    save_anchor_ym,
+)
 
 try:
     from loguru import logger
@@ -77,16 +89,22 @@ class KiteORBTrader:
         self._last_candle_date: Optional[date] = None
         self._nifty_token: Optional[int] = None
         self._current_expiry: Optional[date] = None
-        self._orb_signal_used = False
-        self._reclaim_signal_used = False
-        self._ema_pullback_signal_used = False
-        self._momentum_signal_used = False
+        self._trades_today = 0
+        self._strategies_used: Dict[str, int] = {}
         self._heartbeat_count = 0
         self._current_regime: Optional[RegimeResult] = None
         self._current_trend: Optional[TrendResult] = None
+        self._daily_regime: Optional[DailyRegime] = None
         self._regime_logged_today = False
         self._trend_logged_today = False
+        self._daily_regime_classified = False
+        self._day_stopped_profit = False
         self._last_broker_sync: float = 0.0
+        self._orb_signal_used = False
+        self._momentum_signal_used = False
+        self._ema_pullback_signal_used = False
+        self._reclaim_signal_used = False
+        self._daily_adaptive_plan: Optional[Dict[str, Any]] = None
 
         # Restore SL-M order ID from persisted state (survives restarts)
         self._active_slm_order_id: Optional[str] = self.sm.position.slm_order_id or None
@@ -131,20 +149,82 @@ class KiteORBTrader:
 
         return self._candle_cache
 
+    def _refresh_daily_nifty_df(self) -> Optional[pd.DataFrame]:
+        if self._nifty_token is None:
+            self._nifty_token = self.client.get_nifty_token()
+            if self._nifty_token is None:
+                logger.warning("Could not get NIFTY token for daily bars")
+                return None
+        from datetime import timedelta
+
+        to_dt = datetime.now()
+        from_dt = to_dt - timedelta(days=520)
+        try:
+            candles = self.client.get_candles(self._nifty_token, from_dt, to_dt, "day")
+            if not candles:
+                return None
+            return pd.DataFrame(candles)
+        except Exception as e:
+            logger.warning(f"Daily NIFTY fetch failed: {e}")
+            return None
+
+    def _in_daily_adaptive_window(self, now: datetime) -> bool:
+        t = now.time()
+        return self._t(self.cfg.daily_adaptive_window_start) <= t <= self._t(
+            self.cfg.daily_adaptive_window_end
+        )
+
     def _roll_day(self, now: datetime) -> None:
         today = now.date()
         if self._last_candle_date != today:
-            self._orb_signal_used = False
-            self._reclaim_signal_used = False
-            self._ema_pullback_signal_used = False
-            self._momentum_signal_used = False
+            self._trades_today = 0
+            self._strategies_used = {}
             self._regime_logged_today = False
             self._trend_logged_today = False
+            self._daily_regime_classified = False
+            self._day_stopped_profit = False
             self._current_trend = None
             self._current_regime = None
+            self._daily_regime = None
             self._active_slm_order_id = None
+            self._daily_adaptive_plan = None
+            self._orb_signal_used = False
+            self._momentum_signal_used = False
+            self._ema_pullback_signal_used = False
+            self._reclaim_signal_used = False
             self._current_expiry = self.client.get_nearest_expiry("NIFTY")
             logger.info(f"Day rolled: {today} | Expiry: {self._current_expiry}")
+
+            # Classify daily regime once per day
+            vix = self._get_vix()
+            self._daily_regime = classify_regime_live(self.client, today, vix)
+            self._daily_regime_classified = True
+
+            if self.cfg.trading_engine.strip().lower() == "daily_adaptive" and load_anchor_ym() is None:
+                save_anchor_ym(today.year, today.month)
+
+            regime_msg = (
+                f"DAILY REGIME: {self._daily_regime.name}\n"
+                f"Direction: {self._daily_regime.allowed_direction or 'ANY'}\n"
+                f"Strategies: {', '.join(self._daily_regime.allowed_strategies)}\n"
+                f"OTM: {self._daily_regime.otm_offset} | Max trades: {self._daily_regime.execution.max_trades}\n"
+                f"Window: {self._daily_regime.execution.window_start}-{self._daily_regime.execution.window_end}\n"
+                f"Risk: {self._daily_regime.execution.risk_pct*100:.0f}%\n"
+                f"Detail: {self._daily_regime.detail}"
+            )
+            logger.info(regime_msg)
+            _log_event("DAILY_REGIME", {
+                "regime": self._daily_regime.name,
+                "direction": self._daily_regime.allowed_direction,
+                "strategies": self._daily_regime.allowed_strategies,
+                "otm_offset": self._daily_regime.otm_offset,
+                "should_trade": self._daily_regime.should_trade,
+                "max_trades": self._daily_regime.execution.max_trades,
+                "risk_pct": self._daily_regime.execution.risk_pct,
+                "scores": self._daily_regime.scores,
+                "detail": self._daily_regime.detail,
+            })
+            self._notify(f"📊 {regime_msg}")
 
     def _get_vix(self) -> Optional[float]:
         try:
@@ -379,6 +459,16 @@ class KiteORBTrader:
         self.risk.record_trade(net)
         _log_event("TRADE_CLOSED", trade_record)
 
+        # Stop trading for the day if profit >= 2R
+        if net > 0 and pos.entry_price > 0:
+            sl_pct_used = (pos.entry_price - pos.current_sl) / pos.entry_price if pos.current_sl > 0 else 0.28
+            one_r = pos.entry_price * sl_pct_used * pos.qty
+            daily_pnl = self.risk.status().get("daily_pnl", 0)
+            if daily_pnl >= one_r * 2:
+                self._day_stopped_profit = True
+                logger.info(f"DAY STOPPED: Profit ₹{daily_pnl:.0f} >= 2R (₹{one_r*2:.0f})")
+                self._notify(f"🎯 DAY STOPPED — Profit ₹{daily_pnl:.0f} >= 2R")
+
         sign = "+" if net >= 0 else ""
         logger.info(
             f"TRADE CLOSED | {pos.direction} {pos.symbol} | "
@@ -396,6 +486,116 @@ class KiteORBTrader:
 
     # ── Entry logic ───────────────────────────────────────────────
 
+    def _scan_entry_daily_adaptive(self, now: datetime, vix: Optional[float]) -> None:
+        """Same rules as daily backtest: last completed daily bar + live VIX, multi-leg day plan."""
+        can_trade, reason = self.risk.can_trade()
+        if not can_trade:
+            if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
+                logger.info(f"RISK BLOCKED (daily_adaptive): {reason}")
+                _log_event(
+                    "RISK_BLOCKED",
+                    {"reason": reason, "engine": "daily_adaptive", **self.risk.status()},
+                )
+            return
+
+        if not self.sm.is_idle:
+            return
+
+        if self._day_stopped_profit:
+            return
+
+        if not self._in_daily_adaptive_window(now):
+            return
+
+        # Intraday "SKIP" day classifier does not block daily_adaptive (different model).
+        effective_vix = float(vix if vix is not None else self._get_vix() or 14.0)
+
+        if self._daily_adaptive_plan is None:
+            df = self._refresh_daily_nifty_df()
+            if df is None or df.empty:
+                logger.warning("DAILY_ADAPTIVE: could not load daily NIFTY dataframe")
+                return
+            dcfg = daily_backtest_config_from_settings(self.cfg)
+            anchor = load_anchor_ym()
+            st = self.risk.status()
+            ev = evaluate_live_daily_adaptive(
+                df,
+                effective_vix,
+                dcfg,
+                strategy_filter=self.cfg.daily_strategy_filter,
+                drop_incomplete_today=True,
+                anchor_ym=anchor,
+                capital=float(st.get("current_capital", self.cfg.capital)),
+                peak_equity=float(st.get("peak_capital", self.cfg.capital)),
+                consecutive_losses=int(st.get("consecutive_losses", 0)),
+            )
+            if not ev.get("ok"):
+                if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
+                    logger.warning(
+                        f"DAILY_ADAPTIVE eval not ready: {ev.get('error')} "
+                        f"(will retry next poll)"
+                    )
+                return
+
+            self._daily_adaptive_plan = ev
+            _log_event(
+                "DAILY_ADAPTIVE_SCAN",
+                {**ev, "anchor_ym": list(anchor) if anchor else None},
+            )
+            logger.info(
+                f"DAILY_ADAPTIVE_SCAN ok={ev.get('ok')} regime={ev.get('regime')} "
+                f"legs={len(ev.get('executable_legs') or [])} cap={ev.get('day_trade_cap')} "
+                f"vix={effective_vix:.2f}"
+            )
+
+        plan = self._daily_adaptive_plan or {}
+        if not plan.get("ok"):
+            return
+
+        legs: List[Dict[str, Any]] = plan.get("executable_legs") or []
+        day_cap = int(plan.get("day_trade_cap") or self.cfg.max_trades_per_day)
+        day_cap = min(day_cap, self.cfg.max_trades_per_day)
+        idx = int(self.risk.status().get("trades_today", 0))
+        if idx >= len(legs) or idx >= day_cap:
+            return
+
+        bw = plan.get("breakout_watch") or {}
+        stub_regime = RegimeResult(
+            regime="DAILY_ADAPTIVE",
+            adx_proxy=0.0,
+            atr_current=1.0,
+            atr_avg=1.0,
+            atr_ratio=1.0,
+            vix=effective_vix,
+            rsi=float(bw.get("rsi14") or 50),
+            ema_fast=float(bw.get("ema8") or 0),
+            ema_slow=float(bw.get("ema21") or 0),
+            strategy_priority=[],
+            sl_target={},
+            detail=f"{plan.get('regime')} | signal_bar={plan.get('signal_bar_date')}",
+        )
+
+        spot = self.client.get_quote("NIFTY 50", "NSE")
+        if spot <= 0:
+            logger.warning("DAILY_ADAPTIVE: NIFTY spot unavailable")
+            return
+        candle = {"close": spot, "open": spot, "high": spot, "low": spot, "ts": now}
+
+        leg = legs[idx]
+        self._enter_trade(
+            signal=leg["direction"],
+            strategy=leg["strategy"],
+            candle=candle,
+            atr=None,
+            filter_log=dict(leg.get("filter_log") or {}),
+            vix=effective_vix,
+            regime=stub_regime,
+            sl_pct_override=float(leg["sl_pct"]),
+            target_pct_override=float(leg["target_pct"]),
+            risk_multiplier=1.0,
+            fixed_option_lots=int(leg["lots"]),
+        )
+
     def _scan_entry(self, now: datetime, candles: List[Dict], vix: Optional[float]) -> None:
         can_trade, reason = self.risk.can_trade()
         if not can_trade:
@@ -407,8 +607,14 @@ class KiteORBTrader:
         if not self.sm.is_idle:
             return
 
+        # Daily regime gate — SKIP days mean zero trades
+        if self._daily_regime and not self._daily_regime.should_trade:
+            return
+
+        if self._day_stopped_profit:
+            return
+
         strat_state = self.risk.get_strategy_state()
-        orb_enabled = strat_state.get("orb_enabled", True)
         vwap_enabled = strat_state.get("vwap_enabled", True)
 
         current_time = now.time()
@@ -417,6 +623,13 @@ class KiteORBTrader:
         entry_close = self._t(self.cfg.entry_window_close)
         reclaim_start = self._t(self.cfg.reclaim_window_start)
         reclaim_end = self._t(self.cfg.reclaim_window_end)
+
+        # Regime-driven time window
+        if self._daily_regime:
+            regime_window_start = self._t(self._daily_regime.execution.window_start)
+            regime_window_end = self._t(self._daily_regime.execution.window_end)
+            if current_time < regime_window_start or current_time > regime_window_end:
+                return
 
         if not candles:
             return
@@ -427,20 +640,35 @@ class KiteORBTrader:
         self._current_regime = regime
         trend = self._detect_trend(candles, effective_vix)
 
-        # Strategy list comes from TREND state (direction-aware)
-        # Regime acts as a risk overlay, not strategy selector
+        # Strategy list: start from TREND priority, intersect with daily regime whitelist
         strategy_list = trend.strategy_priority
         risk_multiplier = trend.risk_multiplier
 
-        # Regime overrides:
-        # VOLATILE → remove MOMENTUM_BREAKOUT (too noisy), cap risk at 0.60
+        if self._daily_regime:
+            regime_strategies = set(self._daily_regime.allowed_strategies)
+            strategy_list = [s for s in strategy_list if s in regime_strategies]
+            regime_direction = self._daily_regime.allowed_direction
+        else:
+            regime_direction = None
+
+        # Intraday regime overrides (existing logic)
         if regime.regime == "VOLATILE":
             strategy_list = [s for s in strategy_list if s != "MOMENTUM_BREAKOUT"]
             risk_multiplier = min(risk_multiplier, 0.60)
 
-        # NEUTRAL trend → skip ORB/MOMENTUM (need directional conviction)
         if trend.state == TrendState.NEUTRAL:
             strategy_list = [s for s in strategy_list if s not in ("ORB", "MOMENTUM_BREAKOUT")]
+
+        # 10:30 trend-conflict check
+        conflict_time = self._t("10:30")
+        if (self._daily_regime
+                and current_time >= conflict_time
+                and regime_conflicts_with_trend(self._daily_regime, trend.direction)):
+            logger.info(
+                f"TREND CONFLICT: regime={self._daily_regime.name} ({self._daily_regime.allowed_direction}) "
+                f"vs trend={trend.direction} — reducing confidence"
+            )
+            risk_multiplier *= 0.5
 
         pb_window_start = self._t(self.cfg.ema_pullback_window_start)
         pb_window_end = self._t(self.cfg.ema_pullback_window_end)
@@ -544,7 +772,9 @@ class KiteORBTrader:
             _eval_strategy("MOMENTUM_BREAKOUT", mb_result, "MOMENTUM_SCAN")
 
         # ── EMA_PULLBACK ──
-        if "EMA_PULLBACK" in strategy_list and not self._ema_pullback_signal_used and pb_window_start <= current_time <= pb_window_end:
+        ema_dead_start = self._t("11:00")
+        ema_dead_end = self._t("12:00")
+        if "EMA_PULLBACK" in strategy_list and not self._ema_pullback_signal_used and pb_window_start <= current_time <= pb_window_end and not (ema_dead_start <= current_time < ema_dead_end):
             pb_result = evaluate_ema_pullback_signal(
                 candles, idx, vix,
                 ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
@@ -586,6 +816,18 @@ class KiteORBTrader:
         # ── Pick strongest candidate ──
         if not candidates:
             return
+
+        # Filter by regime direction
+        if regime_direction:
+            candidates = [c for c in candidates if c["signal"] == regime_direction]
+        if not candidates:
+            return
+
+        # Check regime max trades
+        if self._daily_regime:
+            trades_today = self.risk.status().get("trades_today", 0)
+            if trades_today >= self._daily_regime.execution.max_trades:
+                return
 
         candidates.sort(key=lambda c: c["confidence"], reverse=True)
         best = candidates[0]
@@ -631,13 +873,22 @@ class KiteORBTrader:
         sl_pct_override: float = 0.30,
         target_pct_override: float = 0.65,
         risk_multiplier: float = 1.0,
+        fixed_option_lots: Optional[int] = None,
     ) -> None:
         signal_time = time.time()
         spot = float(candle["close"])
         is_thursday = datetime.now().date().weekday() == 3
 
+        # OTM offset from daily regime (1-OTM on STRONG days for better R:R)
+        otm_offset = self._daily_regime.otm_offset if self._daily_regime else 0
+        target_strike_offset = otm_offset * self.cfg.strike_step
+        if signal == "CALL":
+            target_spot_for_strike = spot + target_strike_offset
+        else:
+            target_spot_for_strike = spot - target_strike_offset
+
         opt_info = self.client.select_atm_option(
-            spot=spot, direction=signal,
+            spot=target_spot_for_strike, direction=signal,
             strike_step=self.cfg.strike_step, expiry=self._current_expiry,
         )
         if not opt_info:
@@ -666,20 +917,40 @@ class KiteORBTrader:
         if is_thursday:
             sl_pct = min(sl_pct, self.cfg.thursday_max_loss_pct)
 
-        effective_risk_pct = self.cfg.risk_per_trade_pct * risk_multiplier
+        # Regime-driven risk: STRONG=3%, normal=2%, RANGING=1% (intraday sizing only)
+        base_risk_pct = self._daily_regime.execution.risk_pct if self._daily_regime else self.cfg.risk_per_trade_pct
+        effective_risk_pct = base_risk_pct * risk_multiplier
         if regime.regime == "VOLATILE":
-            effective_risk_pct = min(effective_risk_pct, self.cfg.risk_per_trade_pct * 0.50)
-        if effective_risk_pct != self.cfg.risk_per_trade_pct:
-            logger.info(
-                f"RISK SCALED: {self.cfg.risk_per_trade_pct*100:.1f}% × {risk_multiplier:.2f} "
-                f"= {effective_risk_pct*100:.1f}% | regime={regime.regime}"
-            )
+            effective_risk_pct = min(effective_risk_pct, base_risk_pct * 0.50)
 
-        size_info = self.risk.compute_position_size(
-            entry_price=opt_price, sl_pct=sl_pct, risk_pct_override=effective_risk_pct
-        )
-        lots = size_info["lots"]
-        qty = size_info["qty"]
+        if fixed_option_lots is not None:
+            lots = int(fixed_option_lots)
+            lot_unit = self.cfg.nifty_option_lot_size
+            qty = lots * lot_unit
+            risk_per_unit = opt_price * sl_pct
+            actual_risk = round(risk_per_unit * qty, 2)
+            size_info = {
+                "lots": lots,
+                "qty": qty,
+                "risk_amount": actual_risk,
+                "actual_risk": actual_risk,
+            }
+            logger.info(
+                f"DAILY_ADAPTIVE SIZING: lots={lots} × {lot_unit} = qty {qty} | "
+                f"est_risk≈₹{actual_risk:,.0f} (sl {sl_pct*100:.1f}%)"
+            )
+        else:
+            if effective_risk_pct != base_risk_pct:
+                logger.info(
+                    f"RISK SCALED: {base_risk_pct*100:.1f}% × {risk_multiplier:.2f} "
+                    f"= {effective_risk_pct*100:.1f}% | regime={regime.regime} "
+                    f"daily_regime={self._daily_regime.name if self._daily_regime else '?'}"
+                )
+            size_info = self.risk.compute_position_size(
+                entry_price=opt_price, sl_pct=sl_pct, risk_pct_override=effective_risk_pct
+            )
+            lots = size_info["lots"]
+            qty = size_info["qty"]
 
         sl_price = round(opt_price * (1 - sl_pct), 1)
         target_price = round(opt_price * (1 + target_pct_override), 1)
@@ -779,6 +1050,7 @@ class KiteORBTrader:
             save_position(self.sm.position)
 
         _log_event("ENTRY", {
+            "engine": "daily_adaptive" if fixed_option_lots is not None else "intraday",
             "strategy": strategy, "regime": regime.regime, "signal": signal,
             "confidence": conf_score,
             "trend": trend_info, "conviction": self._current_trend.conviction if self._current_trend else 0,
@@ -795,8 +1067,10 @@ class KiteORBTrader:
             "order_type": "LIMIT" if self.cfg.use_limit_orders else "MARKET",
         })
 
+        daily_regime_name = self._daily_regime.name if self._daily_regime else "?"
+        otm_tag = f" | OTM={otm_offset}" if otm_offset > 0 else ""
         self._notify(
-            f"🚀 ENTRY: {strategy} {signal} [{regime.regime}]\n"
+            f"🚀 ENTRY: {strategy} {signal} [{daily_regime_name}]{otm_tag}\n"
             f"{symbol}\n"
             f"Fill: ₹{fill_price:.0f} (slip {((fill_price - opt_price) / opt_price * 100):+.1f}%)\n"
             f"SL: ₹{sl_price:.0f} ({sl_pct*100:.0f}%) | TGT: ₹{target_price:.0f}\n"
@@ -824,7 +1098,12 @@ class KiteORBTrader:
         mode = "PAPER" if self.cfg.paper_mode else "LIVE"
         logger.info(f"{'='*60}")
         logger.info(f" KITE REGIME-AWARE TRADER [{mode}]")
-        logger.info(f" Capital: ₹{self.cfg.capital:,.0f} | Lot size: {self.cfg.lot_size}")
+        logger.info(
+            f" Engine: {self.cfg.trading_engine} | "
+            f"Capital: ₹{self.cfg.capital:,.0f} | "
+            f"Opt lot unit: {self.cfg.nifty_option_lot_size} | "
+            f"Intraday lot_size: {self.cfg.lot_size}"
+        )
         logger.info(f" Risk/trade: {self.cfg.risk_per_trade_pct*100:.1f}% | Max lots: {self.cfg.max_lots}")
         logger.info(f" Daily loss limit: {self.cfg.max_daily_loss_pct*100:.0f}% (2R) | Hard: ₹{self.cfg.max_daily_loss_hard:,.0f}")
         logger.info(f" Drawdown halt: {self.cfg.max_drawdown_pct:.0f}%")
@@ -936,7 +1215,10 @@ class KiteORBTrader:
                 if self.sm.is_active:
                     self._manage_active_position(now, candles)
                 elif self.sm.is_idle:
-                    self._scan_entry(now, candles, vix)
+                    if self.cfg.trading_engine.strip().lower() == "daily_adaptive":
+                        self._scan_entry_daily_adaptive(now, vix)
+                    else:
+                        self._scan_entry(now, candles, vix)
 
                 api_failures = 0
 

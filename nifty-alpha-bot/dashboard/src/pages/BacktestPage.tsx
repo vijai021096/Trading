@@ -18,12 +18,13 @@ interface BacktestResult {
 }
 
 const STRATEGY_COLOR_HEX: Record<string, string> = {
-  ORB: '#f59e0b',
-  VWAP_RECLAIM: '#06b6d4',
-  EMA_PULLBACK: '#6366f1',
-  MEAN_REVERSION: '#10b981',
-  RELAXED_ORB: '#8b5cf6',
-  RANGE_FADE: '#ec4899',
+  TREND_CONTINUATION: '#6366f1',
+  BREAKOUT_MOMENTUM: '#8b5cf6',
+  REVERSAL_SNAP: '#10b981',
+  GAP_FADE: '#f59e0b',
+  RANGE_BOUNCE: '#ec4899',
+  INSIDE_BAR_BREAK: '#06b6d4',
+  VWAP_CROSS: '#14b8a6',
 }
 
 function strategyColor(strategy: string): string {
@@ -85,11 +86,10 @@ export function BacktestPage() {
 
   const regimeDist = useMemo(() => {
     const trades = result?.trades ?? []
-    const counts = { TRENDING: 0, RANGING: 0, VOLATILE: 0, OTHER: 0 }
+    const counts: Record<string, number> = {}
     for (const t of trades) {
-      const r = String(t.regime ?? '').toUpperCase()
-      if (r === 'TRENDING' || r === 'RANGING' || r === 'VOLATILE') counts[r] += 1
-      else counts.OTHER += 1
+      const r = String(t.regime ?? 'OTHER')
+      counts[r] = (counts[r] ?? 0) + 1
     }
     return counts
   }, [result?.trades])
@@ -106,7 +106,7 @@ export function BacktestPage() {
           </div>
           <div>
             <h1 className="text-xl font-black text-text1 tracking-tight">Backtester</h1>
-            <p className="text-sm text-text3">Walk-forward simulation with historical Nifty & VIX data</p>
+            <p className="text-sm text-text3">Adaptive Alpha — 6-regime classifier, 7 strategies, walk-forward simulation</p>
           </div>
         </div>
         <div className="bg-amber/8 border border-amber/20 rounded-xl px-4 py-2 max-w-sm">
@@ -124,8 +124,9 @@ export function BacktestPage() {
           <div>
             <div className="text-[11px] font-bold tracking-[0.12em] uppercase text-text2">Execution Realism</div>
             <p className="text-[12px] text-text3 mt-1 leading-relaxed">
-              All results include: IV smile adjustment, IV crush modeling, dynamic slippage (VIX & DTE based),
-              intraday SL/target via high/low simulation, realistic brokerage charges
+              6-regime market classifier adapts SL/target per market state. 7 strategies: Trend Continuation, Breakout Momentum,
+              Reversal Snap, Gap Fade, Range Bounce, Inside Bar Break, VWAP Cross. First calendar month uses 1-lot / ~₹25k-style sizing only;
+              peak drawdown guard scales down size (target max DD ~15%). IV smile + crush, dynamic slippage.
             </p>
           </div>
         </div>
@@ -143,10 +144,11 @@ export function BacktestPage() {
             <label className="block text-[10px] font-bold text-text3 uppercase tracking-wider mb-1.5">Strategy</label>
             <select value={strategy} onChange={e => setStrategy(e.target.value)}
               className="w-full bg-surface border border-line/30 rounded-xl px-3 py-2.5 text-[12px] text-text1 focus:border-accent/40 focus:outline-none transition-colors font-semibold appearance-none cursor-pointer">
-              <option value="BOTH">ALL — Multi-Strategy (Auto-Select)</option>
-              <option value="ORB">ORB — Opening Range Breakout</option>
-              <option value="VWAP">VWAP — Volume Weighted Avg Price</option>
-              <option value="MR">MR — Mean-Reversion + Range Fade</option>
+              <option value="BOTH">ALL — Adaptive Alpha (7 Strategies)</option>
+              <option value="TREND">Trend — Continuation + Breakout</option>
+              <option value="REVERSAL">Reversal — Snap + Range Bounce</option>
+              <option value="GAP">Gap Fade — Opening Gap Fill</option>
+              <option value="VWAP">VWAP Cross — Institutional Flow</option>
             </select>
           </div>
           <div>
@@ -186,8 +188,8 @@ export function BacktestPage() {
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="glass-card rounded-2xl p-10 text-center">
             <Loader2 size={28} className="animate-spin text-accent mx-auto mb-3" />
-            <p className="text-text1 font-semibold">Running {strategy} backtest...</p>
-            <p className="text-text3 text-[11px] mt-1">Fetching Nifty spot & VIX data, simulating trades</p>
+            <p className="text-text1 font-semibold">Running Adaptive Alpha backtest...</p>
+            <p className="text-text3 text-[11px] mt-1">6-regime classification → 7-strategy scan → options simulation with realistic pricing</p>
             <div className="mt-4 h-1 rounded-full bg-surface max-w-xs mx-auto overflow-hidden">
               <motion.div className="h-full bg-accent rounded-full" animate={{ x: ['-100%', '100%'] }}
                 transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }} style={{ width: '40%' }} />
@@ -365,21 +367,23 @@ export function BacktestPage() {
               </div>
               {(() => {
                 const total = result.trades!.length
-                const rows = [
-                  { key: 'TRENDING', label: 'Trending', color: '#6366f1' },
-                  { key: 'RANGING', label: 'Ranging', color: '#06b6d4' },
-                  { key: 'VOLATILE', label: 'Volatile', color: '#f59e0b' },
-                ] as const
-                const other = regimeDist.OTHER
+                const regimeColorMap: Record<string, string> = {
+                  STRONG_TREND_UP: '#6366f1', STRONG_TREND_DOWN: '#a855f7',
+                  MILD_TREND: '#3b82f6', MEAN_REVERT: '#06b6d4',
+                  BREAKOUT: '#f59e0b', VOLATILE: '#ef4444',
+                  TRENDING: '#6366f1', RANGING: '#06b6d4',
+                }
+                const entries = Object.entries(regimeDist).filter(([, n]) => n > 0).sort(([, a], [, b]) => b - a)
                 return (
                   <div className="space-y-3">
-                    {rows.map(({ key, label, color }) => {
-                      const n = regimeDist[key]
+                    {entries.map(([key, n]) => {
                       const pct = total ? (n / total) * 100 : 0
+                      const color = regimeColorMap[key] ?? '#64748b'
+                      const label = key.replace(/_/g, ' ')
                       return (
                         <div key={key}>
                           <div className="flex justify-between text-[11px] mb-1">
-                            <span className="font-bold" style={{ color }}>{label}</span>
+                            <span className="font-bold capitalize" style={{ color }}>{label}</span>
                             <span className="font-mono text-text2">{n} <span className="text-text3">({pct.toFixed(0)}%)</span></span>
                           </div>
                           <div className="h-2 rounded-full bg-surface overflow-hidden">
@@ -389,11 +393,6 @@ export function BacktestPage() {
                         </div>
                       )
                     })}
-                    {other > 0 && (
-                      <div className="text-[10px] text-text3 pt-1 border-t border-line/10">
-                        Other / unspecified regime: {other} trade{other !== 1 ? 's' : ''}
-                      </div>
-                    )}
                   </div>
                 )
               })()}

@@ -164,16 +164,26 @@ def run_intraday_simulation(
     lot_size: int = 65,
     lots: int = 1,
     slippage_pct: float = 0.005,
+    otm_offset: int = 0,
 ) -> Dict[str, Any]:
     """
     Full intraday simulation from entry_candle_idx onwards.
+
+    otm_offset: number of strikes away from ATM.
+        0 = ATM, 1 = 1 strike OTM (cheaper premium, higher R:R on strong days).
+        For CALL: strike = ATM + offset * strike_step
+        For PUT:  strike = ATM - offset * strike_step
     """
     from datetime import time as dtime
     h, m = map(int, force_exit_time_str.split(":"))
     force_exit_time = dtime(h, m)
 
     expiry = get_weekly_expiry(trade_date)
-    strike = atm_strike(entry_spot, strike_step)
+    atm = atm_strike(entry_spot, strike_step)
+    if direction == "CALL":
+        strike = atm + otm_offset * strike_step
+    else:
+        strike = atm - otm_offset * strike_step
     opt_type = "CE" if direction == "CALL" else "PE"
     dte = (expiry - trade_date).days
 
@@ -301,4 +311,5 @@ def run_intraday_simulation(
         "vix": vix,
         "trade_date": trade_date.isoformat(),
         "entry_slippage_pct": round(entry_slippage * 100, 2),
+        "otm_offset": otm_offset,
     }

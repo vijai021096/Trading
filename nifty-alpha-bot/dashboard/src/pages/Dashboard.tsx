@@ -37,6 +37,8 @@ export function Dashboard() {
   const thinking = botStatus?.thinking ?? ''
   const kiteConnected = botStatus?.kite_connected ?? false
   const paperMode = botStatus?.paper_mode ?? true
+  const tradingEngine = botStatus?.trading_engine ?? 'intraday'
+  const isDailyEngine = String(tradingEngine).toLowerCase() === 'daily_adaptive'
 
   const maxPnl = Math.max(...todayTrades.map(t => t.net_pnl), 0)
   const minPnl = Math.min(...todayTrades.map(t => t.net_pnl), 0)
@@ -56,6 +58,12 @@ export function Dashboard() {
           {paperMode && (
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-amber/10 text-amber uppercase tracking-wider">Paper Mode</span>
           )}
+          <span className={clsx(
+            'text-[10px] font-black px-2.5 py-0.5 rounded-lg uppercase tracking-widest border',
+            isDailyEngine ? 'bg-cyan/10 text-cyan border-cyan/25' : 'bg-surface text-text3 border-line/25',
+          )}>
+            {isDailyEngine ? 'Daily adaptive' : 'Intraday'}
+          </span>
           {thinking && (
             <span className="text-xs text-text3 hidden lg:block truncate max-w-[340px]">{thinking}</span>
           )}

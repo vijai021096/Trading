@@ -25,6 +25,8 @@ interface LogEntry {
 const EVENT_TYPES = [
   { id: 'ALL',                label: 'All',            color: 'text3'  },
   { id: 'SCAN_CYCLE',        label: 'Scan Cycle',     color: 'accent' },
+  { id: 'DAILY_ADAPTIVE_SCAN', label: 'Daily Adaptive', color: 'cyan' },
+  { id: 'DAILY_REGIME',      label: 'Daily Regime',   color: 'amber' },
   { id: 'TREND_DETECTED',    label: 'Trend',          color: 'green'  },
   { id: 'REGIME_DETECTED',   label: 'Regime',         color: 'cyan'   },
   { id: 'ORB_SCAN',          label: 'ORB',            color: 'amber'  },
@@ -89,13 +91,14 @@ export function LogsPage() {
     const orb = logs.filter(l => l.event === 'ORB_SCAN').length
     const vwap = logs.filter(l => l.event === 'RECLAIM_SCAN').length
     const entries = logs.filter(l => l.event === 'ENTRY').length
+    const dailyScan = logs.filter(l => l.event === 'DAILY_ADAPTIVE_SCAN').length
     const slmFills = logs.filter(l => l.event === 'SLM_EXECUTED').length
     const heartbeats = logs.filter(l => l.event === 'HEARTBEAT').length
     const riskBlocked = logs.filter(l => l.event === 'RISK_BLOCKED').length
     const scanCycles = logs.filter(l => l.event === 'SCAN_CYCLE').length
     const multiSignals = logs.filter(l => l.event === 'SCAN_CYCLE' && (l.signals_detected ?? 0) > 1).length
     const skipped = orb + vwap - entries
-    return { orb, vwap, entries, skipped, slmFills, heartbeats, riskBlocked, scanCycles, multiSignals }
+    return { orb, vwap, entries, skipped, slmFills, heartbeats, riskBlocked, scanCycles, multiSignals, dailyScan }
   }, [logs])
 
   return (
@@ -127,10 +130,11 @@ export function LogsPage() {
       </motion.div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
         {[
           { label: 'ORB Scans', value: scanCount.orb, color: 'amber', icon: Zap },
           { label: 'VWAP Scans', value: scanCount.vwap, color: 'cyan', icon: Radio },
+          { label: 'Daily Scan', value: scanCount.dailyScan, color: 'cyan', icon: Radio },
           { label: 'Entries Taken', value: scanCount.entries, color: 'green', icon: ArrowUpRight },
           { label: 'Signals Skipped', value: scanCount.skipped, color: 'red', icon: XCircle },
           { label: 'Scan Cycles', value: scanCount.scanCycles, color: 'cyan', icon: Eye },

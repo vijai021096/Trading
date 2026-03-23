@@ -212,12 +212,23 @@ def run_kite_backtest(months: int = 12, verbose: bool = False):
         enable_htf_filter=True,
         enable_overextended_filter=True,
         enable_dynamic_blocklist=True,
-        enable_daily_bias_filter=True,         # KEY FIX: only trade in daily trend direction
-        enable_reentry=False,                  # re-entry had 0% WR
-        momentum_breakout_window_start="10:00",   # wait for trend confirmation (post 10:15)
-        momentum_breakout_window_end="11:30",     # avoid midday chop
-        ema_pullback_window_start="10:00",        # wait for trend confirmation
+        enable_daily_bias_filter=True,         # only trade in daily trend direction
+        enable_reentry=False,                  # re-entry had poor WR in tests
+        momentum_breakout_window_start="10:00",
+        momentum_breakout_window_end="11:30",
+        ema_pullback_window_start="10:00",
         ema_pullback_window_end="12:30",
+        enable_momentum_breakout=False,
+        max_entry_option_price=120.0,
+        enable_regime_classifier=True,
+        regime_vix_skip_threshold=22.0,
+        regime_gap_skip_pct=0.012,
+        regime_strong_gap_pct=0.003,
+        regime_strong_5d_ret_pct=0.01,
+        regime_breakout_prev_range_max=120.0,
+        regime_pullback_5d_ret_pct=0.003,
+        regime_pullback_flat_open_pct=0.002,
+        stop_after_2r_profit=True,
     )
 
     result = run_backtest(nifty_df, vix_df, cfg, verbose=verbose)

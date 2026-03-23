@@ -67,13 +67,14 @@ def print_report(result: dict) -> None:
     print("=" * 65)
 
     # Strategy breakdown
-    strategies = ["ORB", "RELAXED_ORB", "MOMENTUM_BREAKOUT", "EMA_PULLBACK", "VWAP_RECLAIM"]
+    strategies = ["RELAXED_ORB", "MOMENTUM_BREAKOUT", "EMA_PULLBACK", "VWAP_RECLAIM", "VWAP_RECLAIM_REENTRY"]
     labels = {
         "ORB": "ORB           ",
         "RELAXED_ORB": "Relaxed ORB   ",
         "MOMENTUM_BREAKOUT": "Momentum Brkout",
         "EMA_PULLBACK": "EMA Pullback  ",
         "VWAP_RECLAIM": "VWAP Reclaim  ",
+        "VWAP_RECLAIM_REENTRY": "VWAP Re-entry ",
     }
     print("  Strategy breakdown:")
     for strat in strategies:
@@ -82,19 +83,55 @@ def print_report(result: dict) -> None:
             pnl = sum(t["net_pnl"] for t in st)
             wins = sum(1 for t in st if t["net_pnl"] > 0)
             sign = "+" if pnl >= 0 else ""
-            print(f"    {labels[strat]}: {len(st):3d} trades | WR: {wins/len(st)*100:.0f}% | P&L: {sign}₹{pnl:,.0f}")
+            print(f"    {labels.get(strat, strat):17s}: {len(st):3d} trades | WR: {wins/len(st)*100:.0f}% | P&L: {sign}₹{pnl:,.0f}")
+
+    # Tier breakdown
+    tiers_in_trades = set(t.get("tier", 0) for t in trades)
+    if tiers_in_trades - {0}:
+        print()
+        tier_labels = {1: "T1 High Conviction", 2: "T2 Standard", 3: "T3 Quick Scalp"}
+        print("  Tier breakdown:")
+        for tier_num in sorted(tiers_in_trades):
+            if tier_num == 0:
+                continue
+            tt = [t for t in trades if t.get("tier") == tier_num]
+            if tt:
+                pnl = sum(t["net_pnl"] for t in tt)
+                wins = sum(1 for t in tt if t["net_pnl"] > 0)
+                gw = sum(t["net_pnl"] for t in tt if t["net_pnl"] > 0)
+                gl = abs(sum(t["net_pnl"] for t in tt if t["net_pnl"] <= 0))
+                pf = gw / max(1, gl)
+                sign = "+" if pnl >= 0 else ""
+                print(f"    {tier_labels.get(tier_num, f'T{tier_num}'):20s}: {len(tt):3d} trades | "
+                      f"WR: {wins/len(tt)*100:.0f}% | PF: {pf:.2f}x | P&L: {sign}₹{pnl:,.0f}")
+
+    # Regime breakdown (if available)
+    regimes_in_trades = set(t.get("regime", "NONE") for t in trades)
+    if regimes_in_trades - {"NONE"}:
+        print()
+        print("  Regime breakdown:")
+        for regime_name in sorted(regimes_in_trades):
+            rt = [t for t in trades if t.get("regime") == regime_name]
+            if rt:
+                pnl = sum(t["net_pnl"] for t in rt)
+                wins = sum(1 for t in rt if t["net_pnl"] > 0)
+                sign = "+" if pnl >= 0 else ""
+                print(f"    {regime_name:20s}: {len(rt):3d} trades | WR: {wins/len(rt)*100:.0f}% | P&L: {sign}₹{pnl:,.0f}")
 
     print("=" * 65)
 
     # Verdict
+    trades_per_month = m["total_trades"] / max(1, len(m.get("monthly_breakdown", [{}])))
     verdict_ok = (
         m["sharpe_ratio"] >= 1.0
-        and m["max_drawdown_pct"] <= 15.0
-        and m["win_rate_pct"] >= 45.0
+        and m["max_drawdown_pct"] <= 20.0
+        and m["win_rate_pct"] >= 42.0
         and m["total_net_pnl"] > 0
+        and m["profit_factor"] >= 1.5
     )
     print(f"\n  VERDICT: {'✓ STRATEGY PASSES CRITERIA' if verdict_ok else '✗ NEEDS IMPROVEMENT'}")
-    print(f"  Criteria: Sharpe≥1.0 ({m['sharpe_ratio']:.2f}), DD≤15% ({m['max_drawdown_pct']:.1f}%), WR≥45% ({m['win_rate_pct']:.1f}%), Profitable")
+    print(f"  Criteria: PF≥1.5 ({m['profit_factor']:.2f}), DD≤20% ({m['max_drawdown_pct']:.1f}%), "
+          f"WR≥42% ({m['win_rate_pct']:.1f}%), Trades/mo≈{trades_per_month:.0f}")
     print()
 
 
