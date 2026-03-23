@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Tuple
 
@@ -10,7 +11,9 @@ from shared.config import Settings
 
 
 def _anchor_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "data" / "daily_adaptive_anchor.json"
+    # Use STATE_DIR (volume-mounted in Docker) so anchor survives container restarts.
+    state_dir = Path(os.environ.get("STATE_DIR", "/tmp"))
+    return state_dir / "daily_adaptive_anchor.json"
 
 
 def load_anchor_ym() -> Tuple[int, int] | None:
