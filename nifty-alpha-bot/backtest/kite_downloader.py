@@ -191,7 +191,7 @@ def run_kite_backtest(months: int = 12, verbose: bool = False):
         print("ERROR: No saved access_token. Log in first via https://bot.fynos.in/api/kite/login")
         return
 
-    kite = KiteClient(settings)
+    kite = KiteClient(api_key=settings.kite_api_key, access_token=access_token)
 
     print(f"[KiteBacktest] Fetching {months} months of NIFTY 5m data...")
     nifty_df = download_nifty_kite(kite, months=months)
