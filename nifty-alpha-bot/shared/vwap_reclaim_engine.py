@@ -61,7 +61,7 @@ def evaluate_vwap_reclaim_signal(
     filters["vwap_cross"] = {
         "passed": True,
         "direction": direction,
-        "detail": f"{direction}: price {close:.1f} crossed {'above' if direction=='CALL' else 'below'} VWAP {vwap_now:.1f if vwap_now else 0:.1f}",
+        "detail": f"{direction}: price {close:.1f} crossed {'above' if direction=='CALL' else 'below'} VWAP {(vwap_now or 0):.1f}",
     }
 
     # ── 2. Rejection magnitude (ATR-proportional) ─────────────────

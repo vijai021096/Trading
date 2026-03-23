@@ -61,12 +61,31 @@ class Settings(BaseSettings):
     entry_window_close: str = "10:00"
     force_exit_time: str = "15:15"
 
-    max_orb_range_points: float = 150.0
+    max_orb_range_points: float = 200.0       # Raised: 150→200 to capture normal wide-open days
+    relaxed_orb_max_range_points: float = 320.0  # RELAXED_ORB allows wider opening ranges
     min_orb_range_points: float = 40.0
     breakout_buffer_pct: float = 0.0005
 
     min_breakout_body_ratio: float = 0.45
     min_volume_surge_ratio: float = 1.2
+
+    # ── EMA Pullback Strategy ─────────────────────────────────────
+    ema_pullback_window_start: str = "09:30"
+    ema_pullback_window_end: str = "13:00"
+    ema_pullback_proximity_pct: float = 0.006     # 0.6% — within 0.6% of EMA21 counts as pullback
+    ema_pullback_lookback_candles: int = 4        # How many past candles to check for EMA21 touch
+    ema_pullback_min_body_ratio: float = 0.38
+
+    # ── Momentum Breakout Strategy ────────────────────────────────
+    momentum_breakout_window_start: str = "09:30"
+    momentum_breakout_window_end: str = "12:00"   # Morning momentum only
+    momentum_breakout_lookback: int = 20           # N-candle range to break above/below
+    momentum_breakout_min_body_ratio: float = 0.50
+    momentum_breakout_rsi_bull_min: float = 55.0
+    momentum_breakout_rsi_bull_max: float = 78.0
+    momentum_breakout_rsi_bear_min: float = 22.0
+    momentum_breakout_rsi_bear_max: float = 45.0
+    momentum_breakout_min_volume_surge: float = 1.3
 
     # ── VWAP Reclaim Strategy ─────────────────────────────────────
     reclaim_window_start: str = "10:00"

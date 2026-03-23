@@ -1,0 +1,24 @@
+# Secrets
+.env
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Node / Dashboard
+node_modules/
+.vite/
+dashboard/dist/
+
+# OS
+.DS_Store

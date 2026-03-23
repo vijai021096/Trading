@@ -23,17 +23,21 @@ interface LogEntry {
 }
 
 const EVENT_TYPES = [
-  { id: 'ALL', label: 'All', color: 'text3' },
-  { id: 'HEARTBEAT', label: 'Heartbeat', color: 'green' },
-  { id: 'KITE_AUTH', label: 'Kite Auth', color: 'accent' },
-  { id: 'SYSTEM_READY', label: 'System', color: 'cyan' },
-  { id: 'ORB_SCAN', label: 'ORB Scans', color: 'amber' },
-  { id: 'RECLAIM_SCAN', label: 'VWAP Scans', color: 'cyan' },
-  { id: 'ENTRY', label: 'Entries', color: 'green' },
-  { id: 'TRADE_CLOSED', label: 'Exits', color: 'accent' },
-  { id: 'RISK_BLOCKED', label: 'Risk Blocked', color: 'red' },
-  { id: 'SLM_EXECUTED', label: 'SL-M Fills', color: 'red' },
-  { id: 'LOOP_ERROR', label: 'Errors', color: 'red' },
+  { id: 'ALL',                label: 'All',            color: 'text3'  },
+  { id: 'TREND_DETECTED',    label: 'Trend',          color: 'green'  },
+  { id: 'REGIME_DETECTED',   label: 'Regime',         color: 'cyan'   },
+  { id: 'ORB_SCAN',          label: 'ORB',            color: 'amber'  },
+  { id: 'EMA_PULLBACK_SCAN', label: 'EMA Pullback',   color: 'accent' },
+  { id: 'MOMENTUM_SCAN',     label: 'Momentum',       color: 'green'  },
+  { id: 'RECLAIM_SCAN',      label: 'VWAP',           color: 'cyan'   },
+  { id: 'ENTRY',             label: 'Entries',        color: 'green'  },
+  { id: 'TRADE_CLOSED',      label: 'Exits',          color: 'accent' },
+  { id: 'RISK_BLOCKED',      label: 'Risk Blocked',   color: 'red'    },
+  { id: 'SLM_EXECUTED',      label: 'SL-M Fills',     color: 'red'    },
+  { id: 'BROKER_SYNC_CLOSED',label: 'Broker Sync',    color: 'amber'  },
+  { id: 'KITE_AUTH',         label: 'Kite Auth',      color: 'accent' },
+  { id: 'HEARTBEAT',         label: 'Heartbeat',      color: 'text3'  },
+  { id: 'LOOP_ERROR',        label: 'Errors',         color: 'red'    },
 ]
 
 export function LogsPage() {

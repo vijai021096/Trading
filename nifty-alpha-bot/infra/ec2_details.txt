@@ -1,0 +1,18 @@
+Instance ID:  i-062620568bd83ab1a
+Elastic IP:   15.207.47.244
+SSH Key:      /Users/vijai/.ssh/nifty-bot-key.pem
+Region:       ap-south-1
+AMI:          ami-095cc90aa5ddff518
+Launched:     Mon Mar 23 00:04:27 IST 2026
+
+SSH command:
+  ssh -i /Users/vijai/.ssh/nifty-bot-key.pem ubuntu@15.207.47.244
+
+Upload command:
+  scp -i /Users/vijai/.ssh/nifty-bot-key.pem -r ./nifty-alpha-bot ubuntu@15.207.47.244:/opt/nifty-bot
+
+Dashboard:
+  http://15.207.47.244
+
+Kite Redirect URL:
+  http://15.207.47.244/api/kite/callback

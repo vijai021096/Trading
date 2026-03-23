@@ -67,16 +67,22 @@ def print_report(result: dict) -> None:
     print("=" * 65)
 
     # Strategy breakdown
-    orb_trades = [t for t in trades if t.get("strategy") == "ORB"]
-    rcl_trades = [t for t in trades if t.get("strategy") == "VWAP_RECLAIM"]
-    if orb_trades:
-        orb_pnl = sum(t["net_pnl"] for t in orb_trades)
-        orb_wins = sum(1 for t in orb_trades if t["net_pnl"] > 0)
-        print(f"  ORB strategy  : {len(orb_trades)} trades | WR: {orb_wins/len(orb_trades)*100:.0f}% | P&L: ₹{orb_pnl:,.0f}")
-    if rcl_trades:
-        rcl_pnl = sum(t["net_pnl"] for t in rcl_trades)
-        rcl_wins = sum(1 for t in rcl_trades if t["net_pnl"] > 0)
-        print(f"  VWAP Reclaim  : {len(rcl_trades)} trades | WR: {rcl_wins/len(rcl_trades)*100:.0f}% | P&L: ₹{rcl_pnl:,.0f}")
+    strategies = ["ORB", "RELAXED_ORB", "MOMENTUM_BREAKOUT", "EMA_PULLBACK", "VWAP_RECLAIM"]
+    labels = {
+        "ORB": "ORB           ",
+        "RELAXED_ORB": "Relaxed ORB   ",
+        "MOMENTUM_BREAKOUT": "Momentum Brkout",
+        "EMA_PULLBACK": "EMA Pullback  ",
+        "VWAP_RECLAIM": "VWAP Reclaim  ",
+    }
+    print("  Strategy breakdown:")
+    for strat in strategies:
+        st = [t for t in trades if t.get("strategy") == strat]
+        if st:
+            pnl = sum(t["net_pnl"] for t in st)
+            wins = sum(1 for t in st if t["net_pnl"] > 0)
+            sign = "+" if pnl >= 0 else ""
+            print(f"    {labels[strat]}: {len(st):3d} trades | WR: {wins/len(st)*100:.0f}% | P&L: {sign}₹{pnl:,.0f}")
 
     print("=" * 65)
 

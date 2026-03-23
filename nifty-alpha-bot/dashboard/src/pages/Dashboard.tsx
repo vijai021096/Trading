@@ -7,7 +7,8 @@ import {
   Activity, Clock, Eye, AlertCircle, ArrowUpRight, ArrowDownRight,
   Crosshair, ShieldCheck, TrendingUp, TrendingDown, Radio, Layers,
   Zap, Target, BarChart3, LineChart, Gauge, Timer, Trophy, Flame,
-  ChevronRight, Power, ToggleLeft, ToggleRight, AlertOctagon, Ruler
+  ChevronRight, Power, ToggleLeft, ToggleRight, AlertOctagon, Ruler,
+  Brain, Compass, Waves, ChevronUp, ChevronDown, Minus
 } from 'lucide-react'
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
 import { useTradingStore } from '../stores/tradingStore'
@@ -224,17 +225,18 @@ export function Dashboard() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    { name: 'ORB', desc: 'Opening Range Breakout', time: '9:30 – 10:00 AM', icon: Flame },
-                    { name: 'VWAP', desc: 'VWAP Reclaim', time: '10:00 AM – 2:30 PM', icon: TrendingUp },
-                  ].map(({ name, desc, time, icon: Icon }) => (
-                    <div key={name} className="bg-surface/50 rounded-xl p-4 border border-line/20 hover:border-line/40 transition-all group">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Icon size={16} className="text-accent" />
-                        <span className="text-base font-bold text-text1">{name}</span>
-                        <ChevronRight size={14} className="text-text3 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
+                    { name: 'ORB', desc: 'Opening Range Breakout', time: '9:30–10:00', icon: Flame, color: 'text-amber' },
+                    { name: 'MOMENTUM', desc: 'N-candle range breakout', time: '9:30–12:00', icon: Zap, color: 'text-green' },
+                    { name: 'EMA PULLBACK', desc: 'EMA21 bounce on trend', time: '9:30–1:00', icon: TrendingUp, color: 'text-accent' },
+                    { name: 'VWAP RECLAIM', desc: 'VWAP cross confirmation', time: '10:00–2:30', icon: Waves, color: 'text-cyan' },
+                  ].map(({ name, desc, time, icon: Icon, color }) => (
+                    <div key={name} className="bg-surface/50 rounded-xl p-3 border border-line/20 hover:border-line/40 transition-all group">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <Icon size={13} className={color} />
+                        <span className="text-xs font-bold text-text1">{name}</span>
                       </div>
-                      <div className="text-sm text-text3">{desc}</div>
-                      <div className="text-xs text-text3 font-mono mt-1 flex items-center gap-1"><Timer size={11} /> {time}</div>
+                      <div className="text-[11px] text-text3">{desc}</div>
+                      <div className="text-[10px] text-text3 font-mono mt-1 flex items-center gap-1 opacity-70"><Timer size={10} /> {time}</div>
                     </div>
                   ))}
                 </div>
@@ -344,6 +346,9 @@ export function Dashboard() {
         {/* Right 1/3 */}
         <div className="space-y-5">
 
+          {/* Market Intelligence */}
+          <MarketIntelligence />
+
           {/* Trading Stats */}
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
             className="glass-card rounded-2xl p-6 neon-border">
@@ -443,6 +448,196 @@ export function Dashboard() {
         </div>
       </div>
     </div>
+  )
+}
+
+/* ── Market Intelligence Panel ─────────────────────────────── */
+interface MarketState {
+  trend: {
+    state?: string
+    direction?: string
+    conviction?: number
+    risk_multiplier?: number
+    strategy_priority?: string[]
+    scores?: Record<string, number>
+    ts?: string
+  } | null
+  regime: {
+    regime?: string
+    atr_ratio?: number
+    adx_proxy?: number
+    vix?: number
+    rsi?: number
+    ts?: string
+  } | null
+}
+
+const TREND_META: Record<string, { label: string; color: string; bg: string; border: string; icon: any; desc: string }> = {
+  STRONG_BULL: { label: 'Strong Bull', color: 'text-green', bg: 'bg-green/12', border: 'border-green/30', icon: ChevronUp, desc: 'All indicators bullish — high conviction CALL bias' },
+  BULL:        { label: 'Bullish', color: 'text-green', bg: 'bg-green/8', border: 'border-green/20', icon: TrendingUp, desc: 'Moderate bullish bias — prefer CALL setups' },
+  NEUTRAL:     { label: 'Neutral', color: 'text-text2', bg: 'bg-surface/60', border: 'border-line/30', icon: Minus, desc: 'No clear direction — waiting for conviction' },
+  BEAR:        { label: 'Bearish', color: 'text-red', bg: 'bg-red/8', border: 'border-red/20', icon: TrendingDown, desc: 'Moderate bearish bias — prefer PUT setups' },
+  STRONG_BEAR: { label: 'Strong Bear', color: 'text-red', bg: 'bg-red/12', border: 'border-red/30', icon: ChevronDown, desc: 'All indicators bearish — high conviction PUT bias' },
+}
+
+const REGIME_META: Record<string, { color: string; bg: string }> = {
+  TRENDING:  { color: 'text-green', bg: 'bg-green/10' },
+  RANGING:   { color: 'text-amber', bg: 'bg-amber/10' },
+  VOLATILE:  { color: 'text-red',   bg: 'bg-red/10'   },
+}
+
+const STRAT_COLORS: Record<string, string> = {
+  ORB:               'text-amber',
+  MOMENTUM_BREAKOUT: 'text-green',
+  EMA_PULLBACK:      'text-accent',
+  VWAP_RECLAIM:      'text-cyan',
+  RELAXED_ORB:       'text-amber/70',
+}
+
+const STRAT_WINDOWS: Record<string, string> = {
+  ORB:               '9:30–10:00',
+  MOMENTUM_BREAKOUT: '9:30–12:00',
+  EMA_PULLBACK:      '9:30–1:00',
+  VWAP_RECLAIM:      '10:00–2:30',
+  RELAXED_ORB:       '9:30–10:00',
+}
+
+function MarketIntelligence() {
+  const [ms, setMs] = useState<MarketState>({ trend: null, regime: null })
+  const [ts, setTs] = useState('')
+
+  const fetch = async () => {
+    try {
+      const r = await axios.get('/api/market-state')
+      setMs(r.data)
+      setTs(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
+    } catch {}
+  }
+
+  useEffect(() => { fetch(); const id = setInterval(fetch, 10000); return () => clearInterval(id) }, [])
+
+  const trendKey = ms.trend?.state ?? 'NEUTRAL'
+  const meta = TREND_META[trendKey] ?? TREND_META.NEUTRAL
+  const TrendIcon = meta.icon
+  const conviction = Math.round((ms.trend?.conviction ?? 0) * 100)
+  const riskMult = Math.round((ms.trend?.risk_multiplier ?? 1) * 100)
+  const regime = ms.regime?.regime ?? '—'
+  const regimeMeta = REGIME_META[regime] ?? { color: 'text-text3', bg: 'bg-surface/40' }
+  const priority = ms.trend?.strategy_priority ?? []
+  const scores = ms.trend?.scores ?? {}
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }}
+      className="glass-card rounded-2xl p-5 neon-border">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Brain size={15} className="text-accent" />
+          <span className="text-sm font-bold uppercase tracking-widest text-text3">Market Intelligence</span>
+        </div>
+        {ts && <span className="text-[10px] text-text3 font-mono">{ts}</span>}
+      </div>
+
+      {/* Trend State Banner */}
+      <div className={clsx('rounded-xl p-3.5 border mb-4 flex items-center justify-between', meta.bg, meta.border)}>
+        <div className="flex items-center gap-2.5">
+          <div className={clsx('w-8 h-8 rounded-lg flex items-center justify-center', meta.bg, meta.border, 'border')}>
+            <TrendIcon size={16} className={meta.color} />
+          </div>
+          <div>
+            <div className={clsx('text-base font-black', meta.color)}>{meta.label}</div>
+            <div className="text-[11px] text-text3 mt-0.5 max-w-[160px] leading-tight">{meta.desc}</div>
+          </div>
+        </div>
+        <div className="text-right">
+          <div className={clsx('text-xl font-black font-mono', meta.color)}>{conviction}%</div>
+          <div className="text-[10px] text-text3 uppercase tracking-wider">Conviction</div>
+        </div>
+      </div>
+
+      {/* Conviction bar */}
+      <div className="mb-4">
+        <div className="flex items-center justify-between text-xs mb-1.5">
+          <span className="text-text3 font-medium">Signal Conviction</span>
+          <span className={clsx('font-bold', conviction >= 70 ? 'text-green' : conviction >= 40 ? 'text-amber' : 'text-text3')}>{conviction}%</span>
+        </div>
+        <div className="h-2 rounded-full bg-surface overflow-hidden">
+          <motion.div
+            initial={{ width: 0 }} animate={{ width: `${conviction}%` }}
+            transition={{ duration: 0.8, ease: 'easeOut' }}
+            className={clsx('h-full rounded-full', conviction >= 70 ? 'bg-green' : conviction >= 40 ? 'bg-amber' : 'bg-text3')} />
+        </div>
+        {/* Indicator votes */}
+        {Object.keys(scores).length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {Object.entries(scores).map(([k, v]) => (
+              <span key={k} className={clsx(
+                'text-[10px] px-1.5 py-0.5 rounded-md font-bold',
+                v > 0 ? 'bg-green/10 text-green' : v < 0 ? 'bg-red/10 text-red' : 'bg-surface text-text3'
+              )}>
+                {k.replace(/_/g, ' ')} {v > 0 ? '▲' : v < 0 ? '▼' : '—'}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Regime + Risk row */}
+      <div className="grid grid-cols-2 gap-2.5 mb-4">
+        <div className="bg-surface/50 rounded-xl p-3 border border-line/20">
+          <div className="text-[10px] font-bold uppercase text-text3 mb-1.5 flex items-center gap-1">
+            <Compass size={10} /> Regime
+          </div>
+          <span className={clsx('text-sm font-black px-2 py-0.5 rounded-lg', regimeMeta.bg, regimeMeta.color)}>
+            {regime}
+          </span>
+          {ms.regime?.vix && (
+            <div className="text-[10px] text-text3 mt-1.5">VIX {ms.regime.vix.toFixed(1)} · RSI {ms.regime?.rsi?.toFixed(0) ?? '—'}</div>
+          )}
+        </div>
+        <div className="bg-surface/50 rounded-xl p-3 border border-line/20">
+          <div className="text-[10px] font-bold uppercase text-text3 mb-1.5 flex items-center gap-1">
+            <ShieldCheck size={10} /> Risk Scale
+          </div>
+          <div className={clsx('text-sm font-black', riskMult >= 90 ? 'text-green' : riskMult >= 70 ? 'text-amber' : 'text-red')}>
+            {riskMult}%
+          </div>
+          <div className="h-1.5 mt-2 rounded-full bg-surface overflow-hidden">
+            <div className={clsx('h-full rounded-full transition-all duration-500', riskMult >= 90 ? 'bg-green' : riskMult >= 70 ? 'bg-amber' : 'bg-red')}
+              style={{ width: `${riskMult}%` }} />
+          </div>
+        </div>
+      </div>
+
+      {/* Strategy Priority */}
+      {priority.length > 0 && (
+        <div>
+          <div className="text-[10px] font-bold uppercase text-text3 mb-2 flex items-center gap-1">
+            <Layers size={10} /> Strategy Priority
+          </div>
+          <div className="space-y-1.5">
+            {priority.map((s, i) => (
+              <div key={s} className="flex items-center gap-2">
+                <span className="text-[10px] font-bold text-text3 w-4">{i + 1}</span>
+                <div className="flex-1 flex items-center justify-between bg-surface/40 rounded-lg px-2.5 py-1.5 border border-line/15">
+                  <span className={clsx('text-xs font-bold', STRAT_COLORS[s] ?? 'text-text2')}>
+                    {s.replace(/_/g, ' ')}
+                  </span>
+                  <span className="text-[10px] text-text3 font-mono">{STRAT_WINDOWS[s] ?? ''}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!ms.trend && (
+        <div className="text-center py-4">
+          <Brain size={20} className="text-text3 mx-auto mb-2 opacity-40" />
+          <p className="text-xs text-text3">Trend data available after first market scan</p>
+        </div>
+      )}
+    </motion.div>
   )
 }
 

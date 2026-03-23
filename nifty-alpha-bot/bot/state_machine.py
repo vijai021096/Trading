@@ -46,6 +46,7 @@ class Position:
     filter_log: Dict[str, Any] = field(default_factory=dict)
     break_even_set: bool = False
     highest_price_seen: float = 0.0
+    slm_order_id: str = ""          # Persisted so SL-M survives bot restarts
 
     # Risk
     gross_pnl: float = 0.0
@@ -233,17 +234,45 @@ class PositionStateMachine:
         """Emergency close — transition directly to IDLE."""
         self.position = reset_position()
 
-    def sync_with_broker(self, broker_qty: int) -> None:
+    def sync_with_broker(self, broker_qty: int, last_price: float = 0.0) -> bool:
         """
         Reconcile local state with broker's actual position.
         Called every 60s during market hours.
+        Returns True if a discrepancy was detected and resolved.
+
+        Detects:
+          - Full close: broker_qty == 0 (manual sq-off, SL-M, margin call)
+          - Partial close: broker_qty < bot expected qty (partial manual exit)
         """
-        if self.position.state == PositionState.ACTIVE and broker_qty == 0:
-            # Broker shows no position but we think we're in one
-            # Position was closed externally (manual or SL at broker)
+        if self.position.state != PositionState.ACTIVE:
+            return False
+
+        expected_qty = self.position.qty
+
+        if broker_qty == 0:
+            # Position fully closed externally
+            exit_price = last_price if last_price > 0 else self.position.entry_price
+            self.position.state = PositionState.EXIT_PENDING
             self.position.exit_reason = "BROKER_SYNC_CLOSED"
             self.position.exit_time = datetime.now().isoformat()
+            self.position.exit_order_id = "EXTERNAL"
             save_position(self.position)
+
+            self.position.state = PositionState.CLOSED
+            self.position.exit_price = exit_price
+            self.position.gross_pnl = (exit_price - self.position.entry_price) * expected_qty
+            self.position.net_pnl = self.position.gross_pnl
+            save_position(self.position)
+            self.position = reset_position()
+            return True
+
+        if 0 < broker_qty < expected_qty:
+            # Partial close — update qty to match broker reality
+            self.position.qty = broker_qty
+            save_position(self.position)
+            return True
+
+        return False
 
     def current_state_dict(self) -> dict:
         d = asdict(self.position)

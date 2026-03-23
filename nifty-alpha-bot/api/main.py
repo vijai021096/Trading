@@ -147,7 +147,7 @@ def _run_startup_diagnostics() -> dict:
 
     # 11. Shared modules
     for mod_name in ["shared.indicators", "shared.regime_detector", "shared.orb_engine",
-                     "shared.vwap_reclaim_engine", "bot.risk_manager"]:
+                     "shared.vwap_reclaim_engine"]:
         try:
             importlib.import_module(mod_name)
             _check(f"Module: {mod_name.split('.')[-1]}", True)
@@ -357,6 +357,11 @@ async def heartbeat_loop():
                 strat_str = "+".join(strategies_on) if strategies_on else "none"
                 thinking = f"Scanning for entry — {strat_str} active, {len(today_trades)}/{settings.max_trades_per_day} trades used"
 
+            # Market intelligence (trend + regime from bot events)
+            mkt_state = get_latest_market_state()
+            trend_ev = mkt_state.get("trend") or {}
+            regime_ev = mkt_state.get("regime") or {}
+
             payload = {
                 "state": pos_state,
                 "market_status": market_status,
@@ -378,6 +383,18 @@ async def heartbeat_loop():
                 "strategies": strat_data,
                 "paper_mode": settings.paper_mode,
                 "consecutive_losses": risk_data.get("consecutive_losses", 0),
+                # Market intelligence fields
+                "trend_state": trend_ev.get("state"),
+                "trend_direction": trend_ev.get("direction"),
+                "trend_conviction": trend_ev.get("conviction"),
+                "risk_multiplier": trend_ev.get("risk_multiplier"),
+                "strategy_priority": trend_ev.get("strategy_priority", []),
+                "trend_scores": trend_ev.get("scores", {}),
+                "regime": regime_ev.get("regime"),
+                "regime_atr_ratio": regime_ev.get("atr_ratio"),
+                "regime_adx": regime_ev.get("adx_proxy"),
+                "regime_vix": regime_ev.get("vix"),
+                "regime_rsi": regime_ev.get("rsi"),
             }
 
             append_bot_event("HEARTBEAT", payload)
@@ -896,7 +913,43 @@ def get_logs(limit: int = 500, event_type: Optional[str] = None):
     events = read_all_events()
     if event_type:
         events = [e for e in events if e.get("event") == event_type]
-    return {"logs": events[-limit:], "total": len(events)}
+    return {"logs": events[:limit], "total": len(events)}
+
+
+# ── Market state helper ───────────────────────────────────────
+
+def get_latest_market_state() -> dict:
+    """
+    Reads the most recent TREND_DETECTED/TREND_SHIFTED and REGIME_DETECTED events
+    from the events log and returns a combined market-state dict for the dashboard.
+    """
+    if not EVENTS_LOG.exists():
+        return {"trend": None, "regime": None}
+    try:
+        lines = EVENTS_LOG.read_text().strip().split("\n")
+        trend_ev: Optional[dict] = None
+        regime_ev: Optional[dict] = None
+        for line in reversed(lines[-1000:]):
+            try:
+                ev = json.loads(line)
+                etype = ev.get("event", "")
+                if trend_ev is None and etype in ("TREND_DETECTED", "TREND_SHIFTED"):
+                    trend_ev = ev
+                if regime_ev is None and etype == "REGIME_DETECTED":
+                    regime_ev = ev
+                if trend_ev is not None and regime_ev is not None:
+                    break
+            except Exception:
+                pass
+        return {"trend": trend_ev, "regime": regime_ev}
+    except Exception:
+        return {"trend": None, "regime": None}
+
+
+@app.get("/api/market-state")
+def market_state_endpoint():
+    """Return current trend state, conviction, regime, risk multiplier for the dashboard."""
+    return get_latest_market_state()
 
 
 # ── Strategy toggle ───────────────────────────────────────────

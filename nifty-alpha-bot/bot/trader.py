@@ -25,7 +25,10 @@ from bot.state_machine import PositionStateMachine, PositionState
 from shared.config import settings
 from shared.orb_engine import evaluate_orb_signal, compute_sl_target
 from shared.vwap_reclaim_engine import evaluate_vwap_reclaim_signal
+from shared.ema_pullback_engine import evaluate_ema_pullback_signal
+from shared.momentum_breakout_engine import evaluate_momentum_breakout_signal
 from shared.regime_detector import detect_regime, RegimeResult, SL_TARGET_MAP, STRATEGY_PRIORITY
+from shared.trend_detector import detect_trend, TrendResult, TrendState, STRATEGY_PRIORITY_BY_TREND, SL_TARGET_BY_STRATEGY
 from shared.black_scholes import charges_estimate
 
 try:
@@ -73,10 +76,19 @@ class KiteORBTrader:
         self._current_expiry: Optional[date] = None
         self._orb_signal_used = False
         self._reclaim_signal_used = False
+        self._ema_pullback_signal_used = False
+        self._momentum_signal_used = False
         self._heartbeat_count = 0
         self._current_regime: Optional[RegimeResult] = None
+        self._current_trend: Optional[TrendResult] = None
         self._regime_logged_today = False
-        self._active_slm_order_id: Optional[str] = None
+        self._trend_logged_today = False
+        self._last_broker_sync: float = 0.0
+
+        # Restore SL-M order ID from persisted state (survives restarts)
+        self._active_slm_order_id: Optional[str] = self.sm.position.slm_order_id or None
+        if self._active_slm_order_id:
+            logger.info(f"Restored SL-M order ID from state: {self._active_slm_order_id}")
 
     # ── Time helpers ─────────────────────────────────────────────
 
@@ -121,7 +133,11 @@ class KiteORBTrader:
         if self._last_candle_date != today:
             self._orb_signal_used = False
             self._reclaim_signal_used = False
+            self._ema_pullback_signal_used = False
+            self._momentum_signal_used = False
             self._regime_logged_today = False
+            self._trend_logged_today = False
+            self._current_trend = None
             self._current_regime = None
             self._active_slm_order_id = None
             self._current_expiry = self.client.get_nearest_expiry("NIFTY")
@@ -155,6 +171,42 @@ class KiteORBTrader:
             })
 
         return regime
+
+    def _detect_trend(self, candles: List[Dict], vix: float) -> TrendResult:
+        trend = detect_trend(candles, vix)
+
+        if not self._trend_logged_today:
+            self._trend_logged_today = True
+            logger.info(
+                f"TREND: {trend.state.value} [{trend.direction}] | "
+                f"conviction={trend.conviction:.2f} risk_mult={trend.risk_multiplier:.2f} | "
+                f"{trend.detail}"
+            )
+            _log_event("TREND_DETECTED", {
+                "state": trend.state.value,
+                "direction": trend.direction,
+                "conviction": trend.conviction,
+                "risk_multiplier": trend.risk_multiplier,
+                "strategy_priority": trend.strategy_priority,
+                "scores": trend.scores,
+            })
+        elif (self._current_trend is not None and
+              self._current_trend.state != trend.state):
+            # Log state change intraday
+            logger.info(
+                f"TREND SHIFT: {self._current_trend.state.value} → {trend.state.value} "
+                f"| conviction={trend.conviction:.2f} | {trend.detail}"
+            )
+            _log_event("TREND_SHIFTED", {
+                "from": self._current_trend.state.value,
+                "to": trend.state.value,
+                "conviction": trend.conviction,
+                "risk_multiplier": trend.risk_multiplier,
+                "scores": trend.scores,
+            })
+
+        self._current_trend = trend
+        return trend
 
     # ── Position management ───────────────────────────────────────
 
@@ -229,6 +281,9 @@ class KiteORBTrader:
                 })
 
                 self._active_slm_order_id = None
+                self.sm.position.slm_order_id = ""
+                from bot.state_machine import save_position
+                save_position(self.sm.position)
                 self._record_exit(pos, "SL_HIT", fill_price)
                 return
 
@@ -241,26 +296,59 @@ class KiteORBTrader:
 
         # Cancel pending SL-M order
         if self._active_slm_order_id:
-            self.client.cancel_order(self._active_slm_order_id)
+            try:
+                self.client.cancel_order(self._active_slm_order_id)
+            except Exception as e:
+                logger.warning(f"SL-M cancel failed (may already be done): {e}")
             self._active_slm_order_id = None
+            self.sm.position.slm_order_id = ""
+            from bot.state_machine import save_position
+            save_position(self.sm.position)
 
         if self.cfg.paper_mode:
             fill_price = approx_price
             order_id = "PAPER"
         else:
-            resp = self.client.place_order(
-                symbol=pos.symbol,
-                qty=pos.qty,
-                side="SELL",
-                exchange="NFO",
-                product="MIS",
-            )
-            order_id = resp.get("order_id", "")
-            filled = self.client.confirm_fill(order_id, timeout_seconds=15)
-            if not filled:
-                logger.warning(f"Exit order {order_id} not confirmed filled!")
-            status = self.client.get_order_status(order_id)
-            fill_price = float(status.get("average_price", approx_price) or approx_price)
+            # For force-exit, retry up to 3 times to guarantee exit before market close
+            max_attempts = 3 if exit_reason == "FORCE_EXIT" else 1
+            fill_price = approx_price
+            order_id = ""
+
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    resp = self.client.place_order(
+                        symbol=pos.symbol,
+                        qty=pos.qty,
+                        side="SELL",
+                        exchange="NFO",
+                        product="MIS",
+                    )
+                    order_id = resp.get("order_id", "")
+                    filled = self.client.confirm_fill(order_id, timeout_seconds=15)
+
+                    if filled:
+                        status = self.client.get_order_status(order_id)
+                        fill_price = float(status.get("average_price", approx_price) or approx_price)
+                        logger.info(f"Exit confirmed: order={order_id} price={fill_price:.2f} (attempt {attempt})")
+                        break
+                    else:
+                        logger.warning(f"Exit order {order_id} not filled (attempt {attempt}/{max_attempts}) — cancelling and retrying")
+                        try:
+                            self.client.cancel_order(order_id)
+                        except Exception:
+                            pass
+                        if attempt < max_attempts:
+                            time.sleep(2)
+                except Exception as e:
+                    logger.error(f"Exit order failed (attempt {attempt}/{max_attempts}): {e}")
+                    if attempt < max_attempts:
+                        time.sleep(2)
+            else:
+                logger.error(f"EXIT FAILED after {max_attempts} attempts — position may still be open. Check Kite manually!")
+                _log_event("EXIT_FAILED", {
+                    "symbol": pos.symbol, "reason": exit_reason,
+                    "attempts": max_attempts, "approx_price": approx_price,
+                })
 
         self._record_exit(pos, exit_reason, fill_price)
 
@@ -334,9 +422,30 @@ class KiteORBTrader:
         effective_vix = vix or 14.0
         regime = self._detect_regime(candles, effective_vix)
         self._current_regime = regime
+        trend = self._detect_trend(candles, effective_vix)
 
-        for strategy_name in regime.strategy_priority:
-            if strategy_name in ("ORB", "RELAXED_ORB"):
+        # Strategy list comes from TREND state (direction-aware)
+        # Regime acts as a risk overlay, not strategy selector
+        strategy_list = trend.strategy_priority
+        risk_multiplier = trend.risk_multiplier
+
+        # Regime overrides:
+        # VOLATILE → remove MOMENTUM_BREAKOUT (too noisy), cap risk at 0.60
+        if regime.regime == "VOLATILE":
+            strategy_list = [s for s in strategy_list if s != "MOMENTUM_BREAKOUT"]
+            risk_multiplier = min(risk_multiplier, 0.60)
+
+        # NEUTRAL trend → skip ORB/MOMENTUM (need directional conviction)
+        if trend.state == TrendState.NEUTRAL:
+            strategy_list = [s for s in strategy_list if s not in ("ORB", "MOMENTUM_BREAKOUT")]
+
+        pb_window_start = self._t(self.cfg.ema_pullback_window_start)
+        pb_window_end = self._t(self.cfg.ema_pullback_window_end)
+        mb_window_start = self._t(self.cfg.momentum_breakout_window_start)
+        mb_window_end = self._t(self.cfg.momentum_breakout_window_end)
+
+        for strategy_name in strategy_list:
+            if strategy_name == "ORB":
                 if not orb_enabled or self._orb_signal_used:
                     continue
                 if not (orb_end <= current_time <= entry_close):
@@ -369,18 +478,153 @@ class KiteORBTrader:
                 })
                 if not result["all_passed"]:
                     failed = [f"{k}={v.get('value','')}" for k, v in result["filters"].items() if not v.get("passed")]
-                    logger.info(f"ORB SKIP [{strategy_name}]: {', '.join(failed[:5])}")
+                    logger.info(f"ORB SKIP: {', '.join(failed[:5])}")
 
                 if result["all_passed"] and result["signal"]:
-                    sl_pct, target_pct = SL_TARGET_MAP.get(strategy_name, (0.30, 0.65))
+                    sl_pct, target_pct = SL_TARGET_BY_STRATEGY.get("ORB", (0.28, 0.60))
                     self._enter_trade(
-                        signal=result["signal"], strategy=strategy_name,
+                        signal=result["signal"], strategy="ORB",
                         candle=last_candle, atr=result["atr"],
                         filter_log=result["filters"], vix=effective_vix,
                         regime=regime, sl_pct_override=sl_pct,
-                        target_pct_override=target_pct,
+                        target_pct_override=target_pct, risk_multiplier=risk_multiplier,
                     )
                     self._orb_signal_used = True
+                    return
+
+            elif strategy_name == "RELAXED_ORB":
+                # Same as ORB but with relaxed range and body ratio — fires on wide-open days
+                if not orb_enabled or self._orb_signal_used:
+                    continue
+                if not (orb_end <= current_time <= entry_close):
+                    continue
+
+                result = evaluate_orb_signal(
+                    candles, last_candle, vix,
+                    orb_start=orb_start, orb_end=orb_end,
+                    min_orb_range_points=self.cfg.min_orb_range_points,
+                    max_orb_range_points=self.cfg.relaxed_orb_max_range_points,
+                    breakout_buffer_pct=self.cfg.breakout_buffer_pct,
+                    min_breakout_body_ratio=max(0.35, self.cfg.min_breakout_body_ratio - 0.10),
+                    min_volume_surge_ratio=max(1.0, self.cfg.min_volume_surge_ratio - 0.2),
+                    ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
+                    rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
+                    require_vwap_confirmation=self.cfg.require_vwap_confirmation,
+                    vwap_buffer_points=self.cfg.vwap_buffer_points,
+                    rsi_bull_min=self.cfg.rsi_bull_min, rsi_bear_max=self.cfg.rsi_bear_max,
+                    rsi_overbought_skip=self.cfg.rsi_overbought_skip,
+                    rsi_oversold_skip=self.cfg.rsi_oversold_skip,
+                    vix_max=self.cfg.vix_max,
+                )
+                _log_event("ORB_SCAN", {
+                    "strategy": "RELAXED_ORB", "regime": regime.regime,
+                    "signal": result.get("signal"), "all_passed": result["all_passed"],
+                    "filters": {
+                        k: {"passed": v.get("passed"), "value": v.get("value"), "detail": v.get("detail", "")}
+                        for k, v in result["filters"].items()
+                    },
+                })
+                if not result["all_passed"]:
+                    failed = [f"{k}={v.get('value','')}" for k, v in result["filters"].items() if not v.get("passed")]
+                    logger.info(f"ORB SKIP [RELAXED_ORB]: {', '.join(failed[:5])}")
+
+                if result["all_passed"] and result["signal"]:
+                    sl_pct, target_pct = SL_TARGET_BY_STRATEGY.get("RELAXED_ORB", (0.30, 0.55))
+                    self._enter_trade(
+                        signal=result["signal"], strategy="RELAXED_ORB",
+                        candle=last_candle, atr=result["atr"],
+                        filter_log=result["filters"], vix=effective_vix,
+                        regime=regime, sl_pct_override=sl_pct,
+                        target_pct_override=target_pct, risk_multiplier=risk_multiplier,
+                    )
+                    self._orb_signal_used = True
+                    return
+
+            elif strategy_name == "MOMENTUM_BREAKOUT":
+                if self._momentum_signal_used:
+                    continue
+                if not (mb_window_start <= current_time <= mb_window_end):
+                    continue
+
+                idx = len(candles) - 1
+                mb_result = evaluate_momentum_breakout_signal(
+                    candles, idx, vix,
+                    breakout_lookback=self.cfg.momentum_breakout_lookback,
+                    min_body_ratio=self.cfg.momentum_breakout_min_body_ratio,
+                    rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
+                    rsi_bull_min=self.cfg.momentum_breakout_rsi_bull_min,
+                    rsi_bull_max=self.cfg.momentum_breakout_rsi_bull_max,
+                    rsi_bear_min=self.cfg.momentum_breakout_rsi_bear_min,
+                    rsi_bear_max=self.cfg.momentum_breakout_rsi_bear_max,
+                    vix_max=self.cfg.vix_max,
+                    min_volume_surge_ratio=self.cfg.momentum_breakout_min_volume_surge,
+                    ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
+                )
+                mb_filters = mb_result.get("filters", {})
+                _log_event("MOMENTUM_SCAN", {
+                    "strategy": "MOMENTUM_BREAKOUT", "regime": regime.regime,
+                    "trend": trend.state.value,
+                    "signal": mb_result.get("signal"), "all_passed": mb_result["all_passed"],
+                    "filters": {
+                        k: {"passed": v.get("passed"), "value": v.get("value"), "detail": v.get("detail", "")}
+                        for k, v in mb_filters.items()
+                    } if mb_filters else {},
+                })
+                if not mb_result["all_passed"]:
+                    failed = [f"{k}={v.get('value','')}" for k, v in mb_filters.items() if not v.get("passed")]
+                    logger.info(f"MOMENTUM SKIP: {', '.join(failed[:5]) if failed else 'no breakout'}")
+
+                if mb_result["all_passed"] and mb_result["signal"]:
+                    sl_pct, target_pct = SL_TARGET_BY_STRATEGY.get("MOMENTUM_BREAKOUT", (0.22, 0.55))
+                    self._enter_trade(
+                        signal=mb_result["signal"], strategy="MOMENTUM_BREAKOUT",
+                        candle=last_candle, atr=mb_result["atr"],
+                        filter_log=mb_filters, vix=effective_vix,
+                        regime=regime, sl_pct_override=sl_pct,
+                        target_pct_override=target_pct, risk_multiplier=risk_multiplier,
+                    )
+                    self._momentum_signal_used = True
+                    return
+
+            elif strategy_name == "EMA_PULLBACK":
+                if self._ema_pullback_signal_used:
+                    continue
+                if not (pb_window_start <= current_time <= pb_window_end):
+                    continue
+
+                idx = len(candles) - 1
+                pb_result = evaluate_ema_pullback_signal(
+                    candles, idx, vix,
+                    ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
+                    pullback_proximity_pct=self.cfg.ema_pullback_proximity_pct,
+                    min_body_ratio=self.cfg.ema_pullback_min_body_ratio,
+                    rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
+                    vix_max=self.cfg.vix_max,
+                    lookback_candles=self.cfg.ema_pullback_lookback_candles,
+                )
+                pb_filters = pb_result.get("filters", {})
+                _log_event("EMA_PULLBACK_SCAN", {
+                    "strategy": "EMA_PULLBACK", "regime": regime.regime,
+                    "signal": pb_result.get("signal"), "all_passed": pb_result["all_passed"],
+                    "filters": {
+                        k: {"passed": v.get("passed"), "value": v.get("value"), "detail": v.get("detail", "")}
+                        for k, v in pb_filters.items()
+                    } if pb_filters else {},
+                })
+                if not pb_result["all_passed"]:
+                    failed = [f"{k}={v.get('value','')}" for k, v in pb_filters.items() if not v.get("passed")]
+                    logger.info(f"EMA_PULLBACK SKIP: {', '.join(failed[:5]) if failed else 'no setup'}")
+
+                if pb_result["all_passed"] and pb_result["signal"]:
+                    sl_pct, target_pct = SL_TARGET_BY_STRATEGY.get("EMA_PULLBACK", (0.25, 0.55))
+                    self._enter_trade(
+                        signal=pb_result["signal"], strategy="EMA_PULLBACK",
+                        candle=last_candle, atr=pb_result["atr"],
+                        filter_log=pb_filters, vix=effective_vix,
+                        regime=regime, sl_pct_override=sl_pct,
+                        target_pct_override=target_pct, risk_multiplier=risk_multiplier,
+                    )
+                    self._ema_pullback_signal_used = True
                     return
 
             elif strategy_name == "VWAP_RECLAIM":
@@ -410,13 +654,13 @@ class KiteORBTrader:
                     logger.info(f"VWAP SKIP: {', '.join(failed[:5]) if failed else 'no signal'}")
 
                 if reclaim["all_passed"] and reclaim["signal"]:
-                    sl_pct, target_pct = SL_TARGET_MAP.get("VWAP_RECLAIM", (0.30, 0.65))
+                    sl_pct, target_pct = SL_TARGET_BY_STRATEGY.get("VWAP_RECLAIM", (0.28, 0.60))
                     self._enter_trade(
                         signal=reclaim["signal"], strategy="VWAP_RECLAIM",
                         candle=last_candle, atr=reclaim["atr"],
                         filter_log=reclaim["filters"], vix=effective_vix,
                         regime=regime, sl_pct_override=sl_pct,
-                        target_pct_override=target_pct,
+                        target_pct_override=target_pct, risk_multiplier=risk_multiplier,
                     )
                     self._reclaim_signal_used = True
                     return
@@ -432,6 +676,7 @@ class KiteORBTrader:
         regime: RegimeResult,
         sl_pct_override: float = 0.30,
         target_pct_override: float = 0.65,
+        risk_multiplier: float = 1.0,
     ) -> None:
         signal_time = time.time()
         spot = float(candle["close"])
@@ -467,10 +712,14 @@ class KiteORBTrader:
         if is_thursday:
             sl_pct = min(sl_pct, self.cfg.thursday_max_loss_pct)
 
-        effective_risk_pct = self.cfg.risk_per_trade_pct
+        effective_risk_pct = self.cfg.risk_per_trade_pct * risk_multiplier
         if regime.regime == "VOLATILE":
-            effective_risk_pct *= 0.5
-            logger.info(f"VOLATILE: halving risk to {effective_risk_pct*100:.1f}%")
+            effective_risk_pct = min(effective_risk_pct, self.cfg.risk_per_trade_pct * 0.50)
+        if effective_risk_pct != self.cfg.risk_per_trade_pct:
+            logger.info(
+                f"RISK SCALED: {self.cfg.risk_per_trade_pct*100:.1f}% × {risk_multiplier:.2f} "
+                f"= {effective_risk_pct*100:.1f}% | regime={regime.regime}"
+            )
 
         size_info = self.risk.compute_position_size(entry_price=opt_price, sl_pct=sl_pct)
         lots = size_info["lots"]
@@ -479,11 +728,13 @@ class KiteORBTrader:
         sl_price = round(opt_price * (1 - sl_pct), 1)
         target_price = round(opt_price * (1 + target_pct_override), 1)
 
+        trend_info = f"{self._current_trend.state.value}" if self._current_trend else "?"
         logger.info(
-            f"SIGNAL: {strategy} {signal} [{regime.regime}] | {symbol} | "
-            f"LTP={opt_price:.2f} SL={sl_price:.2f} ({sl_pct*100:.0f}%) "
+            f"SIGNAL: {strategy} {signal} | trend={trend_info} regime={regime.regime} | "
+            f"{symbol} | LTP={opt_price:.2f} SL={sl_price:.2f} ({sl_pct*100:.0f}%) "
             f"TGT={target_price:.2f} ({target_pct_override*100:.0f}%) | "
-            f"Lots={lots} Qty={qty} Risk=₹{size_info['actual_risk']:.0f}"
+            f"Lots={lots} Qty={qty} Risk=₹{size_info['actual_risk']:.0f} "
+            f"(risk_mult={risk_multiplier:.2f})"
         )
 
         # Place entry order
@@ -538,6 +789,16 @@ class KiteORBTrader:
                 self._active_slm_order_id = None
 
         filter_log["regime"] = {"passed": True, "value": regime.regime, "detail": regime.detail}
+        if self._current_trend:
+            filter_log["trend"] = {
+                "passed": True,
+                "value": self._current_trend.state.value,
+                "detail": (
+                    f"direction={self._current_trend.direction} "
+                    f"conviction={self._current_trend.conviction:.2f} "
+                    f"risk_mult={risk_multiplier:.2f}"
+                ),
+            }
 
         self.sm.transition_to_entry_pending(
             symbol=symbol, direction=signal, option_type=opt_info["option_type"],
@@ -547,6 +808,11 @@ class KiteORBTrader:
             strategy=strategy, filter_log=filter_log, entry_order_id=order_id,
         )
         self.sm.confirm_entry(fill_price)
+        # Persist SL-M order ID so it survives bot restarts
+        if self._active_slm_order_id:
+            self.sm.position.slm_order_id = self._active_slm_order_id
+            from bot.state_machine import save_position
+            save_position(self.sm.position)
 
         _log_event("ENTRY", {
             "strategy": strategy, "regime": regime.regime, "signal": signal,
@@ -657,6 +923,48 @@ class KiteORBTrader:
                         f"state={self.sm.position.state.value}"
                     )
                     _log_event("HEARTBEAT", hb_data)
+
+                # Broker reconciliation every 60s — detects manual exits and external closes
+                if self.sm.is_active:
+                    now_ts = time.time()
+                    if now_ts - self._last_broker_sync >= 60:
+                        self._last_broker_sync = now_ts
+                        try:
+                            broker_qty = self.client.get_open_qty(self.sm.position.symbol)
+                            current_price = self.client.get_quote(self.sm.position.symbol, "NFO")
+                            symbol_before_sync = self.sm.position.symbol
+                            expected_qty = self.sm.position.qty
+                            was_synced = self.sm.sync_with_broker(broker_qty, last_price=current_price)
+                            if was_synced:
+                                if broker_qty == 0:
+                                    logger.warning(
+                                        f"BROKER SYNC: {symbol_before_sync} fully closed externally "
+                                        f"(expected qty={expected_qty}, broker=0)"
+                                    )
+                                    _log_event("BROKER_SYNC_CLOSED", {
+                                        "symbol": symbol_before_sync,
+                                        "expected_qty": expected_qty,
+                                        "broker_qty": broker_qty,
+                                        "last_price": current_price,
+                                    })
+                                    self._active_slm_order_id = None
+                                    self._notify(
+                                        "⚠️ BROKER SYNC: Position closed externally\n"
+                                        f"Symbol: {symbol_before_sync}\n"
+                                        "Check Kite for details."
+                                    )
+                                else:
+                                    logger.warning(
+                                        f"BROKER SYNC: {symbol_before_sync} partially closed externally "
+                                        f"(expected qty={expected_qty}, broker={broker_qty}) — qty updated"
+                                    )
+                                    _log_event("BROKER_SYNC_PARTIAL", {
+                                        "symbol": symbol_before_sync,
+                                        "expected_qty": expected_qty,
+                                        "broker_qty": broker_qty,
+                                    })
+                        except Exception as e:
+                            logger.warning(f"Broker sync check failed: {e}")
 
                 if self.sm.is_active:
                     self._manage_active_position(now, candles)

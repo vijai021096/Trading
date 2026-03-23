@@ -38,10 +38,11 @@ import { FilterVisualizer } from '../components/panels/FilterVisualizer'
 const FILTERS = [
   'All',
   'ORB',
-  'VWAP_RECLAIM',
+  'MOMENTUM_BREAKOUT',
   'EMA_PULLBACK',
-  'MEAN_REVERSION',
+  'VWAP_RECLAIM',
   'RELAXED_ORB',
+  'MEAN_REVERSION',
   'RANGE_FADE',
   'Wins',
   'Losses',
@@ -800,9 +801,10 @@ export function TradeHistory() {
                               t.strategy === 'VWAP_RECLAIM' && 'bg-cyan/10 text-cyan',
                               t.strategy === 'MEAN_REVERSION' && 'bg-accent/10 text-accent-l',
                               t.strategy === 'EMA_PULLBACK' && 'bg-green/10 text-green',
+                              t.strategy === 'MOMENTUM_BREAKOUT' && 'bg-green/15 text-green border border-green/20',
                               t.strategy === 'RELAXED_ORB' && 'bg-amber/8 text-amber border border-amber/15',
                               t.strategy === 'RANGE_FADE' && 'bg-cyan/8 text-cyan border border-cyan/15',
-                              !['ORB', 'VWAP_RECLAIM', 'MEAN_REVERSION', 'EMA_PULLBACK', 'RELAXED_ORB', 'RANGE_FADE'].includes(
+                              !['ORB', 'VWAP_RECLAIM', 'MEAN_REVERSION', 'EMA_PULLBACK', 'MOMENTUM_BREAKOUT', 'RELAXED_ORB', 'RANGE_FADE'].includes(
                                 t.strategy,
                               ) && 'bg-surface text-text2',
                             )}

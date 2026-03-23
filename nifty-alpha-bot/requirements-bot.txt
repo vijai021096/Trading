@@ -1,6 +1,5 @@
 kiteconnect==4.2.0
 pandas==2.2.2
-pandas-ta==0.3.14b0
 numpy==1.26.4
 scipy==1.13.0
 pydantic==2.7.0
