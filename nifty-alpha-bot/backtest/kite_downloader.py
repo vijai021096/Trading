@@ -180,14 +180,13 @@ def run_kite_backtest(months: int = 12, verbose: bool = False):
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
     from kite_broker.client import KiteClient
-    from kite_broker.token_manager import TokenManager
+    from kite_broker.token_manager import load_cached_token
     from shared.config import settings
     from backtest.backtest_engine import BacktestConfig, run_backtest
     from backtest.run import print_report, save_results
 
     print("[KiteBacktest] Authenticating with Kite...")
-    tm = TokenManager(settings)
-    access_token = tm.load_token()
+    access_token = load_cached_token()
     if not access_token:
         print("ERROR: No saved access_token. Log in first via https://bot.fynos.in/api/kite/login")
         return
