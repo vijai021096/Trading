@@ -56,11 +56,11 @@ STRATEGY_PRIORITY_BY_TREND: Dict[str, List[str]] = {
 
 # SL / target multipliers per strategy (sl_pct, target_pct)
 SL_TARGET_BY_STRATEGY: Dict[str, tuple] = {
-    "ORB":                (0.28, 0.60),
-    "RELAXED_ORB":        (0.30, 0.55),
-    "EMA_PULLBACK":       (0.25, 0.55),
-    "VWAP_RECLAIM":       (0.28, 0.60),
-    "MOMENTUM_BREAKOUT":  (0.22, 0.55),   # Tighter SL — momentum trades reverse fast
+    "ORB":                (0.28, 0.65),
+    "RELAXED_ORB":        (0.28, 0.58),
+    "EMA_PULLBACK":       (0.30, 0.65),
+    "VWAP_RECLAIM":       (0.28, 0.65),
+    "MOMENTUM_BREAKOUT":  (0.22, 0.55),
 }
 
 
@@ -227,3 +227,109 @@ def detect_trend(
         scores=scores,
         detail=" | ".join(parts),
     )
+
+
+# ── Signal Confidence Scoring ─────────────────────────────────────
+# Backtest win-rate per strategy (from 2-year optimized results)
+STRATEGY_BACKTEST_WR = {
+    "EMA_PULLBACK":       0.54,
+    "RELAXED_ORB":        0.55,
+    "VWAP_RECLAIM":       0.50,
+    "ORB":                0.34,
+    "MOMENTUM_BREAKOUT":  0.40,
+    "MEAN_REVERSION":     0.50,
+    "RANGE_FADE":         0.40,
+}
+
+# Backtest profit factor per strategy
+STRATEGY_BACKTEST_PF = {
+    "EMA_PULLBACK":       3.35,
+    "RELAXED_ORB":        3.45,
+    "VWAP_RECLAIM":       2.84,
+    "ORB":                1.34,
+    "MOMENTUM_BREAKOUT":  1.50,
+    "MEAN_REVERSION":     4.09,
+    "RANGE_FADE":         1.31,
+}
+
+# Which regime each strategy is strongest in
+STRATEGY_REGIME_AFFINITY = {
+    "ORB":                {"TRENDING": 1.2, "RANGING": 0.6, "VOLATILE": 0.4},
+    "RELAXED_ORB":        {"TRENDING": 1.0, "RANGING": 0.8, "VOLATILE": 0.5},
+    "EMA_PULLBACK":       {"TRENDING": 1.3, "RANGING": 0.9, "VOLATILE": 0.5},
+    "VWAP_RECLAIM":       {"TRENDING": 0.9, "RANGING": 1.2, "VOLATILE": 0.8},
+    "MOMENTUM_BREAKOUT":  {"TRENDING": 1.3, "RANGING": 0.5, "VOLATILE": 0.3},
+    "MEAN_REVERSION":     {"TRENDING": 0.5, "RANGING": 1.3, "VOLATILE": 0.7},
+    "RANGE_FADE":         {"TRENDING": 0.4, "RANGING": 1.2, "VOLATILE": 0.6},
+}
+
+
+@dataclass
+class SignalCandidate:
+    strategy: str
+    signal: str       # CALL / PUT
+    confidence: float  # 0-100
+    regime_fit: float  # multiplier
+    filters: dict
+    sl_pct: float
+    target_pct: float
+    detail: str = ""
+
+
+def compute_signal_confidence(
+    strategy: str,
+    signal: str,
+    regime: str,
+    trend: TrendResult,
+    filters: dict,
+    vix: float = 15.0,
+) -> float:
+    """
+    Score 0-100 based on how many quality factors align.
+    Used to rank multiple concurrent signals and pick the strongest.
+    """
+    score = 40.0  # base
+
+    # 1. Backtest win-rate bonus (0-15 pts)
+    wr = STRATEGY_BACKTEST_WR.get(strategy, 0.40)
+    score += (wr - 0.35) * 75  # 50% WR → +11.25 pts, 55% → +15 pts
+
+    # 2. Regime alignment (0-15 pts)
+    affinity = STRATEGY_REGIME_AFFINITY.get(strategy, {}).get(regime, 0.8)
+    score += (affinity - 0.5) * 20  # 1.3 → +16 pts, 0.5 → 0 pts
+
+    # 3. Trend-signal alignment (0-12 pts)
+    if trend.direction == signal:
+        score += 8 + trend.conviction * 4  # aligned with trend → big bonus
+    elif trend.direction == "NEUTRAL":
+        score += 2  # neutral is ok
+    else:
+        score -= 5  # counter-trend penalty
+
+    # 4. VIX penalty — high VIX reduces confidence
+    if vix > 25:
+        score -= (vix - 25) * 0.8
+    elif vix < 15:
+        score += 3  # calm market bonus
+
+    # 5. Filter quality bonus — count how many extra filters passed
+    if filters:
+        passed = 0
+        total = 0
+        for k, v in filters.items():
+            if k == "regime":
+                continue
+            total += 1
+            if v is True:
+                passed += 1
+            elif isinstance(v, dict) and v.get("passed"):
+                passed += 1
+        if total > 0:
+            quality = passed / total
+            score += quality * 8  # all filters pass → +8 pts
+
+    # 6. Profit factor bonus (0-10 pts)
+    pf = STRATEGY_BACKTEST_PF.get(strategy, 1.5)
+    score += min(10, (pf - 1.0) * 5)  # PF 3.0 → +10 pts
+
+    return round(max(0, min(100, score)), 1)

@@ -24,6 +24,7 @@ interface LogEntry {
 
 const EVENT_TYPES = [
   { id: 'ALL',                label: 'All',            color: 'text3'  },
+  { id: 'SCAN_CYCLE',        label: 'Scan Cycle',     color: 'accent' },
   { id: 'TREND_DETECTED',    label: 'Trend',          color: 'green'  },
   { id: 'REGIME_DETECTED',   label: 'Regime',         color: 'cyan'   },
   { id: 'ORB_SCAN',          label: 'ORB',            color: 'amber'  },
@@ -91,8 +92,10 @@ export function LogsPage() {
     const slmFills = logs.filter(l => l.event === 'SLM_EXECUTED').length
     const heartbeats = logs.filter(l => l.event === 'HEARTBEAT').length
     const riskBlocked = logs.filter(l => l.event === 'RISK_BLOCKED').length
+    const scanCycles = logs.filter(l => l.event === 'SCAN_CYCLE').length
+    const multiSignals = logs.filter(l => l.event === 'SCAN_CYCLE' && (l.signals_detected ?? 0) > 1).length
     const skipped = orb + vwap - entries
-    return { orb, vwap, entries, skipped, slmFills, heartbeats, riskBlocked }
+    return { orb, vwap, entries, skipped, slmFills, heartbeats, riskBlocked, scanCycles, multiSignals }
   }, [logs])
 
   return (
@@ -130,7 +133,8 @@ export function LogsPage() {
           { label: 'VWAP Scans', value: scanCount.vwap, color: 'cyan', icon: Radio },
           { label: 'Entries Taken', value: scanCount.entries, color: 'green', icon: ArrowUpRight },
           { label: 'Signals Skipped', value: scanCount.skipped, color: 'red', icon: XCircle },
-          { label: 'Heartbeats', value: scanCount.heartbeats, color: 'green', icon: Radio },
+          { label: 'Scan Cycles', value: scanCount.scanCycles, color: 'cyan', icon: Eye },
+          { label: 'Multi-Signal', value: scanCount.multiSignals, color: 'green', icon: Zap },
           { label: 'Risk Blocked', value: scanCount.riskBlocked, color: 'red', icon: XCircle },
         ].map(({ label, value, color, icon: Icon }) => {
           const borderMap = { amber: 'border-l-amber', cyan: 'border-l-cyan', green: 'border-l-green', red: 'border-l-red' } as const
@@ -208,7 +212,8 @@ export function LogsPage() {
           <div className="divide-y divide-line/10 max-h-[calc(100vh-350px)] overflow-y-auto">
             {filtered.map((log, i) => {
               const isExp = expanded === i
-              const isScan = log.event === 'ORB_SCAN' || log.event === 'RECLAIM_SCAN'
+              const isScan = log.event === 'ORB_SCAN' || log.event === 'RECLAIM_SCAN' || log.event === 'EMA_PULLBACK_SCAN' || log.event === 'MOMENTUM_SCAN'
+              const isScanCycle = log.event === 'SCAN_CYCLE'
               const isEntry = log.event === 'ENTRY'
               const isTrade = log.event === 'TRADE_CLOSED'
               const isError = log.event === 'LOOP_ERROR'
@@ -231,6 +236,7 @@ export function LogsPage() {
                   <div className="flex items-start gap-3">
                     {/* Event type indicator */}
                     <div className={clsx('w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5',
+                      isScanCycle ? 'bg-accent/10' :
                       isHB ? 'bg-green/8' :
                       isSystem ? 'bg-cyan/10' :
                       isKiteAuth ? 'bg-accent/10' :
@@ -241,7 +247,8 @@ export function LogsPage() {
                       isError ? 'bg-red/10' :
                       isScan && passed ? 'bg-green/10' :
                       isScan ? 'bg-amber/10' : 'bg-surface')}>
-                      {isHB ? <Radio size={14} className="text-green" /> :
+                      {isScanCycle ? <Eye size={14} className="text-accent" /> :
+                       isHB ? <Radio size={14} className="text-green" /> :
                        isSystem ? <Zap size={14} className="text-cyan" /> :
                        isKiteAuth ? <Key size={14} className="text-accent" /> :
                        isRiskBlocked ? <XCircle size={14} className="text-red" /> :
@@ -271,16 +278,67 @@ export function LogsPage() {
 
                         {/* Signal indicator */}
                         {isScan && (
-                          <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold',
-                            passed ? 'bg-green/10 text-green' : 'bg-red/8 text-text3')}>
-                            {passed ? `SIGNAL: ${log.signal || '—'}` : 'NO SIGNAL'}
-                          </span>
+                          <>
+                            <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold',
+                              passed ? 'bg-green/10 text-green' : 'bg-red/8 text-text3')}>
+                              {passed ? `SIGNAL: ${log.signal || '—'}` : 'NO SIGNAL'}
+                            </span>
+                            {log.confidence != null && (
+                              <span className={clsx('px-1 py-0.5 rounded text-[8px] font-bold font-mono',
+                                log.confidence >= 70 ? 'bg-green/10 text-green' : log.confidence >= 50 ? 'bg-amber/10 text-amber' : 'bg-surface text-text3')}>
+                                conf={Math.round(log.confidence)}
+                              </span>
+                            )}
+                            {log.regime && (
+                              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-surface text-text3">{log.regime}</span>
+                            )}
+                          </>
+                        )}
+
+                        {/* SCAN_CYCLE — aggregated results */}
+                        {isScanCycle && (
+                          <>
+                            <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold',
+                              log.signals_detected > 0 ? 'bg-green/10 text-green' : 'bg-surface text-text3')}>
+                              {log.signals_detected > 0 ? `${log.signals_detected} SIGNAL${log.signals_detected > 1 ? 'S' : ''}` : 'NO SIGNAL'}
+                            </span>
+                            <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-surface text-text3">
+                              {log.strategies_evaluated} scanned · {log.regime} · {log.trend}
+                            </span>
+                            {log.conviction != null && (
+                              <span className={clsx('px-1 py-0.5 rounded text-[8px] font-bold font-mono',
+                                log.conviction >= 0.7 ? 'bg-green/10 text-green' : log.conviction >= 0.4 ? 'bg-amber/10 text-amber' : 'bg-surface text-text3')}>
+                                conv={Math.round(log.conviction * 100)}%
+                              </span>
+                            )}
+                            {log.candidates?.length > 0 && (
+                              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-accent/10 text-accent-l">
+                                BEST: {log.candidates[0].strategy} ({log.candidates[0].signal}, conf={Math.round(log.candidates[0].confidence)})
+                              </span>
+                            )}
+                          </>
                         )}
 
                         {isEntry && log.strategy && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-accent/10 text-accent-l">
-                            {log.strategy} · {log.signal}
-                          </span>
+                          <>
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-accent/10 text-accent-l">
+                              {log.strategy} · {log.signal}
+                            </span>
+                            {log.confidence != null && (
+                              <span className={clsx('px-1 py-0.5 rounded text-[8px] font-bold font-mono',
+                                log.confidence >= 70 ? 'bg-green/10 text-green' : log.confidence >= 50 ? 'bg-amber/10 text-amber' : 'bg-surface text-text3')}>
+                                conf={Math.round(log.confidence)}
+                              </span>
+                            )}
+                            {log.trend && (
+                              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-surface text-text3">{log.trend}</span>
+                            )}
+                            {log.risk_multiplier != null && (
+                              <span className="px-1 py-0.5 rounded text-[8px] font-bold font-mono bg-surface text-text3">
+                                risk×{log.risk_multiplier.toFixed(2)}
+                              </span>
+                            )}
+                          </>
                         )}
 
                         {isTrade && (
@@ -378,6 +436,19 @@ export function LogsPage() {
                       {isHB && log.thinking && !isExp && (
                         <div className="text-[10px] text-text2 mt-1 italic">
                           {log.thinking}
+                          {log.regime && <span className="not-italic ml-2 text-text3">· Regime: {log.regime} · Trend: {log.trend_state ?? '—'}</span>}
+                        </div>
+                      )}
+
+                      {/* Scan cycle summary */}
+                      {isScanCycle && !isExp && log.scans?.length > 0 && (
+                        <div className="text-[10px] text-text3 mt-1 flex items-center gap-1.5 flex-wrap">
+                          {(log.scans as Array<{strategy: string; passed: boolean; confidence: number}>).map((s: {strategy: string; passed: boolean; confidence: number}, si: number) => (
+                            <span key={si} className={clsx('px-1 py-0.5 rounded text-[8px] font-bold',
+                              s.passed ? 'bg-green/10 text-green' : 'bg-surface text-text3')}>
+                              {s.strategy.replace(/_/g, ' ')} {s.passed ? '✓' : '✗'} ({Math.round(s.confidence)})
+                            </span>
+                          ))}
                         </div>
                       )}
 
@@ -435,6 +506,27 @@ export function LogsPage() {
                       <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
                         exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
                         <div className="mt-3 pt-3 border-t border-line/15">
+
+                          {/* Scan cycle expanded detail */}
+                          {isScanCycle && log.candidates?.length > 0 && (
+                            <div className="mb-3">
+                              <div className="text-[10px] font-bold text-text3 uppercase tracking-wider mb-2">Signal Candidates (ranked by confidence)</div>
+                              <div className="space-y-1.5">
+                                {(log.candidates as Array<{strategy: string; signal: string; confidence: number}>).map((c: {strategy: string; signal: string; confidence: number}, ci: number) => (
+                                  <div key={ci} className={clsx('flex items-center justify-between px-3 py-2 rounded-lg border',
+                                    ci === 0 ? 'bg-green/5 border-green/20' : 'bg-surface/30 border-line/15')}>
+                                    <div className="flex items-center gap-2">
+                                      <span className={clsx('text-[10px] font-bold', ci === 0 ? 'text-green' : 'text-text3')}>{ci + 1}</span>
+                                      <span className="text-[11px] font-bold text-text1">{c.strategy.replace(/_/g, ' ')}</span>
+                                      <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold', c.signal === 'CALL' ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>{c.signal}</span>
+                                      {ci === 0 && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-green/10 text-green">SELECTED</span>}
+                                    </div>
+                                    <span className={clsx('text-sm font-bold font-mono', c.confidence >= 70 ? 'text-green' : c.confidence >= 50 ? 'text-amber' : 'text-text3')}>{Math.round(c.confidence)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
 
                           {/* Filter breakdown for scans */}
                           {isScan && filterEntries.length > 0 && (

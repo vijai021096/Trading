@@ -362,6 +362,9 @@ async def heartbeat_loop():
             trend_ev = mkt_state.get("trend") or {}
             regime_ev = mkt_state.get("regime") or {}
 
+            # Latest scan cycle data
+            scan_data = _get_latest_event("SCAN_CYCLE") or {}
+
             payload = {
                 "state": pos_state,
                 "market_status": market_status,
@@ -374,15 +377,19 @@ async def heartbeat_loop():
                 "max_trades": settings.max_trades_per_day,
                 "daily_pnl": round(today_pnl, 2),
                 "current_capital": risk_data.get("current_capital", settings.capital),
+                "starting_capital": settings.capital,
                 "peak_capital": risk_data.get("peak_capital", settings.capital),
                 "drawdown_pct": round(
                     ((risk_data.get("peak_capital", settings.capital) - risk_data.get("current_capital", settings.capital))
                      / max(risk_data.get("peak_capital", settings.capital), 1)) * 100, 1
                 ) if risk_data else 0.0,
+                "max_drawdown_pct": settings.max_drawdown_pct,
                 "halt_active": halt_active,
                 "strategies": strat_data,
                 "paper_mode": settings.paper_mode,
                 "consecutive_losses": risk_data.get("consecutive_losses", 0),
+                "risk_per_trade_pct": settings.risk_per_trade_pct,
+                "max_daily_loss_pct": settings.max_daily_loss_pct,
                 # Market intelligence fields
                 "trend_state": trend_ev.get("state"),
                 "trend_direction": trend_ev.get("direction"),
@@ -395,6 +402,15 @@ async def heartbeat_loop():
                 "regime_adx": regime_ev.get("adx_proxy"),
                 "regime_vix": regime_ev.get("vix"),
                 "regime_rsi": regime_ev.get("rsi"),
+                # Scan cycle intelligence
+                "last_scan": {
+                    "strategies_evaluated": scan_data.get("strategies_evaluated", 0),
+                    "signals_detected": scan_data.get("signals_detected", 0),
+                    "candidates": scan_data.get("candidates", []),
+                    "scans": scan_data.get("scans", []),
+                } if scan_data else None,
+                # Position details (if active)
+                "position": pos if pos_state == "ACTIVE" else None,
             }
 
             append_bot_event("HEARTBEAT", payload)
@@ -402,6 +418,24 @@ async def heartbeat_loop():
         except Exception:
             pass
         await asyncio.sleep(10)
+
+
+def _get_latest_event(event_type: str) -> Optional[dict]:
+    """Get the most recent event of a given type from the events log."""
+    if not EVENTS_LOG.exists():
+        return None
+    try:
+        lines = EVENTS_LOG.read_text().strip().split("\n")
+        for line in reversed(lines[-500:]):
+            try:
+                ev = json.loads(line)
+                if ev.get("event") == event_type:
+                    return ev
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None
 
 
 # ── Helpers ───────────────────────────────────────────────────────
@@ -631,20 +665,48 @@ def clear_emergency_stop():
 @app.get("/api/strategy/config")
 def get_config():
     try:
-        from shared.config import settings
+        from shared.trend_detector import (
+            SL_TARGET_BY_STRATEGY, STRATEGY_PRIORITY_BY_TREND,
+            STRATEGY_BACKTEST_WR, STRATEGY_BACKTEST_PF,
+        )
         return {
             "capital": settings.capital,
+            "lot_size": settings.lot_size,
             "vix_max": settings.vix_max,
             "atr_sl_min_pct": settings.atr_sl_min_pct,
             "atr_sl_max_pct": settings.atr_sl_max_pct,
             "rr_min": settings.rr_min,
             "max_trades_per_day": settings.max_trades_per_day,
             "max_daily_loss_pct": settings.max_daily_loss_pct,
+            "max_daily_loss_hard": settings.max_daily_loss_hard,
+            "max_drawdown_pct": settings.max_drawdown_pct,
+            "risk_per_trade_pct": settings.risk_per_trade_pct,
             "paper_mode": settings.paper_mode,
             "orb_start": settings.orb_start,
             "orb_end": settings.orb_end,
+            "entry_window_close": settings.entry_window_close,
+            "reclaim_window_start": settings.reclaim_window_start,
+            "reclaim_window_end": settings.reclaim_window_end,
+            "ema_pullback_window_start": settings.ema_pullback_window_start,
+            "ema_pullback_window_end": settings.ema_pullback_window_end,
+            "momentum_breakout_window_start": settings.momentum_breakout_window_start,
+            "momentum_breakout_window_end": settings.momentum_breakout_window_end,
             "trail_trigger_pct": settings.trail_trigger_pct,
             "break_even_trigger_pct": settings.break_even_trigger_pct,
+            "use_limit_orders": settings.use_limit_orders,
+            "use_slm_exit": settings.use_slm_exit,
+            "limit_price_buffer_pct": settings.limit_price_buffer_pct,
+            "sl_target_by_strategy": {
+                k: {"sl_pct": v[0], "target_pct": v[1]} for k, v in SL_TARGET_BY_STRATEGY.items()
+            },
+            "strategy_priority_by_trend": {
+                k.value if hasattr(k, "value") else k: v
+                for k, v in STRATEGY_PRIORITY_BY_TREND.items()
+            },
+            "backtest_stats": {
+                s: {"win_rate": STRATEGY_BACKTEST_WR.get(s, 0), "profit_factor": STRATEGY_BACKTEST_PF.get(s, 0)}
+                for s in SL_TARGET_BY_STRATEGY
+            },
         }
     except Exception as e:
         raise HTTPException(500, str(e))

@@ -14,7 +14,7 @@ import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
 import { useTradingStore } from '../stores/tradingStore'
 
 export function Dashboard() {
-  const { position, trades, events, dailyPnl, connected, lastUpdate, emergencyStop } = useTradingStore()
+  const { position, trades, events, dailyPnl, connected, lastUpdate, emergencyStop, botStatus, marketState } = useTradingStore()
   const isActive = position.state === 'ACTIVE'
 
   const todayTrades = useMemo(() =>
@@ -25,11 +25,18 @@ export function Dashboard() {
     return todayTrades.map(t => ({ time: new Date(t.entry_ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }), pnl: sum += t.net_pnl }))
   }, [todayTrades])
 
-  const h = new Date().getHours()
-  const m = new Date().getMinutes()
-  const marketOpen = h >= 9 && (h < 15 || (h === 15 && m <= 30))
-  const todayCount = dailyPnl?.trades ?? 0
-  const pnl = dailyPnl?.net_pnl ?? 0
+  const marketOpen = botStatus?.market_open ?? (new Date().getHours() >= 9 && (new Date().getHours() < 15 || (new Date().getHours() === 15 && new Date().getMinutes() <= 30)))
+  const marketStatus = botStatus?.market_status ?? (marketOpen ? 'OPEN' : 'CLOSED')
+  const todayCount = botStatus?.trades_today ?? dailyPnl?.trades ?? 0
+  const maxTrades = botStatus?.max_trades ?? 3
+  const pnl = botStatus?.daily_pnl ?? dailyPnl?.net_pnl ?? 0
+  const currentCapital = botStatus?.current_capital ?? 25000
+  const startingCapital = botStatus?.starting_capital ?? 25000
+  const drawdownPct = botStatus?.drawdown_pct ?? 0
+  const isHalted = botStatus?.halt_active ?? emergencyStop
+  const thinking = botStatus?.thinking ?? ''
+  const kiteConnected = botStatus?.kite_connected ?? false
+  const paperMode = botStatus?.paper_mode ?? true
 
   const maxPnl = Math.max(...todayTrades.map(t => t.net_pnl), 0)
   const minPnl = Math.min(...todayTrades.map(t => t.net_pnl), 0)
@@ -37,25 +44,31 @@ export function Dashboard() {
   return (
     <div className="px-5 lg:px-8 py-6 max-w-[1640px] mx-auto space-y-5">
 
-      {/* Market Status */}
+      {/* Market Status Bar */}
       <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
         className="glass rounded-2xl px-5 py-3 flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-4">
           <div className={clsx('flex items-center gap-2 px-3 py-1 rounded-xl text-xs font-bold uppercase tracking-wider',
-            marketOpen ? 'bg-green/10 text-green' : 'bg-surface text-text3')}>
-            <span className={clsx('w-2 h-2 rounded-full', marketOpen ? 'bg-green animate-pulse' : 'bg-text3')} />
-            {marketOpen ? 'NSE Open' : 'Market Closed'}
+            marketStatus === 'OPEN' ? 'bg-green/10 text-green' : marketStatus === 'PRE_MARKET' ? 'bg-amber/10 text-amber' : 'bg-surface text-text3')}>
+            <span className={clsx('w-2 h-2 rounded-full', marketStatus === 'OPEN' ? 'bg-green animate-pulse' : marketStatus === 'PRE_MARKET' ? 'bg-amber animate-pulse' : 'bg-text3')} />
+            {marketStatus === 'OPEN' ? 'NSE Open' : marketStatus === 'PRE_MARKET' ? 'Pre-Market' : marketStatus === 'POST_MARKET' ? 'Post-Market' : marketStatus === 'WEEKEND' ? 'Weekend' : 'Market Closed'}
           </div>
-          <span className="text-sm text-text3 hidden sm:block">Session 9:15 AM – 3:30 PM IST</span>
+          {paperMode && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-amber/10 text-amber uppercase tracking-wider">Paper Mode</span>
+          )}
+          {thinking && (
+            <span className="text-xs text-text3 hidden lg:block truncate max-w-[340px]">{thinking}</span>
+          )}
         </div>
         <div className="flex items-center gap-4 text-sm">
           <div className="flex items-center gap-2">
-            <Activity size={14} className={connected ? 'text-green' : 'text-red'} />
-            <span className={clsx('font-semibold', connected ? 'text-green' : 'text-red')}>
-              {connected ? 'Live Connected' : 'Disconnected'}
+            <Activity size={14} className={kiteConnected ? 'text-green' : connected ? 'text-amber' : 'text-red'} />
+            <span className={clsx('font-semibold', kiteConnected ? 'text-green' : connected ? 'text-amber' : 'text-red')}>
+              {kiteConnected ? 'Kite Live' : connected ? 'WS Only' : 'Disconnected'}
             </span>
           </div>
-          {emergencyStop && (
+          <span className="text-xs font-mono text-text3 hidden sm:block">₹{currentCapital.toLocaleString('en-IN')}</span>
+          {isHalted && (
             <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-red/15 text-red text-xs font-bold animate-pulse">
               <AlertCircle size={12} /> HALT ACTIVE
             </div>
@@ -139,15 +152,15 @@ export function Dashboard() {
             <span className="text-xs font-bold tracking-widest uppercase text-text3">Trades Today</span>
             <Layers size={16} className="text-text3" />
           </div>
-          <div className="text-2xl font-black text-text1">{todayCount} / 3</div>
+          <div className="text-2xl font-black text-text1">{todayCount} / {maxTrades}</div>
           <div className="flex gap-2 mt-3">
-            {[0,1,2].map(i => (
+            {Array.from({ length: maxTrades }, (_, i) => (
               <div key={i} className={clsx('flex-1 h-2 rounded-full transition-all',
                 i < todayCount ? 'bg-accent glow-accent' : 'bg-surface')} />
             ))}
           </div>
           <div className="text-sm text-text3 mt-2">
-            {todayCount >= 3 ? <span className="text-amber font-bold">LIMIT REACHED</span> : 'Max 3 per day'}
+            {todayCount >= maxTrades ? <span className="text-amber font-bold">LIMIT REACHED</span> : `Max ${maxTrades} per day`}
           </div>
         </motion.div>
       </div>
@@ -223,12 +236,13 @@ export function Dashboard() {
                     {marketOpen ? 'Scanning' : 'Offline'}
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
                   {[
                     { name: 'ORB', desc: 'Opening Range Breakout', time: '9:30–10:00', icon: Flame, color: 'text-amber' },
-                    { name: 'MOMENTUM', desc: 'N-candle range breakout', time: '9:30–12:00', icon: Zap, color: 'text-green' },
-                    { name: 'EMA PULLBACK', desc: 'EMA21 bounce on trend', time: '9:30–1:00', icon: TrendingUp, color: 'text-accent' },
-                    { name: 'VWAP RECLAIM', desc: 'VWAP cross confirmation', time: '10:00–2:30', icon: Waves, color: 'text-cyan' },
+                    { name: 'RELAXED ORB', desc: 'Wide-range breakout', time: '9:30–10:00', icon: Flame, color: 'text-amber' },
+                    { name: 'EMA PULLBACK', desc: 'EMA21 bounce on trend', time: '9:30–1:00 PM', icon: TrendingUp, color: 'text-accent' },
+                    { name: 'MOMENTUM', desc: 'N-candle range breakout', time: '9:30–12:00 PM', icon: Zap, color: 'text-green' },
+                    { name: 'VWAP RECLAIM', desc: 'VWAP cross confirmation', time: '10:00–1:30 PM', icon: Waves, color: 'text-cyan' },
                   ].map(({ name, desc, time, icon: Icon, color }) => (
                     <div key={name} className="bg-surface/50 rounded-xl p-3 border border-line/20 hover:border-line/40 transition-all group">
                       <div className="flex items-center gap-2 mb-1.5">
@@ -378,12 +392,14 @@ export function Dashboard() {
               <span className="text-sm font-bold uppercase tracking-widest text-text3">Risk Monitor</span>
             </div>
             {(() => {
-              const lossLimit = 5000
-              const riskPct = Math.min(100, Math.max(0, pnl < 0 ? (Math.abs(pnl) / lossLimit) * 100 : 0))
+              const maxDailyLossPct = botStatus?.max_daily_loss_pct ?? 0.08
+              const lossLimit = Math.round(currentCapital * maxDailyLossPct)
+              const riskPct = Math.min(100, Math.max(0, pnl < 0 ? (Math.abs(pnl) / Math.max(lossLimit, 1)) * 100 : 0))
               const riskLevel = riskPct > 80 ? 'CRITICAL' : riskPct > 50 ? 'HIGH' : riskPct > 20 ? 'MODERATE' : 'LOW'
               const riskTextClass = riskPct > 50 ? 'text-red' : riskPct > 20 ? 'text-amber' : 'text-green'
               const riskBgClass = riskPct > 50 ? 'bg-red' : riskPct > 20 ? 'bg-amber' : 'bg-green'
               const riskBadgeClass = riskPct > 50 ? 'bg-red/15 text-red' : riskPct > 20 ? 'bg-amber/15 text-amber' : 'bg-green/15 text-green'
+              const maxDD = botStatus?.max_drawdown_pct ?? 20
               return (
                 <div className="space-y-4">
                   <div className="flex justify-between text-sm">
@@ -399,6 +415,32 @@ export function Dashboard() {
                       <ShieldCheck size={11} /> {riskLevel}
                     </span>
                     <span className="text-sm text-text3 font-mono">Limit: ₹{lossLimit.toLocaleString('en-IN')}</span>
+                  </div>
+                  <div className="border-t border-line/15 pt-3 space-y-2.5">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-text3">Capital</span>
+                      <span className="font-bold font-mono text-text1">₹{currentCapital.toLocaleString('en-IN')}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-text3">Drawdown</span>
+                      <span className={clsx('font-bold font-mono', drawdownPct > 10 ? 'text-red' : drawdownPct > 5 ? 'text-amber' : 'text-green')}>
+                        {drawdownPct.toFixed(1)}% / {maxDD}%
+                      </span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-surface overflow-hidden">
+                      <div className={clsx('h-full rounded-full transition-all', drawdownPct > 10 ? 'bg-red' : drawdownPct > 5 ? 'bg-amber' : 'bg-green')}
+                        style={{ width: `${Math.min(100, (drawdownPct / maxDD) * 100)}%` }} />
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-text3">Risk/Trade</span>
+                      <span className="font-bold font-mono text-text2">{((botStatus?.risk_per_trade_pct ?? 0.04) * 100).toFixed(1)}%</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-text3">Consec. Losses</span>
+                      <span className={clsx('font-bold font-mono', (botStatus?.consecutive_losses ?? 0) >= 3 ? 'text-red' : 'text-text2')}>
+                        {botStatus?.consecutive_losses ?? 0}
+                      </span>
+                    </div>
                   </div>
                 </div>
               )
@@ -452,25 +494,6 @@ export function Dashboard() {
 }
 
 /* ── Market Intelligence Panel ─────────────────────────────── */
-interface MarketState {
-  trend: {
-    state?: string
-    direction?: string
-    conviction?: number
-    risk_multiplier?: number
-    strategy_priority?: string[]
-    scores?: Record<string, number>
-    ts?: string
-  } | null
-  regime: {
-    regime?: string
-    atr_ratio?: number
-    adx_proxy?: number
-    vix?: number
-    rsi?: number
-    ts?: string
-  } | null
-}
 
 const TREND_META: Record<string, { label: string; color: string; bg: string; border: string; icon: any; desc: string }> = {
   STRONG_BULL: { label: 'Strong Bull', color: 'text-green', bg: 'bg-green/12', border: 'border-green/30', icon: ChevronUp, desc: 'All indicators bullish — high conviction CALL bias' },
@@ -495,47 +518,36 @@ const STRAT_COLORS: Record<string, string> = {
 }
 
 const STRAT_WINDOWS: Record<string, string> = {
-  ORB:               '9:30–10:00',
-  MOMENTUM_BREAKOUT: '9:30–12:00',
-  EMA_PULLBACK:      '9:30–1:00',
-  VWAP_RECLAIM:      '10:00–2:30',
-  RELAXED_ORB:       '9:30–10:00',
+  ORB:               '9:30–10:00 AM',
+  RELAXED_ORB:       '9:30–10:00 AM',
+  EMA_PULLBACK:      '9:30–1:00 PM',
+  MOMENTUM_BREAKOUT: '9:30–12:00 PM',
+  VWAP_RECLAIM:      '10:00–1:30 PM',
 }
 
 function MarketIntelligence() {
-  const [ms, setMs] = useState<MarketState>({ trend: null, regime: null })
-  const [ts, setTs] = useState('')
+  const { marketState: ms, botStatus } = useTradingStore()
 
-  const fetch = async () => {
-    try {
-      const r = await axios.get('/api/market-state')
-      setMs(r.data)
-      setTs(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
-    } catch {}
-  }
-
-  useEffect(() => { fetch(); const id = setInterval(fetch, 10000); return () => clearInterval(id) }, [])
-
-  const trendKey = ms.trend?.state ?? 'NEUTRAL'
+  const trendKey = ms?.trend_state ?? 'NEUTRAL'
   const meta = TREND_META[trendKey] ?? TREND_META.NEUTRAL
   const TrendIcon = meta.icon
-  const conviction = Math.round((ms.trend?.conviction ?? 0) * 100)
-  const riskMult = Math.round((ms.trend?.risk_multiplier ?? 1) * 100)
-  const regime = ms.regime?.regime ?? '—'
+  const conviction = Math.round((ms?.trend_conviction ?? 0) * 100)
+  const riskMult = Math.round((ms?.risk_multiplier ?? 1) * 100)
+  const regime = ms?.regime ?? '—'
   const regimeMeta = REGIME_META[regime] ?? { color: 'text-text3', bg: 'bg-surface/40' }
-  const priority = ms.trend?.strategy_priority ?? []
-  const scores = ms.trend?.scores ?? {}
+  const priority = ms?.strategy_priority ?? []
+  const scores = ms?.trend_scores ?? {}
+  const scan = botStatus?.last_scan
 
   return (
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }}
       className="glass-card rounded-2xl p-5 neon-border">
-      {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <Brain size={15} className="text-accent" />
           <span className="text-sm font-bold uppercase tracking-widest text-text3">Market Intelligence</span>
         </div>
-        {ts && <span className="text-[10px] text-text3 font-mono">{ts}</span>}
+        {ms?.regime_vix != null && <span className="text-[10px] text-text3 font-mono">VIX {ms.regime_vix.toFixed(1)}</span>}
       </div>
 
       {/* Trend State Banner */}
@@ -555,7 +567,7 @@ function MarketIntelligence() {
         </div>
       </div>
 
-      {/* Conviction bar */}
+      {/* Conviction bar + indicator votes */}
       <div className="mb-4">
         <div className="flex items-center justify-between text-xs mb-1.5">
           <span className="text-text3 font-medium">Signal Conviction</span>
@@ -567,7 +579,6 @@ function MarketIntelligence() {
             transition={{ duration: 0.8, ease: 'easeOut' }}
             className={clsx('h-full rounded-full', conviction >= 70 ? 'bg-green' : conviction >= 40 ? 'bg-amber' : 'bg-text3')} />
         </div>
-        {/* Indicator votes */}
         {Object.keys(scores).length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-2">
             {Object.entries(scores).map(([k, v]) => (
@@ -575,7 +586,7 @@ function MarketIntelligence() {
                 'text-[10px] px-1.5 py-0.5 rounded-md font-bold',
                 v > 0 ? 'bg-green/10 text-green' : v < 0 ? 'bg-red/10 text-red' : 'bg-surface text-text3'
               )}>
-                {k.replace(/_/g, ' ')} {v > 0 ? '▲' : v < 0 ? '▼' : '—'}
+                {k.replace(/_/g, ' ')} {v > 0 ? '+1' : v < 0 ? '-1' : '0'}
               </span>
             ))}
           </div>
@@ -591,8 +602,12 @@ function MarketIntelligence() {
           <span className={clsx('text-sm font-black px-2 py-0.5 rounded-lg', regimeMeta.bg, regimeMeta.color)}>
             {regime}
           </span>
-          {ms.regime?.vix && (
-            <div className="text-[10px] text-text3 mt-1.5">VIX {ms.regime.vix.toFixed(1)} · RSI {ms.regime?.rsi?.toFixed(0) ?? '—'}</div>
+          {ms?.regime_vix != null && (
+            <div className="text-[10px] text-text3 mt-1.5">
+              VIX {ms.regime_vix.toFixed(1)}
+              {ms.regime_adx != null && ` · ADX ${ms.regime_adx.toFixed(0)}`}
+              {ms.regime_rsi != null && ` · RSI ${ms.regime_rsi.toFixed(0)}`}
+            </div>
           )}
         </div>
         <div className="bg-surface/50 rounded-xl p-3 border border-line/20">
@@ -608,6 +623,54 @@ function MarketIntelligence() {
           </div>
         </div>
       </div>
+
+      {/* Scan Cycle — signals detected */}
+      {scan && scan.signals_detected > 0 && (
+        <div className="mb-4 bg-accent/5 border border-accent/20 rounded-xl p-3">
+          <div className="text-[10px] font-bold uppercase text-text3 mb-2 flex items-center gap-1">
+            <Crosshair size={10} className="text-accent" /> Signal Candidates ({scan.signals_detected})
+          </div>
+          <div className="space-y-1.5">
+            {scan.candidates.map((c, i) => (
+              <div key={i} className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-text3 w-3">{i + 1}</span>
+                  <span className={clsx('font-bold', STRAT_COLORS[c.strategy] ?? 'text-text2')}>{c.strategy.replace(/_/g, ' ')}</span>
+                  <span className={clsx('text-[10px] font-bold px-1.5 py-0.5 rounded', c.signal === 'CALL' ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>{c.signal}</span>
+                </div>
+                <span className={clsx('font-bold font-mono', c.confidence >= 70 ? 'text-green' : c.confidence >= 50 ? 'text-amber' : 'text-text3')}>
+                  {c.confidence.toFixed(0)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Scan cycle — evaluated strategies */}
+      {scan && scan.scans && scan.scans.length > 0 && (
+        <div className="mb-4">
+          <div className="text-[10px] font-bold uppercase text-text3 mb-2 flex items-center gap-1">
+            <Target size={10} /> Scan Results ({scan.strategies_evaluated} evaluated)
+          </div>
+          <div className="space-y-1">
+            {scan.scans.map((s, i) => (
+              <div key={i} className="flex items-center justify-between text-[11px] py-1 px-2 rounded-lg bg-surface/30">
+                <span className={clsx('font-bold', STRAT_COLORS[s.strategy] ?? 'text-text2')}>{s.strategy.replace(/_/g, ' ')}</span>
+                <div className="flex items-center gap-2">
+                  <span className={clsx('font-mono text-[10px]', s.confidence >= 50 ? 'text-text2' : 'text-text3')}>
+                    conf={s.confidence.toFixed(0)}
+                  </span>
+                  <span className={clsx('text-[10px] px-1.5 py-0.5 rounded font-bold',
+                    s.passed ? 'bg-green/10 text-green' : 'bg-surface text-text3')}>
+                    {s.passed ? 'PASS' : 'SKIP'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Strategy Priority */}
       {priority.length > 0 && (
@@ -631,7 +694,7 @@ function MarketIntelligence() {
         </div>
       )}
 
-      {!ms.trend && (
+      {!ms && (
         <div className="text-center py-4">
           <Brain size={20} className="text-text3 mx-auto mb-2 opacity-40" />
           <p className="text-xs text-text3">Trend data available after first market scan</p>
@@ -719,11 +782,11 @@ type StrategyStateKeys =
 type StrategyState = Record<StrategyStateKeys, boolean>
 
 const STRATEGY_DEFS: { key: StrategyStateKeys; label: string; desc: string; color: string; iconColor: string; icon: any }[] = [
-  { key: 'orb_enabled',               label: 'ORB',              desc: 'Opening Range Breakout · 9:30–10:30',  color: 'bg-amber/8 border-amber/20',   iconColor: 'text-amber',  icon: Flame    },
-  { key: 'relaxed_orb_enabled',       label: 'Relaxed ORB',      desc: 'Wide-range days · up to 320pt range',  color: 'bg-amber/5 border-amber/15',   iconColor: 'text-amber',  icon: Flame    },
-  { key: 'momentum_breakout_enabled', label: 'Momentum Breakout',desc: 'N-candle range explosive · 9:30–12:00',color: 'bg-green/8 border-green/20',   iconColor: 'text-green',  icon: Zap      },
-  { key: 'ema_pullback_enabled',      label: 'EMA Pullback',     desc: 'EMA21 bounce in trend · 9:30–1:00',    color: 'bg-accent/8 border-accent/20', iconColor: 'text-accent', icon: TrendingUp},
-  { key: 'vwap_reclaim_enabled',      label: 'VWAP Reclaim',     desc: 'VWAP cross confirmation · 10:00–1:30', color: 'bg-cyan/8 border-cyan/20',     iconColor: 'text-cyan',   icon: Waves    },
+  { key: 'orb_enabled',               label: 'ORB',              desc: 'Opening Range Breakout · 9:30–10:00 AM',  color: 'bg-amber/8 border-amber/20',   iconColor: 'text-amber',  icon: Flame    },
+  { key: 'relaxed_orb_enabled',       label: 'Relaxed ORB',      desc: 'Wide-range breakout · 9:30–10:00 AM',     color: 'bg-amber/5 border-amber/15',   iconColor: 'text-amber',  icon: Flame    },
+  { key: 'ema_pullback_enabled',      label: 'EMA Pullback',     desc: 'EMA21 bounce in trend · 9:30–1:00 PM',    color: 'bg-accent/8 border-accent/20', iconColor: 'text-accent', icon: TrendingUp},
+  { key: 'momentum_breakout_enabled', label: 'Momentum Breakout',desc: 'N-candle range explosive · 9:30–12:00 PM',color: 'bg-green/8 border-green/20',   iconColor: 'text-green',  icon: Zap      },
+  { key: 'vwap_reclaim_enabled',      label: 'VWAP Reclaim',     desc: 'VWAP cross confirmation · 10:00–1:30 PM', color: 'bg-cyan/8 border-cyan/20',     iconColor: 'text-cyan',   icon: Waves    },
 ]
 
 const FILTER_DEFS: { key: StrategyStateKeys; label: string; desc: string }[] = [

@@ -131,16 +131,15 @@ class RiskManager:
         self,
         entry_price: float,
         sl_pct: float,
+        risk_pct_override: float = 0.0,
     ) -> dict:
         """
         Compute position size based on fixed % risk of current capital.
-
-        At ₹25k with 2% risk, target risk = ₹500.
-        With options at ₹150 and 30% SL, risk_per_unit = ₹45.
-        max_qty = 500/45 = 11 → less than 1 lot (65), so min 1 lot.
-        actual_risk = 45 × 65 = ₹2,925.
+        If risk_pct_override > 0, use that instead of default risk_per_trade_pct
+        (allows regime/trend-based risk scaling from the trader).
         """
-        risk_amount = self.current_capital * self.risk_per_trade_pct
+        effective_pct = risk_pct_override if risk_pct_override > 0 else self.risk_per_trade_pct
+        risk_amount = self.current_capital * effective_pct
         risk_per_unit = entry_price * sl_pct
         if risk_per_unit <= 0:
             return {"lots": 1, "qty": self.lot_size, "risk_amount": risk_amount,

@@ -51,10 +51,10 @@ class DailyBacktestConfig:
     vwap_deviation_pct: float = 0.003
 
     # ── Mean-Reversion ──
-    mr_rsi_oversold: float = 38.0
-    mr_rsi_overbought: float = 62.0
-    mr_body_ratio_min: float = 0.40
-    mr_prev_candle_body_ratio_min: float = 0.30
+    mr_rsi_oversold: float = 35.0
+    mr_rsi_overbought: float = 65.0
+    mr_body_ratio_min: float = 0.45
+    mr_prev_candle_body_ratio_min: float = 0.35
 
     # ── Momentum / Gap continuation ──
     gap_min_pct: float = 0.002
@@ -67,14 +67,15 @@ class DailyBacktestConfig:
     relaxed_orb_rsi_max: float = 62.0
 
     # ── Range-Day Fade (bounce off prior day extremes) ──
-    fade_proximity_pct: float = 0.004
-    fade_body_ratio_min: float = 0.40
-    fade_rsi_bull_zone: float = 42.0
-    fade_rsi_bear_zone: float = 58.0
+    fade_proximity_pct: float = 0.003
+    fade_body_ratio_min: float = 0.45
+    fade_rsi_bull_zone: float = 38.0
+    fade_rsi_bear_zone: float = 62.0
 
     # ── EMA-Pullback (trend continuation after pullback to EMA) ──
-    ema_pb_min_trend_days: int = 2
-    ema_pb_touch_tolerance_pct: float = 0.004
+    ema_pb_min_trend_days: int = 3
+    ema_pb_touch_tolerance_pct: float = 0.003
+    ema_pb_body_ratio_min: float = 0.40
 
     # ── Shared filters ──
     ema_fast: int = 5
@@ -90,18 +91,18 @@ class DailyBacktestConfig:
     adx_trending_threshold: float = 0.30
     atr_volatile_multiplier: float = 1.8
 
-    # ── SL / Target (sweep-optimized) ──
-    sl_pct: float = 0.30
+    # ── SL / Target (optimized Mar 2026) ──
+    sl_pct: float = 0.28
     target_pct: float = 0.65
-    sl_pct_mr: float = 0.20
-    target_pct_mr: float = 0.50
-    sl_pct_gap: float = 0.30
-    target_pct_gap: float = 0.50
-    sl_pct_relaxed: float = 0.30
-    target_pct_relaxed: float = 0.55
-    sl_pct_fade: float = 0.25
+    sl_pct_mr: float = 0.18
+    target_pct_mr: float = 0.45
+    sl_pct_gap: float = 0.28
+    target_pct_gap: float = 0.55
+    sl_pct_relaxed: float = 0.28
+    target_pct_relaxed: float = 0.58
+    sl_pct_fade: float = 0.22
     target_pct_fade: float = 0.50
-    sl_pct_ema_pb: float = 0.35
+    sl_pct_ema_pb: float = 0.30
     target_pct_ema_pb: float = 0.65
     slippage_pct: float = 0.005
 
@@ -320,27 +321,36 @@ def _check_mean_reversion(
     vwap = vwap_vals[i]
 
     # Bullish reversal: prior day(s) dropped, RSI low, today bounces up
-    prior_drop = prev_close < prev2_close or closes[i - 1] < closes[max(0, i - 3)]
+    # VWAP confirmation: close must be above VWAP (support held)
+    prior_drop = prev_close < prev2_close and closes[i - 1] < closes[max(0, i - 3)]
+    prev_momentum = prev_body_ratio >= cfg.mr_prev_candle_body_ratio_min
     if (rsi <= cfg.mr_rsi_oversold
         and prior_drop
+        and prev_momentum
         and today_close > today_open
+        and today_close > vwap
         and body_ratio >= cfg.mr_body_ratio_min):
         return ("CALL", "MEAN_REVERSION", {
             "rsi_extreme": {"passed": True, "value": round(rsi, 1), "detail": f"RSI {rsi:.1f} <= {cfg.mr_rsi_oversold}"},
             "reversal_candle": {"passed": True, "detail": f"Green body {body_ratio:.0%}, after drop"},
-            "vwap_support": {"passed": today_close > vwap, "detail": f"Close {today_close:.0f} vs VWAP {vwap:.0f}"},
+            "vwap_support": {"passed": True, "detail": f"Close {today_close:.0f} > VWAP {vwap:.0f}"},
+            "prior_move": {"passed": True, "detail": f"Prior drop + body {prev_body_ratio:.0%}"},
         })
 
     # Bearish reversal: prior day(s) rose, RSI high, today drops
-    prior_rise = prev_close > prev2_close or closes[i - 1] > closes[max(0, i - 3)]
+    # VWAP confirmation: close must be below VWAP (resistance held)
+    prior_rise = prev_close > prev2_close and closes[i - 1] > closes[max(0, i - 3)]
     if (rsi >= cfg.mr_rsi_overbought
         and prior_rise
+        and prev_momentum
         and today_close < today_open
+        and today_close < vwap
         and body_ratio >= cfg.mr_body_ratio_min):
         return ("PUT", "MEAN_REVERSION", {
             "rsi_extreme": {"passed": True, "value": round(rsi, 1), "detail": f"RSI {rsi:.1f} >= {cfg.mr_rsi_overbought}"},
             "reversal_candle": {"passed": True, "detail": f"Red body {body_ratio:.0%}, after rise"},
-            "vwap_resistance": {"passed": today_close < vwap, "detail": f"Close {today_close:.0f} vs VWAP {vwap:.0f}"},
+            "vwap_resistance": {"passed": True, "detail": f"Close {today_close:.0f} < VWAP {vwap:.0f}"},
+            "prior_move": {"passed": True, "detail": f"Prior rise + body {prev_body_ratio:.0%}"},
         })
 
     return None
@@ -446,6 +456,9 @@ def _check_ema_pullback(
     today_open = opens[i]
     today_low = lows[i]
     today_high = highs[i]
+    today_body = abs(today_close - today_open)
+    today_range = today_high - today_low
+    body_ratio = today_body / today_range if today_range > 0 else 0
 
     # Check if trend has been consistent for min_trend_days
     bullish_trend = all(
@@ -464,11 +477,12 @@ def _check_ema_pullback(
         and today_low <= ema_f + tolerance
         and today_close > ema_f
         and today_close > today_open
-        and cfg.rsi_bull_min <= rsi <= cfg.rsi_overbought_skip):
+        and body_ratio >= cfg.ema_pb_body_ratio_min
+        and 45.0 <= rsi <= cfg.rsi_overbought_skip):
         return ("CALL", "EMA_PULLBACK", {
             "trend": {"passed": True, "detail": f"Bullish trend {cfg.ema_pb_min_trend_days}+ days"},
             "pullback": {"passed": True, "detail": f"Low {today_low:.0f} touched EMA{cfg.ema_fast} {ema_f:.0f}"},
-            "bounce": {"passed": True, "detail": f"Closed {today_close:.0f} above EMA"},
+            "bounce": {"passed": True, "detail": f"Closed {today_close:.0f} above EMA, body {body_ratio:.0%}"},
         })
 
     # Bearish: price popped to EMA fast and closed below it
@@ -476,11 +490,12 @@ def _check_ema_pullback(
         and today_high >= ema_f - tolerance
         and today_close < ema_f
         and today_close < today_open
-        and cfg.rsi_oversold_skip <= rsi <= cfg.rsi_bear_max):
+        and body_ratio >= cfg.ema_pb_body_ratio_min
+        and cfg.rsi_oversold_skip <= rsi <= 55.0):
         return ("PUT", "EMA_PULLBACK", {
             "trend": {"passed": True, "detail": f"Bearish trend {cfg.ema_pb_min_trend_days}+ days"},
             "pullback": {"passed": True, "detail": f"High {today_high:.0f} touched EMA{cfg.ema_fast} {ema_f:.0f}"},
-            "rejection": {"passed": True, "detail": f"Closed {today_close:.0f} below EMA"},
+            "rejection": {"passed": True, "detail": f"Closed {today_close:.0f} below EMA, body {body_ratio:.0%}"},
         })
 
     return None

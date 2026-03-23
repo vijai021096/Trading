@@ -185,100 +185,11 @@ export function SettingsPage() {
             </div>
           </motion.div>
 
-          {/* Strategy Parameters */}
-          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}
-            className="glass-card rounded-2xl p-5 neon-border">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="w-7 h-7 rounded-lg bg-cyan/10 flex items-center justify-center">
-                <SlidersHorizontal size={13} className="text-cyan" />
-              </div>
-              <span className="text-[12px] font-bold text-text1">Strategy Parameters</span>
-              <span className="text-[9px] font-bold text-text3 bg-surface px-2 py-0.5 rounded-lg border border-line/20 uppercase tracking-wider">Read-only</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {/* ORB params */}
-              <div className="rounded-xl border border-line/20 p-4 bg-surface/30">
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="w-5 h-5 rounded bg-amber/10 flex items-center justify-center">
-                    <Zap size={10} className="text-amber" />
-                  </div>
-                  <span className="text-[11px] font-bold text-text1">ORB Strategy</span>
-                </div>
-                <div className="space-y-2">
-                  {[
-                    ['Window', '9:15 – 9:30 AM'],
-                    ['Breakout Buffer', '0.1%'],
-                    ['Stop Loss', '50% of ORB range'],
-                    ['Target', '2× SL'],
-                    ['Max Trades', '1 per session'],
-                    ['Trailing SL', 'After 1:1 R:R'],
-                  ].map(([k, v]) => (
-                    <div key={k} className="flex justify-between items-center">
-                      <span className="text-[11px] text-text3">{k}</span>
-                      <span className="text-[11px] font-bold font-mono text-text1">{v}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              {/* VWAP params */}
-              <div className="rounded-xl border border-line/20 p-4 bg-surface/30">
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="w-5 h-5 rounded bg-cyan/10 flex items-center justify-center">
-                    <BarChart3 size={10} className="text-cyan" />
-                  </div>
-                  <span className="text-[11px] font-bold text-text1">VWAP Strategy</span>
-                </div>
-                <div className="space-y-2">
-                  {[
-                    ['Active Window', '10:00 AM – 2:30 PM'],
-                    ['Reclaim Threshold', '±0.05%'],
-                    ['Volume Confirm', '1.2× average'],
-                    ['Stop Loss', '0.3% from VWAP'],
-                    ['Target', '2× SL'],
-                    ['Max Trades', '2 per session'],
-                  ].map(([k, v]) => (
-                    <div key={k} className="flex justify-between items-center">
-                      <span className="text-[11px] text-text3">{k}</span>
-                      <span className="text-[11px] font-bold font-mono text-text1">{v}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </motion.div>
+          {/* Strategy Parameters — from API */}
+          <StrategyParamsPanel />
 
-          {/* Risk Management */}
-          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
-            className="glass-card rounded-2xl p-5 neon-border">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="w-7 h-7 rounded-lg bg-red/10 flex items-center justify-center">
-                <Shield size={13} className="text-red" />
-              </div>
-              <span className="text-[12px] font-bold text-text1">Risk Management</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {[
-                { label: 'Daily Loss Limit', value: '₹6,250 (25%)', desc: 'Allows 2 full SL hits before halt', icon: AlertCircle, color: 'red' },
-                { label: 'Max Trades/Day', value: '3', desc: 'Maximum number of trades per session', icon: Layers, color: 'amber' },
-                { label: 'Drawdown Halt', value: '20%', desc: 'Stop trading if drawdown from peak > 20%', icon: XCircle, color: 'red' },
-              ].map(({ label, value, desc, icon: Icon, color }) => {
-                const cardMap = {
-                  red: { border: 'border-red/15', bg: 'bg-red/5', text: 'text-red' },
-                  amber: { border: 'border-amber/15', bg: 'bg-amber/5', text: 'text-amber' },
-                } as const
-                const cm = cardMap[color as keyof typeof cardMap]
-                return (
-                <div key={label} className={clsx('rounded-xl border p-4', cm.border, cm.bg)}>
-                  <div className="flex items-center gap-2 mb-2">
-                    <Icon size={12} className={cm.text} />
-                    <span className="text-[11px] font-bold text-text1">{label}</span>
-                  </div>
-                  <div className={clsx('text-xl font-extrabold font-mono', cm.text)}>{value}</div>
-                  <div className="text-[10px] text-text3 mt-1">{desc}</div>
-                </div>
-              )})}
-            </div>
-          </motion.div>
+          {/* Risk Management — from API */}
+          <RiskParamsPanel />
         </div>
 
         {/* Right side - Quick start + Info */}
@@ -316,37 +227,202 @@ export function SettingsPage() {
             </div>
           </motion.div>
 
-          {/* System info */}
-          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
-            className="glass-card rounded-2xl p-5 neon-border">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="w-7 h-7 rounded-lg bg-accent/10 flex items-center justify-center">
-                <Terminal size={13} className="text-accent" />
-              </div>
-              <span className="text-[12px] font-bold text-text1">System Info</span>
-            </div>
-            <div className="space-y-2">
-              {[
-                ['Bot Version', 'v2.0.0'],
-                ['API', 'FastAPI + WebSocket'],
-                ['Exchange', 'NSE / NFO'],
-                ['Instrument', 'NIFTY Index Options'],
-                ['Entry Order', 'Aggressive Limit'],
-                ['SL Protection', 'SL-M (Exchange)'],
-                ['Lot Size', '65 (1 lot)'],
-                ['Capital', '₹25,000'],
-                ['Risk/Trade', '2%'],
-                ['Timezone', 'IST (Asia/Kolkata)'],
-              ].map(([k, v]) => (
-                <div key={k} className="flex justify-between items-center py-1 border-b border-line/10 last:border-0">
-                  <span className="text-[11px] text-text3">{k}</span>
-                  <span className="text-[11px] font-bold font-mono text-text2">{v}</span>
-                </div>
-              ))}
-            </div>
-          </motion.div>
+          {/* System info — from API */}
+          <SystemInfoPanel />
         </div>
       </div>
     </div>
+  )
+}
+
+/* ── Strategy Params (live from API) ─────────────────────── */
+function StrategyParamsPanel() {
+  const [cfg, setCfg] = useState<any>(null)
+  useEffect(() => { axios.get('/api/strategy/config').then(r => setCfg(r.data)).catch(() => {}) }, [])
+
+  if (!cfg) return null
+  const slTarget = cfg.sl_target_by_strategy || {}
+  const backtest = cfg.backtest_stats || {}
+
+  const STRAT_ICONS: Record<string, { icon: any; color: string }> = {
+    ORB:               { icon: Zap,   color: 'text-amber' },
+    RELAXED_ORB:       { icon: Zap,   color: 'text-amber' },
+    EMA_PULLBACK:      { icon: BarChart3, color: 'text-accent' },
+    VWAP_RECLAIM:      { icon: BarChart3, color: 'text-cyan' },
+    MOMENTUM_BREAKOUT: { icon: Zap,   color: 'text-green' },
+  }
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}
+      className="glass-card rounded-2xl p-5 neon-border">
+      <div className="flex items-center gap-2 mb-4">
+        <div className="w-7 h-7 rounded-lg bg-cyan/10 flex items-center justify-center">
+          <SlidersHorizontal size={13} className="text-cyan" />
+        </div>
+        <span className="text-[12px] font-bold text-text1">Strategy Parameters</span>
+        <span className="text-[9px] font-bold text-text3 bg-surface px-2 py-0.5 rounded-lg border border-line/20 uppercase tracking-wider">Live Config</span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {Object.entries(slTarget).map(([name, params]: [string, any]) => {
+          const meta = STRAT_ICONS[name] || { icon: Zap, color: 'text-text2' }
+          const Icon = meta.icon
+          const bs = backtest[name] || {}
+          return (
+            <div key={name} className="rounded-xl border border-line/20 p-3.5 bg-surface/30">
+              <div className="flex items-center gap-2 mb-3">
+                <div className={clsx('w-5 h-5 rounded flex items-center justify-center', `bg-${meta.color.replace('text-', '')}/10`)}>
+                  <Icon size={10} className={meta.color} />
+                </div>
+                <span className="text-[11px] font-bold text-text1">{name.replace(/_/g, ' ')}</span>
+              </div>
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] text-text3">Stop Loss</span>
+                  <span className="text-[11px] font-bold font-mono text-red">{(params.sl_pct * 100).toFixed(0)}%</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] text-text3">Target</span>
+                  <span className="text-[11px] font-bold font-mono text-green">{(params.target_pct * 100).toFixed(0)}%</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] text-text3">R:R</span>
+                  <span className="text-[11px] font-bold font-mono text-accent">{(params.target_pct / params.sl_pct).toFixed(1)}x</span>
+                </div>
+                {bs.win_rate > 0 && (
+                  <>
+                    <div className="border-t border-line/10 pt-1.5 mt-1.5" />
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] text-text3">BT Win Rate</span>
+                      <span className={clsx('text-[11px] font-bold font-mono', bs.win_rate >= 0.5 ? 'text-green' : 'text-amber')}>{(bs.win_rate * 100).toFixed(0)}%</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] text-text3">BT Profit Factor</span>
+                      <span className={clsx('text-[11px] font-bold font-mono', bs.profit_factor >= 2 ? 'text-green' : 'text-amber')}>{bs.profit_factor.toFixed(2)}</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Time windows */}
+      <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+        {[
+          { label: 'ORB Window', val: `${cfg.orb_start} – ${cfg.orb_end}` },
+          { label: 'Entry Close', val: cfg.entry_window_close },
+          { label: 'EMA Pullback', val: `${cfg.ema_pullback_window_start || '09:30'} – ${cfg.ema_pullback_window_end || '13:00'}` },
+          { label: 'Momentum', val: `${cfg.momentum_breakout_window_start || '09:30'} – ${cfg.momentum_breakout_window_end || '12:00'}` },
+          { label: 'VWAP Window', val: `${cfg.reclaim_window_start} – ${cfg.reclaim_window_end}` },
+          { label: 'Trail Trigger', val: `${(cfg.trail_trigger_pct * 100).toFixed(0)}%` },
+        ].map(({ label, val }) => (
+          <div key={label} className="bg-surface/40 rounded-lg p-2.5 border border-line/15">
+            <div className="text-[9px] font-bold text-text3 uppercase mb-1">{label}</div>
+            <div className="text-[11px] font-bold font-mono text-text1">{val}</div>
+          </div>
+        ))}
+      </div>
+    </motion.div>
+  )
+}
+
+/* ── Risk Params (live from API) ──────────────────────────── */
+function RiskParamsPanel() {
+  const [cfg, setCfg] = useState<any>(null)
+  useEffect(() => { axios.get('/api/strategy/config').then(r => setCfg(r.data)).catch(() => {}) }, [])
+
+  if (!cfg) return null
+
+  const riskItems = [
+    { label: 'Daily Loss Limit', value: `${(cfg.max_daily_loss_pct * 100).toFixed(0)}% (₹${Math.round(cfg.capital * cfg.max_daily_loss_pct).toLocaleString('en-IN')})`, desc: 'Soft stop on daily P&L', icon: AlertCircle, color: 'red' },
+    { label: 'Hard Daily Limit', value: `₹${cfg.max_daily_loss_hard?.toLocaleString('en-IN') ?? '--'}`, desc: 'Absolute max daily loss', icon: XCircle, color: 'red' },
+    { label: 'Max Trades/Day', value: `${cfg.max_trades_per_day}`, desc: 'Maximum entries per session', icon: Layers, color: 'amber' },
+    { label: 'Drawdown Halt', value: `${(cfg.max_drawdown_pct ?? 20)}%`, desc: 'Stop if drawdown > this', icon: XCircle, color: 'red' },
+    { label: 'Risk per Trade', value: `${(cfg.risk_per_trade_pct * 100).toFixed(1)}%`, desc: `₹${Math.round(cfg.capital * cfg.risk_per_trade_pct).toLocaleString('en-IN')} max risk`, icon: Shield, color: 'amber' },
+    { label: 'Break-Even', value: `${(cfg.break_even_trigger_pct * 100).toFixed(0)}%`, desc: 'Move SL to entry after', icon: Lock, color: 'amber' },
+  ]
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+      className="glass-card rounded-2xl p-5 neon-border">
+      <div className="flex items-center gap-2 mb-4">
+        <div className="w-7 h-7 rounded-lg bg-red/10 flex items-center justify-center">
+          <Shield size={13} className="text-red" />
+        </div>
+        <span className="text-[12px] font-bold text-text1">Risk Management</span>
+        <span className="text-[9px] font-bold text-text3 bg-surface px-2 py-0.5 rounded-lg border border-line/20 uppercase tracking-wider">Live Config</span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {riskItems.map(({ label, value, desc, icon: Icon, color }) => {
+          const cm = color === 'red'
+            ? { border: 'border-red/15', bg: 'bg-red/5', text: 'text-red' }
+            : { border: 'border-amber/15', bg: 'bg-amber/5', text: 'text-amber' }
+          return (
+            <div key={label} className={clsx('rounded-xl border p-3.5', cm.border, cm.bg)}>
+              <div className="flex items-center gap-2 mb-2">
+                <Icon size={12} className={cm.text} />
+                <span className="text-[11px] font-bold text-text1">{label}</span>
+              </div>
+              <div className={clsx('text-lg font-extrabold font-mono', cm.text)}>{value}</div>
+              <div className="text-[10px] text-text3 mt-1">{desc}</div>
+            </div>
+          )
+        })}
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <div className="bg-surface/40 rounded-lg p-2.5 border border-line/15">
+          <div className="text-[9px] font-bold text-text3 uppercase mb-1">Entry Orders</div>
+          <div className="text-[11px] font-bold text-text1">{cfg.use_limit_orders ? `Aggressive Limit (+${(cfg.limit_price_buffer_pct * 100).toFixed(1)}%)` : 'Market'}</div>
+        </div>
+        <div className="bg-surface/40 rounded-lg p-2.5 border border-line/15">
+          <div className="text-[9px] font-bold text-text3 uppercase mb-1">SL Protection</div>
+          <div className="text-[11px] font-bold text-text1">{cfg.use_slm_exit ? 'SL-M (Exchange)' : 'Software SL'}</div>
+        </div>
+      </div>
+    </motion.div>
+  )
+}
+
+/* ── System Info (live from API) ──────────────────────────── */
+function SystemInfoPanel() {
+  const [cfg, setCfg] = useState<any>(null)
+  useEffect(() => { axios.get('/api/strategy/config').then(r => setCfg(r.data)).catch(() => {}) }, [])
+
+  const items = cfg ? [
+    ['Bot Version', 'v3.0.0'],
+    ['API', 'FastAPI + WebSocket'],
+    ['Exchange', 'NSE / NFO'],
+    ['Instrument', 'NIFTY Index Options'],
+    ['Entry Order', cfg.use_limit_orders ? 'Aggressive Limit' : 'Market'],
+    ['SL Protection', cfg.use_slm_exit ? 'SL-M (Exchange)' : 'Software SL'],
+    ['Lot Size', `${cfg.lot_size} (1 lot)`],
+    ['Capital', `₹${cfg.capital?.toLocaleString('en-IN')}`],
+    ['Risk/Trade', `${(cfg.risk_per_trade_pct * 100).toFixed(1)}%`],
+    ['Mode', cfg.paper_mode ? 'PAPER (Simulated)' : 'LIVE'],
+    ['Timezone', 'IST (Asia/Kolkata)'],
+  ] : [
+    ['Status', 'Loading...'],
+  ]
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+      className="glass-card rounded-2xl p-5 neon-border">
+      <div className="flex items-center gap-2 mb-4">
+        <div className="w-7 h-7 rounded-lg bg-accent/10 flex items-center justify-center">
+          <Terminal size={13} className="text-accent" />
+        </div>
+        <span className="text-[12px] font-bold text-text1">System Info</span>
+      </div>
+      <div className="space-y-2">
+        {items.map(([k, v]) => (
+          <div key={k} className="flex justify-between items-center py-1 border-b border-line/10 last:border-0">
+            <span className="text-[11px] text-text3">{k}</span>
+            <span className={clsx('text-[11px] font-bold font-mono',
+              k === 'Mode' && v === 'LIVE' ? 'text-green' : k === 'Mode' ? 'text-amber' : 'text-text2')}>{v}</span>
+          </div>
+        ))}
+      </div>
+    </motion.div>
   )
 }

@@ -22,7 +22,6 @@ export interface Trade {
   vix: number
   trade_date: string
   filter_log?: Record<string, any>
-  // Execution realism fields
   signal_ltp?: number
   slippage_pct?: number
   entry_latency_ms?: number
@@ -33,6 +32,7 @@ export interface Trade {
   sl_slippage?: number
   sl_slippage_pct?: number
   sl_extra_loss?: number
+  confidence?: number
 }
 
 export interface Position {
@@ -77,6 +77,75 @@ export interface SlippageStats {
   }>
 }
 
+export interface MarketState {
+  trend_state: string | null
+  trend_direction: string | null
+  trend_conviction: number | null
+  risk_multiplier: number | null
+  strategy_priority: string[]
+  trend_scores: Record<string, number>
+  regime: string | null
+  regime_atr_ratio: number | null
+  regime_adx: number | null
+  regime_vix: number | null
+  regime_rsi: number | null
+}
+
+export interface BotStatus {
+  state: string
+  market_status: string
+  market_open: boolean
+  thinking: string
+  nifty_price: number | null
+  kite_connected: boolean
+  kite_token_saved: boolean
+  trades_today: number
+  max_trades: number
+  daily_pnl: number
+  current_capital: number
+  starting_capital: number
+  peak_capital: number
+  drawdown_pct: number
+  max_drawdown_pct: number
+  halt_active: boolean
+  paper_mode: boolean
+  consecutive_losses: number
+  risk_per_trade_pct: number
+  max_daily_loss_pct: number
+  last_scan: {
+    strategies_evaluated: number
+    signals_detected: number
+    candidates: Array<{ strategy: string; signal: string; confidence: number }>
+    scans: Array<{ strategy: string; signal: string | null; passed: boolean; confidence: number }>
+  } | null
+  position: Position | null
+}
+
+export interface StrategyConfig {
+  capital: number
+  lot_size: number
+  vix_max: number
+  max_trades_per_day: number
+  max_daily_loss_pct: number
+  max_daily_loss_hard: number
+  max_drawdown_pct: number
+  risk_per_trade_pct: number
+  paper_mode: boolean
+  orb_start: string
+  orb_end: string
+  entry_window_close: string
+  reclaim_window_start: string
+  reclaim_window_end: string
+  trail_trigger_pct: number
+  break_even_trigger_pct: number
+  use_limit_orders: boolean
+  use_slm_exit: boolean
+  limit_price_buffer_pct: number
+  sl_target_by_strategy: Record<string, { sl_pct: number; target_pct: number }>
+  strategy_priority_by_trend: Record<string, string[]>
+  backtest_stats: Record<string, { win_rate: number; profit_factor: number }>
+}
+
 interface TradingStore {
   connected: boolean
   position: Position
@@ -86,6 +155,9 @@ interface TradingStore {
   emergencyStop: boolean
   lastUpdate: string
   slippageStats: SlippageStats | null
+  marketState: MarketState | null
+  botStatus: BotStatus | null
+  strategyConfig: StrategyConfig | null
 
   setConnected: (v: boolean) => void
   setPosition: (p: Position) => void
@@ -95,6 +167,9 @@ interface TradingStore {
   setEmergencyStop: (v: boolean) => void
   setLastUpdate: (s: string) => void
   setSlippageStats: (s: SlippageStats) => void
+  setMarketState: (m: MarketState) => void
+  setBotStatus: (b: BotStatus) => void
+  setStrategyConfig: (c: StrategyConfig) => void
 }
 
 export const useTradingStore = create<TradingStore>((set) => ({
@@ -106,6 +181,9 @@ export const useTradingStore = create<TradingStore>((set) => ({
   emergencyStop: false,
   lastUpdate: '',
   slippageStats: null,
+  marketState: null,
+  botStatus: null,
+  strategyConfig: null,
 
   setConnected: (v) => set({ connected: v }),
   setPosition: (p) => set({ position: p }),
@@ -115,4 +193,7 @@ export const useTradingStore = create<TradingStore>((set) => ({
   setEmergencyStop: (v) => set({ emergencyStop: v }),
   setLastUpdate: (s) => set({ lastUpdate: s }),
   setSlippageStats: (s) => set({ slippageStats: s }),
+  setMarketState: (m) => set({ marketState: m }),
+  setBotStatus: (b) => set({ botStatus: b }),
+  setStrategyConfig: (c) => set({ strategyConfig: c }),
 }))

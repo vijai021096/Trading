@@ -28,7 +28,10 @@ from shared.vwap_reclaim_engine import evaluate_vwap_reclaim_signal
 from shared.ema_pullback_engine import evaluate_ema_pullback_signal
 from shared.momentum_breakout_engine import evaluate_momentum_breakout_signal
 from shared.regime_detector import detect_regime, RegimeResult, SL_TARGET_MAP, STRATEGY_PRIORITY
-from shared.trend_detector import detect_trend, TrendResult, TrendState, STRATEGY_PRIORITY_BY_TREND, SL_TARGET_BY_STRATEGY
+from shared.trend_detector import (
+    detect_trend, TrendResult, TrendState, STRATEGY_PRIORITY_BY_TREND,
+    SL_TARGET_BY_STRATEGY, compute_signal_confidence,
+)
 from shared.black_scholes import charges_estimate
 
 try:
@@ -444,226 +447,177 @@ class KiteORBTrader:
         mb_window_start = self._t(self.cfg.momentum_breakout_window_start)
         mb_window_end = self._t(self.cfg.momentum_breakout_window_end)
 
-        for strategy_name in strategy_list:
-            if strategy_name == "ORB":
-                if not orb_enabled or self._orb_signal_used:
-                    continue
-                if not (orb_end <= current_time <= entry_close):
-                    continue
+        # ── Evaluate ALL strategies, collect candidates, pick strongest ──
+        candidates: list = []
+        scan_results: list = []
+        idx = len(candles) - 1
 
-                result = evaluate_orb_signal(
-                    candles, last_candle, vix,
-                    orb_start=orb_start, orb_end=orb_end,
-                    min_orb_range_points=self.cfg.min_orb_range_points,
-                    max_orb_range_points=self.cfg.max_orb_range_points,
-                    breakout_buffer_pct=self.cfg.breakout_buffer_pct,
-                    min_breakout_body_ratio=self.cfg.min_breakout_body_ratio,
-                    min_volume_surge_ratio=self.cfg.min_volume_surge_ratio,
-                    ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
-                    rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
-                    require_vwap_confirmation=self.cfg.require_vwap_confirmation,
-                    vwap_buffer_points=self.cfg.vwap_buffer_points,
-                    rsi_bull_min=self.cfg.rsi_bull_min, rsi_bear_max=self.cfg.rsi_bear_max,
-                    rsi_overbought_skip=self.cfg.rsi_overbought_skip,
-                    rsi_oversold_skip=self.cfg.rsi_oversold_skip,
-                    vix_max=self.cfg.vix_max,
-                )
-                _log_event("ORB_SCAN", {
-                    "strategy": strategy_name, "regime": regime.regime,
-                    "signal": result.get("signal"), "all_passed": result["all_passed"],
-                    "filters": {
-                        k: {"passed": v.get("passed"), "value": v.get("value"), "detail": v.get("detail", "")}
-                        for k, v in result["filters"].items()
-                    },
+        def _fmt_filters(filters):
+            return {
+                k: {"passed": v.get("passed"), "value": v.get("value"), "detail": v.get("detail", "")}
+                for k, v in filters.items()
+            } if filters else {}
+
+        def _eval_strategy(name, result, event_type):
+            filters = result.get("filters", {})
+            _log_event(event_type, {
+                "strategy": name, "regime": regime.regime,
+                "trend": trend.state.value, "conviction": trend.conviction,
+                "signal": result.get("signal"), "all_passed": result["all_passed"],
+                "filters": _fmt_filters(filters),
+            })
+            confidence = compute_signal_confidence(
+                name, result.get("signal", ""), regime.regime, trend, filters, effective_vix
+            )
+            scan_results.append({
+                "strategy": name, "signal": result.get("signal"),
+                "passed": result["all_passed"], "confidence": confidence,
+            })
+            if result["all_passed"] and result["signal"]:
+                sl_pct, target_pct = SL_TARGET_BY_STRATEGY.get(name, (0.28, 0.60))
+                candidates.append({
+                    "strategy": name, "signal": result["signal"],
+                    "confidence": confidence, "sl_pct": sl_pct, "target_pct": target_pct,
+                    "atr": result.get("atr", 0), "filters": filters,
                 })
-                if not result["all_passed"]:
-                    failed = [f"{k}={v.get('value','')}" for k, v in result["filters"].items() if not v.get("passed")]
-                    logger.info(f"ORB SKIP: {', '.join(failed[:5])}")
+            else:
+                failed = [f"{k}={v.get('value','')}" for k, v in filters.items() if not v.get("passed")]
+                logger.info(f"{name} SKIP: {', '.join(failed[:5]) if failed else 'no signal'} (conf={confidence:.0f})")
 
-                if result["all_passed"] and result["signal"]:
-                    sl_pct, target_pct = SL_TARGET_BY_STRATEGY.get("ORB", (0.28, 0.60))
-                    self._enter_trade(
-                        signal=result["signal"], strategy="ORB",
-                        candle=last_candle, atr=result["atr"],
-                        filter_log=result["filters"], vix=effective_vix,
-                        regime=regime, sl_pct_override=sl_pct,
-                        target_pct_override=target_pct, risk_multiplier=risk_multiplier,
-                    )
-                    self._orb_signal_used = True
-                    return
+        # ── ORB ──
+        if "ORB" in strategy_list and orb_enabled and not self._orb_signal_used and orb_end <= current_time <= entry_close:
+            result = evaluate_orb_signal(
+                candles, last_candle, vix,
+                orb_start=orb_start, orb_end=orb_end,
+                min_orb_range_points=self.cfg.min_orb_range_points,
+                max_orb_range_points=self.cfg.max_orb_range_points,
+                breakout_buffer_pct=self.cfg.breakout_buffer_pct,
+                min_breakout_body_ratio=self.cfg.min_breakout_body_ratio,
+                min_volume_surge_ratio=self.cfg.min_volume_surge_ratio,
+                ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
+                rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
+                require_vwap_confirmation=self.cfg.require_vwap_confirmation,
+                vwap_buffer_points=self.cfg.vwap_buffer_points,
+                rsi_bull_min=self.cfg.rsi_bull_min, rsi_bear_max=self.cfg.rsi_bear_max,
+                rsi_overbought_skip=self.cfg.rsi_overbought_skip,
+                rsi_oversold_skip=self.cfg.rsi_oversold_skip,
+                vix_max=self.cfg.vix_max,
+            )
+            _eval_strategy("ORB", result, "ORB_SCAN")
 
-            elif strategy_name == "RELAXED_ORB":
-                # Same as ORB but with relaxed range and body ratio — fires on wide-open days
-                if not orb_enabled or self._orb_signal_used:
-                    continue
-                if not (orb_end <= current_time <= entry_close):
-                    continue
+        # ── RELAXED_ORB ──
+        if "RELAXED_ORB" in strategy_list and orb_enabled and not self._orb_signal_used and orb_end <= current_time <= entry_close:
+            result = evaluate_orb_signal(
+                candles, last_candle, vix,
+                orb_start=orb_start, orb_end=orb_end,
+                min_orb_range_points=self.cfg.min_orb_range_points,
+                max_orb_range_points=self.cfg.relaxed_orb_max_range_points,
+                breakout_buffer_pct=self.cfg.breakout_buffer_pct,
+                min_breakout_body_ratio=max(0.35, self.cfg.min_breakout_body_ratio - 0.10),
+                min_volume_surge_ratio=max(1.0, self.cfg.min_volume_surge_ratio - 0.2),
+                ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
+                rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
+                require_vwap_confirmation=self.cfg.require_vwap_confirmation,
+                vwap_buffer_points=self.cfg.vwap_buffer_points,
+                rsi_bull_min=self.cfg.rsi_bull_min, rsi_bear_max=self.cfg.rsi_bear_max,
+                rsi_overbought_skip=self.cfg.rsi_overbought_skip,
+                rsi_oversold_skip=self.cfg.rsi_oversold_skip,
+                vix_max=self.cfg.vix_max,
+            )
+            _eval_strategy("RELAXED_ORB", result, "ORB_SCAN")
 
-                result = evaluate_orb_signal(
-                    candles, last_candle, vix,
-                    orb_start=orb_start, orb_end=orb_end,
-                    min_orb_range_points=self.cfg.min_orb_range_points,
-                    max_orb_range_points=self.cfg.relaxed_orb_max_range_points,
-                    breakout_buffer_pct=self.cfg.breakout_buffer_pct,
-                    min_breakout_body_ratio=max(0.35, self.cfg.min_breakout_body_ratio - 0.10),
-                    min_volume_surge_ratio=max(1.0, self.cfg.min_volume_surge_ratio - 0.2),
-                    ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
-                    rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
-                    require_vwap_confirmation=self.cfg.require_vwap_confirmation,
-                    vwap_buffer_points=self.cfg.vwap_buffer_points,
-                    rsi_bull_min=self.cfg.rsi_bull_min, rsi_bear_max=self.cfg.rsi_bear_max,
-                    rsi_overbought_skip=self.cfg.rsi_overbought_skip,
-                    rsi_oversold_skip=self.cfg.rsi_oversold_skip,
-                    vix_max=self.cfg.vix_max,
-                )
-                _log_event("ORB_SCAN", {
-                    "strategy": "RELAXED_ORB", "regime": regime.regime,
-                    "signal": result.get("signal"), "all_passed": result["all_passed"],
-                    "filters": {
-                        k: {"passed": v.get("passed"), "value": v.get("value"), "detail": v.get("detail", "")}
-                        for k, v in result["filters"].items()
-                    },
-                })
-                if not result["all_passed"]:
-                    failed = [f"{k}={v.get('value','')}" for k, v in result["filters"].items() if not v.get("passed")]
-                    logger.info(f"ORB SKIP [RELAXED_ORB]: {', '.join(failed[:5])}")
+        # ── MOMENTUM_BREAKOUT ──
+        if "MOMENTUM_BREAKOUT" in strategy_list and not self._momentum_signal_used and mb_window_start <= current_time <= mb_window_end:
+            mb_result = evaluate_momentum_breakout_signal(
+                candles, idx, vix,
+                breakout_lookback=self.cfg.momentum_breakout_lookback,
+                min_body_ratio=self.cfg.momentum_breakout_min_body_ratio,
+                rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
+                rsi_bull_min=self.cfg.momentum_breakout_rsi_bull_min,
+                rsi_bull_max=self.cfg.momentum_breakout_rsi_bull_max,
+                rsi_bear_min=self.cfg.momentum_breakout_rsi_bear_min,
+                rsi_bear_max=self.cfg.momentum_breakout_rsi_bear_max,
+                vix_max=self.cfg.vix_max,
+                min_volume_surge_ratio=self.cfg.momentum_breakout_min_volume_surge,
+                ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
+            )
+            _eval_strategy("MOMENTUM_BREAKOUT", mb_result, "MOMENTUM_SCAN")
 
-                if result["all_passed"] and result["signal"]:
-                    sl_pct, target_pct = SL_TARGET_BY_STRATEGY.get("RELAXED_ORB", (0.30, 0.55))
-                    self._enter_trade(
-                        signal=result["signal"], strategy="RELAXED_ORB",
-                        candle=last_candle, atr=result["atr"],
-                        filter_log=result["filters"], vix=effective_vix,
-                        regime=regime, sl_pct_override=sl_pct,
-                        target_pct_override=target_pct, risk_multiplier=risk_multiplier,
-                    )
-                    self._orb_signal_used = True
-                    return
+        # ── EMA_PULLBACK ──
+        if "EMA_PULLBACK" in strategy_list and not self._ema_pullback_signal_used and pb_window_start <= current_time <= pb_window_end:
+            pb_result = evaluate_ema_pullback_signal(
+                candles, idx, vix,
+                ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
+                pullback_proximity_pct=self.cfg.ema_pullback_proximity_pct,
+                min_body_ratio=self.cfg.ema_pullback_min_body_ratio,
+                rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
+                vix_max=self.cfg.vix_max,
+                lookback_candles=self.cfg.ema_pullback_lookback_candles,
+            )
+            _eval_strategy("EMA_PULLBACK", pb_result, "EMA_PULLBACK_SCAN")
 
-            elif strategy_name == "MOMENTUM_BREAKOUT":
-                if self._momentum_signal_used:
-                    continue
-                if not (mb_window_start <= current_time <= mb_window_end):
-                    continue
+        # ── VWAP_RECLAIM ──
+        if "VWAP_RECLAIM" in strategy_list and vwap_enabled and not self._reclaim_signal_used and reclaim_start <= current_time <= reclaim_end:
+            reclaim = evaluate_vwap_reclaim_signal(
+                candles, idx, vix,
+                reclaim_min_rejection_points=self.cfg.reclaim_min_rejection_points,
+                rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
+                vix_max=self.cfg.vix_max,
+            )
+            _eval_strategy("VWAP_RECLAIM", reclaim, "RECLAIM_SCAN")
 
-                idx = len(candles) - 1
-                mb_result = evaluate_momentum_breakout_signal(
-                    candles, idx, vix,
-                    breakout_lookback=self.cfg.momentum_breakout_lookback,
-                    min_body_ratio=self.cfg.momentum_breakout_min_body_ratio,
-                    rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
-                    rsi_bull_min=self.cfg.momentum_breakout_rsi_bull_min,
-                    rsi_bull_max=self.cfg.momentum_breakout_rsi_bull_max,
-                    rsi_bear_min=self.cfg.momentum_breakout_rsi_bear_min,
-                    rsi_bear_max=self.cfg.momentum_breakout_rsi_bear_max,
-                    vix_max=self.cfg.vix_max,
-                    min_volume_surge_ratio=self.cfg.momentum_breakout_min_volume_surge,
-                    ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
-                )
-                mb_filters = mb_result.get("filters", {})
-                _log_event("MOMENTUM_SCAN", {
-                    "strategy": "MOMENTUM_BREAKOUT", "regime": regime.regime,
-                    "trend": trend.state.value,
-                    "signal": mb_result.get("signal"), "all_passed": mb_result["all_passed"],
-                    "filters": {
-                        k: {"passed": v.get("passed"), "value": v.get("value"), "detail": v.get("detail", "")}
-                        for k, v in mb_filters.items()
-                    } if mb_filters else {},
-                })
-                if not mb_result["all_passed"]:
-                    failed = [f"{k}={v.get('value','')}" for k, v in mb_filters.items() if not v.get("passed")]
-                    logger.info(f"MOMENTUM SKIP: {', '.join(failed[:5]) if failed else 'no breakout'}")
+        # ── Log full scan cycle ──
+        _log_event("SCAN_CYCLE", {
+            "regime": regime.regime,
+            "trend": trend.state.value,
+            "trend_direction": trend.direction,
+            "conviction": trend.conviction,
+            "risk_multiplier": risk_multiplier,
+            "vix": effective_vix,
+            "strategies_evaluated": len(scan_results),
+            "signals_detected": len(candidates),
+            "scans": scan_results,
+            "candidates": [
+                {"strategy": c["strategy"], "signal": c["signal"], "confidence": c["confidence"]}
+                for c in candidates
+            ],
+        })
 
-                if mb_result["all_passed"] and mb_result["signal"]:
-                    sl_pct, target_pct = SL_TARGET_BY_STRATEGY.get("MOMENTUM_BREAKOUT", (0.22, 0.55))
-                    self._enter_trade(
-                        signal=mb_result["signal"], strategy="MOMENTUM_BREAKOUT",
-                        candle=last_candle, atr=mb_result["atr"],
-                        filter_log=mb_filters, vix=effective_vix,
-                        regime=regime, sl_pct_override=sl_pct,
-                        target_pct_override=target_pct, risk_multiplier=risk_multiplier,
-                    )
-                    self._momentum_signal_used = True
-                    return
+        # ── Pick strongest candidate ──
+        if not candidates:
+            return
 
-            elif strategy_name == "EMA_PULLBACK":
-                if self._ema_pullback_signal_used:
-                    continue
-                if not (pb_window_start <= current_time <= pb_window_end):
-                    continue
+        candidates.sort(key=lambda c: c["confidence"], reverse=True)
+        best = candidates[0]
 
-                idx = len(candles) - 1
-                pb_result = evaluate_ema_pullback_signal(
-                    candles, idx, vix,
-                    ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
-                    pullback_proximity_pct=self.cfg.ema_pullback_proximity_pct,
-                    min_body_ratio=self.cfg.ema_pullback_min_body_ratio,
-                    rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
-                    vix_max=self.cfg.vix_max,
-                    lookback_candles=self.cfg.ema_pullback_lookback_candles,
-                )
-                pb_filters = pb_result.get("filters", {})
-                _log_event("EMA_PULLBACK_SCAN", {
-                    "strategy": "EMA_PULLBACK", "regime": regime.regime,
-                    "signal": pb_result.get("signal"), "all_passed": pb_result["all_passed"],
-                    "filters": {
-                        k: {"passed": v.get("passed"), "value": v.get("value"), "detail": v.get("detail", "")}
-                        for k, v in pb_filters.items()
-                    } if pb_filters else {},
-                })
-                if not pb_result["all_passed"]:
-                    failed = [f"{k}={v.get('value','')}" for k, v in pb_filters.items() if not v.get("passed")]
-                    logger.info(f"EMA_PULLBACK SKIP: {', '.join(failed[:5]) if failed else 'no setup'}")
+        if len(candidates) > 1:
+            runner_up = candidates[1]
+            logger.info(
+                f"MULTI-SIGNAL: {len(candidates)} signals detected. "
+                f"BEST={best['strategy']} ({best['signal']}, conf={best['confidence']:.0f}) "
+                f"vs {runner_up['strategy']} ({runner_up['signal']}, conf={runner_up['confidence']:.0f})"
+            )
+        else:
+            logger.info(
+                f"SIGNAL: {best['strategy']} {best['signal']} confidence={best['confidence']:.0f}"
+            )
 
-                if pb_result["all_passed"] and pb_result["signal"]:
-                    sl_pct, target_pct = SL_TARGET_BY_STRATEGY.get("EMA_PULLBACK", (0.25, 0.55))
-                    self._enter_trade(
-                        signal=pb_result["signal"], strategy="EMA_PULLBACK",
-                        candle=last_candle, atr=pb_result["atr"],
-                        filter_log=pb_filters, vix=effective_vix,
-                        regime=regime, sl_pct_override=sl_pct,
-                        target_pct_override=target_pct, risk_multiplier=risk_multiplier,
-                    )
-                    self._ema_pullback_signal_used = True
-                    return
-
-            elif strategy_name == "VWAP_RECLAIM":
-                if not vwap_enabled or self._reclaim_signal_used:
-                    continue
-                if not (reclaim_start <= current_time <= reclaim_end):
-                    continue
-
-                idx = len(candles) - 1
-                reclaim = evaluate_vwap_reclaim_signal(
-                    candles, idx, vix,
-                    reclaim_min_rejection_points=self.cfg.reclaim_min_rejection_points,
-                    rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
-                    vix_max=self.cfg.vix_max,
-                )
-                reclaim_filters = reclaim.get("filters", {})
-                _log_event("RECLAIM_SCAN", {
-                    "strategy": "VWAP_RECLAIM", "regime": regime.regime,
-                    "signal": reclaim.get("signal"), "all_passed": reclaim["all_passed"],
-                    "filters": {
-                        k: {"passed": v.get("passed"), "value": v.get("value"), "detail": v.get("detail", "")}
-                        for k, v in reclaim_filters.items()
-                    } if reclaim_filters else {},
-                })
-                if not reclaim["all_passed"]:
-                    failed = [f"{k}={v.get('value','')}" for k, v in reclaim_filters.items() if not v.get("passed")]
-                    logger.info(f"VWAP SKIP: {', '.join(failed[:5]) if failed else 'no signal'}")
-
-                if reclaim["all_passed"] and reclaim["signal"]:
-                    sl_pct, target_pct = SL_TARGET_BY_STRATEGY.get("VWAP_RECLAIM", (0.28, 0.60))
-                    self._enter_trade(
-                        signal=reclaim["signal"], strategy="VWAP_RECLAIM",
-                        candle=last_candle, atr=reclaim["atr"],
-                        filter_log=reclaim["filters"], vix=effective_vix,
-                        regime=regime, sl_pct_override=sl_pct,
-                        target_pct_override=target_pct, risk_multiplier=risk_multiplier,
-                    )
-                    self._reclaim_signal_used = True
-                    return
+        self._enter_trade(
+            signal=best["signal"], strategy=best["strategy"],
+            candle=last_candle, atr=best["atr"],
+            filter_log=best["filters"], vix=effective_vix,
+            regime=regime, sl_pct_override=best["sl_pct"],
+            target_pct_override=best["target_pct"], risk_multiplier=risk_multiplier,
+        )
+        # Mark used flags
+        if best["strategy"] in ("ORB", "RELAXED_ORB"):
+            self._orb_signal_used = True
+        elif best["strategy"] == "MOMENTUM_BREAKOUT":
+            self._momentum_signal_used = True
+        elif best["strategy"] == "EMA_PULLBACK":
+            self._ema_pullback_signal_used = True
+        elif best["strategy"] == "VWAP_RECLAIM":
+            self._reclaim_signal_used = True
 
     def _enter_trade(
         self,
@@ -721,7 +675,9 @@ class KiteORBTrader:
                 f"= {effective_risk_pct*100:.1f}% | regime={regime.regime}"
             )
 
-        size_info = self.risk.compute_position_size(entry_price=opt_price, sl_pct=sl_pct)
+        size_info = self.risk.compute_position_size(
+            entry_price=opt_price, sl_pct=sl_pct, risk_pct_override=effective_risk_pct
+        )
         lots = size_info["lots"]
         qty = size_info["qty"]
 
@@ -729,8 +685,16 @@ class KiteORBTrader:
         target_price = round(opt_price * (1 + target_pct_override), 1)
 
         trend_info = f"{self._current_trend.state.value}" if self._current_trend else "?"
+        conf_score = compute_signal_confidence(
+            strategy, signal, regime.regime, self._current_trend or TrendResult(
+                state=TrendState.NEUTRAL, direction="NEUTRAL", conviction=0,
+                risk_multiplier=0.6, strategy_priority=[]
+            ),
+            filter_log, vix,
+        )
         logger.info(
             f"SIGNAL: {strategy} {signal} | trend={trend_info} regime={regime.regime} | "
+            f"confidence={conf_score:.0f} | "
             f"{symbol} | LTP={opt_price:.2f} SL={sl_price:.2f} ({sl_pct*100:.0f}%) "
             f"TGT={target_price:.2f} ({target_pct_override*100:.0f}%) | "
             f"Lots={lots} Qty={qty} Risk=₹{size_info['actual_risk']:.0f} "
@@ -816,6 +780,9 @@ class KiteORBTrader:
 
         _log_event("ENTRY", {
             "strategy": strategy, "regime": regime.regime, "signal": signal,
+            "confidence": conf_score,
+            "trend": trend_info, "conviction": self._current_trend.conviction if self._current_trend else 0,
+            "risk_multiplier": risk_multiplier,
             "symbol": symbol, "fill_price": fill_price,
             "signal_ltp": opt_price,
             "slippage_pct": round((fill_price - opt_price) / opt_price * 100, 3),
