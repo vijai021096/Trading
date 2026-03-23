@@ -7,7 +7,7 @@ import {
   Activity, Clock, Eye, AlertCircle, ArrowUpRight, ArrowDownRight,
   Crosshair, ShieldCheck, TrendingUp, TrendingDown, Radio, Layers,
   Zap, Target, BarChart3, LineChart, Gauge, Timer, Trophy, Flame,
-  ChevronRight, Power, ToggleLeft, ToggleRight, AlertOctagon, Ruler,
+  ChevronRight, Power, ToggleLeft, ToggleRight, AlertOctagon, Ruler, Flame,
   Brain, Compass, Waves, ChevronUp, ChevronDown, Minus
 } from 'lucide-react'
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
@@ -711,72 +711,112 @@ function NiftyChart() {
 }
 
 /* ── Strategy Toggle ──────────────────────────────────────── */
+type StrategyStateKeys =
+  | 'orb_enabled' | 'relaxed_orb_enabled' | 'momentum_breakout_enabled'
+  | 'ema_pullback_enabled' | 'vwap_reclaim_enabled'
+  | 'quality_filter_enabled' | 'choppy_filter_enabled' | 'htf_filter_enabled'
+
+type StrategyState = Record<StrategyStateKeys, boolean>
+
+const STRATEGY_DEFS: { key: StrategyStateKeys; label: string; desc: string; color: string; iconColor: string; icon: any }[] = [
+  { key: 'orb_enabled',               label: 'ORB',              desc: 'Opening Range Breakout · 9:30–10:30',  color: 'bg-amber/8 border-amber/20',   iconColor: 'text-amber',  icon: Flame    },
+  { key: 'relaxed_orb_enabled',       label: 'Relaxed ORB',      desc: 'Wide-range days · up to 320pt range',  color: 'bg-amber/5 border-amber/15',   iconColor: 'text-amber',  icon: Flame    },
+  { key: 'momentum_breakout_enabled', label: 'Momentum Breakout',desc: 'N-candle range explosive · 9:30–12:00',color: 'bg-green/8 border-green/20',   iconColor: 'text-green',  icon: Zap      },
+  { key: 'ema_pullback_enabled',      label: 'EMA Pullback',     desc: 'EMA21 bounce in trend · 9:30–1:00',    color: 'bg-accent/8 border-accent/20', iconColor: 'text-accent', icon: TrendingUp},
+  { key: 'vwap_reclaim_enabled',      label: 'VWAP Reclaim',     desc: 'VWAP cross confirmation · 10:00–1:30', color: 'bg-cyan/8 border-cyan/20',     iconColor: 'text-cyan',   icon: Waves    },
+]
+
+const FILTER_DEFS: { key: StrategyStateKeys; label: string; desc: string }[] = [
+  { key: 'quality_filter_enabled', label: 'Quality Filter',  desc: 'Require score ≥ 3/5 before entry' },
+  { key: 'choppy_filter_enabled',  label: 'Choppy Filter',   desc: 'Skip when 8-candle range < 60pt' },
+  { key: 'htf_filter_enabled',     label: 'HTF Confirm',     desc: '15-min trend must agree with 5-min' },
+]
+
 function StrategyToggle() {
-  const [state, setState] = useState({ orb_enabled: true, vwap_enabled: true })
+  const defaultState: StrategyState = {
+    orb_enabled: true, relaxed_orb_enabled: true, momentum_breakout_enabled: true,
+    ema_pullback_enabled: true, vwap_reclaim_enabled: true,
+    quality_filter_enabled: true, choppy_filter_enabled: true, htf_filter_enabled: true,
+  }
+  const [state, setState] = useState<StrategyState>(defaultState)
   const [loading, setLoading] = useState(false)
+  const [showFilters, setShowFilters] = useState(false)
 
   useEffect(() => {
-    axios.get('/api/strategy/state').then(r => setState(r.data)).catch(() => {})
+    axios.get('/api/strategy/state').then(r => setState({ ...defaultState, ...r.data })).catch(() => {})
   }, [])
 
-  const toggle = async (key: 'orb_enabled' | 'vwap_enabled') => {
+  const toggle = async (key: StrategyStateKeys) => {
+    const next = { ...state, [key]: !state[key] }
+    setState(next)
     setLoading(true)
-    try { const r = await axios.post('/api/strategy/toggle', { ...state, [key]: !state[key] }); setState(r.data) } catch {}
+    try { const r = await axios.post('/api/strategy/toggle', next); setState({ ...defaultState, ...r.data }) } catch {}
     setLoading(false)
   }
 
-  const colorMap = {
-    orb_enabled: {
-      active: 'bg-amber/8 border-amber/20',
-      inactive: 'bg-surface/50 border-line/20',
-      icon: 'bg-amber/15',
-      iconText: 'text-amber',
-      toggle: 'text-amber',
-    },
-    vwap_enabled: {
-      active: 'bg-cyan/8 border-cyan/20',
-      inactive: 'bg-surface/50 border-line/20',
-      icon: 'bg-cyan/15',
-      iconText: 'text-cyan',
-      toggle: 'text-cyan',
-    },
-  }
+  const enabledCount = STRATEGY_DEFS.filter(d => state[d.key]).length
 
   return (
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
-      className="glass-card rounded-2xl p-6 neon-border">
-      <div className="flex items-center gap-2 mb-5">
-        <Power size={16} className="text-accent" />
-        <span className="text-sm font-bold uppercase tracking-widest text-text3">Strategy Control</span>
+      className="glass-card rounded-2xl p-5 neon-border">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Power size={15} className="text-accent" />
+          <span className="text-sm font-bold uppercase tracking-widest text-text3">Strategy Control</span>
+        </div>
+        <span className={clsx('text-xs font-bold px-2 py-0.5 rounded-lg',
+          enabledCount >= 3 ? 'bg-green/10 text-green' : enabledCount >= 1 ? 'bg-amber/10 text-amber' : 'bg-red/10 text-red')}>
+          {enabledCount}/5 active
+        </span>
       </div>
-      <div className="space-y-3">
-        {([
-          { key: 'orb_enabled' as const, label: 'ORB Strategy', desc: 'Opening Range Breakout · 9:30–10:00' },
-          { key: 'vwap_enabled' as const, label: 'VWAP Reclaim', desc: 'VWAP Cross · 10:00–2:30' },
-        ]).map(({ key, label, desc }) => {
-          const cm = colorMap[key]
-          return (
-            <div key={key} className={clsx('flex items-center justify-between p-4 rounded-xl border transition-all',
-              state[key] ? cm.active : cm.inactive)}>
-              <div className="flex items-center gap-3">
-                <div className={clsx('w-8 h-8 rounded-lg flex items-center justify-center', cm.icon)}>
-                  <Zap size={14} className={cm.iconText} />
-                </div>
-                <div>
-                  <div className="text-sm font-bold text-text1">{label}</div>
-                  <div className="text-xs text-text3">{desc}</div>
-                </div>
+
+      {/* Strategy toggles */}
+      <div className="space-y-2 mb-3">
+        {STRATEGY_DEFS.map(({ key, label, desc, color, iconColor, icon: Icon }) => (
+          <div key={key} className={clsx('flex items-center justify-between px-3 py-2.5 rounded-xl border transition-all',
+            state[key] ? color : 'bg-surface/40 border-line/15 opacity-60')}>
+            <div className="flex items-center gap-2.5">
+              <Icon size={13} className={state[key] ? iconColor : 'text-text3'} />
+              <div>
+                <div className={clsx('text-xs font-bold', state[key] ? 'text-text1' : 'text-text3')}>{label}</div>
+                <div className="text-[10px] text-text3 leading-tight">{desc}</div>
               </div>
-              <button onClick={() => toggle(key)} disabled={loading}
-                className={clsx('transition-all', loading && 'opacity-50')}>
+            </div>
+            <button onClick={() => toggle(key)} disabled={loading} className="shrink-0 ml-2">
+              {state[key]
+                ? <ToggleRight size={24} className={iconColor} />
+                : <ToggleLeft size={24} className="text-text3" />}
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Filter toggles (collapsible) */}
+      <button onClick={() => setShowFilters(v => !v)}
+        className="w-full flex items-center justify-between py-1.5 px-1 text-xs text-text3 hover:text-text2 transition-colors">
+        <span className="font-bold uppercase tracking-wider flex items-center gap-1.5">
+          <ShieldCheck size={11} /> Smart Filters
+        </span>
+        <ChevronRight size={13} className={clsx('transition-transform', showFilters && 'rotate-90')} />
+      </button>
+      {showFilters && (
+        <div className="space-y-1.5 mt-2">
+          {FILTER_DEFS.map(({ key, label, desc }) => (
+            <div key={key} className={clsx('flex items-center justify-between px-3 py-2 rounded-xl border transition-all',
+              state[key] ? 'bg-accent/5 border-accent/15' : 'bg-surface/40 border-line/15 opacity-60')}>
+              <div>
+                <div className="text-xs font-bold text-text2">{label}</div>
+                <div className="text-[10px] text-text3">{desc}</div>
+              </div>
+              <button onClick={() => toggle(key)} disabled={loading} className="ml-2">
                 {state[key]
-                  ? <ToggleRight size={28} className={cm.toggle} />
-                  : <ToggleLeft size={28} className="text-text3" />}
+                  ? <ToggleRight size={22} className="text-accent" />
+                  : <ToggleLeft size={22} className="text-text3" />}
               </button>
             </div>
-          )
-        })}
-      </div>
+          ))}
+        </div>
+      )}
     </motion.div>
   )
 }

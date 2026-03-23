@@ -146,8 +146,31 @@ def evaluate_vwap_reclaim_signal(
     else:
         filters["vix"] = {"passed": True, "detail": "VIX skipped"}
 
+    # ── 8. HOLD confirmation (next candle must not reject VWAP) ───
+    # Look for a prior confirmation candle (1 candle before current must also
+    # hold above/below VWAP — prevents single-spike false reclaims)
+    if current_idx >= 2 and vwap_now is not None:
+        prev2 = candles[current_idx - 1]
+        prev2_vwap = vwap_at(candles, prev2["ts"])
+        if prev2_vwap is not None:
+            if direction == "CALL":
+                hold_ok = float(prev2["close"]) >= prev2_vwap * 0.999  # Must stay above VWAP
+            else:
+                hold_ok = float(prev2["close"]) <= prev2_vwap * 1.001  # Must stay below VWAP
+            # Also check no dominant rejection wick on prev candle
+            prev2_body = body_ratio(prev2)
+            hold_ok = hold_ok and prev2_body >= 0.30
+        else:
+            hold_ok = True
+        filters["hold_confirmation"] = {
+            "passed": hold_ok,
+            "detail": f"Hold check {'passed' if hold_ok else 'failed'} — prev candle must sustain VWAP position",
+        }
+    else:
+        filters["hold_confirmation"] = {"passed": True, "detail": "Hold skipped (early candle)"}
+
     # ── Final ─────────────────────────────────────────────────────
-    critical = ["vwap_cross", "rejection_magnitude", "candle_body", "supertrend", "rsi", "volume_surge", "vix"]
+    critical = ["vwap_cross", "rejection_magnitude", "candle_body", "supertrend", "rsi", "volume_surge", "vix", "hold_confirmation"]
     all_passed = all(filters.get(f, {}).get("passed", True) for f in critical)
     result_base["signal"] = direction if all_passed else None
     result_base["all_passed"] = all_passed

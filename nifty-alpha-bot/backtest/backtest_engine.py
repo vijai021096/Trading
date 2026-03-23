@@ -18,6 +18,10 @@ from shared.vwap_reclaim_engine import evaluate_vwap_reclaim_signal
 from shared.ema_pullback_engine import evaluate_ema_pullback_signal
 from shared.momentum_breakout_engine import evaluate_momentum_breakout_signal
 from shared.trend_detector import detect_trend, STRATEGY_PRIORITY_BY_TREND, SL_TARGET_BY_STRATEGY, TREND_RISK_MULTIPLIER
+from shared.quality_filter import (
+    compute_trade_quality, is_choppy_market, is_overextended,
+    is_late_move, get_htf_direction, get_dynamic_blocklist,
+)
 
 
 @dataclass
@@ -89,6 +93,17 @@ class BacktestConfig:
     break_even_trigger_pct: float = 0.20
     thursday_max_loss_pct: float = 0.15
 
+    # Quality Filter
+    min_quality_score: int = 3
+    enable_quality_filter: bool = True
+    enable_choppy_filter: bool = True
+    enable_htf_filter: bool = True
+    enable_overextended_filter: bool = True
+    max_late_move_pts: float = 120.0
+    enable_dynamic_blocklist: bool = True
+    enable_reentry: bool = True
+    reentry_window_min: int = 30       # Re-entry allowed within 30 min of SL hit
+
     # Execution
     force_exit_time: str = "15:15"
     max_trades_per_day: int = 2
@@ -96,6 +111,43 @@ class BacktestConfig:
     max_daily_loss_pct: float = 0.04
     slippage_pct: float = 0.005
     strike_step: int = 50
+
+
+def _quality_check(
+    candles: List[Dict],
+    i: int,
+    signal: str,
+    strategy_name: str,
+    cfg: "BacktestConfig",
+    blocklist: List[str],
+    allowed_direction: Optional[str],
+    htf_dir: str,
+    orb_level: float = 0.0,
+) -> Optional[str]:
+    """
+    Returns None if trade should be taken, or a rejection reason string.
+    Applies: blocklist, direction alignment, HTF filter, choppy (already in blocklist),
+             overextended, late move, quality score.
+    """
+    if strategy_name in blocklist:
+        return f"blocked:{strategy_name}"
+
+    if allowed_direction and signal != allowed_direction:
+        return f"counter_trend:{signal}!={allowed_direction}"
+
+    # HTF must agree (or be neutral) — skip if explicit disagreement
+    if cfg.enable_htf_filter and htf_dir not in (signal, "NEUTRAL"):
+        return f"htf_conflict:{htf_dir}"
+
+    if cfg.enable_overextended_filter and is_overextended(candles, i, signal):
+        return "overextended"
+
+    if cfg.enable_quality_filter:
+        q = compute_trade_quality(candles, i, signal)
+        if not q["tradeable"]:
+            return f"low_quality:{q['score']}/5"
+
+    return None   # All checks passed
 
 
 def _simulate_trade(
@@ -207,6 +259,11 @@ def run_backtest(
         ema_pullback_used = False
         momentum_used = False
 
+        # Re-entry tracking: after SL, allow 1 re-entry within 30 min
+        last_sl_time: Optional[Any] = None
+        last_sl_direction: Optional[str] = None
+        reentry_used = False
+
         # Allow one attempt per day even after consecutive loss streak
         if consecutive_losses >= cfg.max_consecutive_losses:
             consecutive_losses = cfg.max_consecutive_losses - 1
@@ -251,6 +308,14 @@ def run_backtest(
                 "ORB", "MOMENTUM_BREAKOUT", "EMA_PULLBACK", "VWAP_RECLAIM", "RELAXED_ORB"
             ]
 
+            # ── Dynamic strategy blocklist ─────────────────────────────
+            trend_state_str = trend_result.state.value if trend_result else "NEUTRAL"
+            choppy = cfg.enable_choppy_filter and is_choppy_market(candles, i)
+            blocklist = get_dynamic_blocklist(trend_state_str, choppy) if cfg.enable_dynamic_blocklist else []
+
+            # ── HTF direction ──────────────────────────────────────────
+            htf_dir = get_htf_direction(candles, i) if cfg.enable_htf_filter else "NEUTRAL"
+
             # ── ORB ───────────────────────────────────────────────────────
             if (
                 not orb_signal_used
@@ -277,9 +342,8 @@ def run_backtest(
                 )
 
                 if result["all_passed"] and result["signal"]:
-                    if allowed_direction and result["signal"] != allowed_direction:
-                        pass  # Skip counter-trend ORB signals
-                    else:
+                    skip = _quality_check(candles, i, result["signal"], "ORB", cfg, blocklist, allowed_direction, htf_dir)
+                    if not skip:
                         trade = _simulate_trade(
                             i, candle, result["signal"], result["atr"],
                             "ORB", candles, trade_date, vix, is_thursday, cfg,
@@ -288,16 +352,12 @@ def run_backtest(
                         if trade:
                             all_trades.append(trade)
                             net = trade["net_pnl"]
-                            daily_pnl += net
-                            capital += net
-                            trades_today += 1
-                            orb_signal_used = True
-                            consecutive_losses = 0 if net > 0 else consecutive_losses + 1
+                            daily_pnl += net; capital += net; trades_today += 1; orb_signal_used = True
+                            if net <= 0: consecutive_losses += 1; last_sl_time = candle["ts"]; last_sl_direction = result["signal"]
+                            else: consecutive_losses = 0
                             if verbose:
                                 sign = "+" if net >= 0 else ""
-                                print(f"  [{trade_date}] ORB  {result['signal']:4s} | "
-                                      f"Entry={trade['entry_price']:.0f} Exit={trade['exit_price']:.0f} | "
-                                      f"P&L: {sign}₹{net:.0f} | {trade['exit_reason']} | RM={risk_multiplier:.2f}")
+                                print(f"  [{trade_date}] ORB  {result['signal']:4s} | Entry={trade['entry_price']:.0f} Exit={trade['exit_price']:.0f} | P&L: {sign}₹{net:.0f} | {trade['exit_reason']} | Q={compute_trade_quality(candles,i,result['signal'])['score']}/5")
 
             if trades_today >= cfg.max_trades_per_day:
                 break
@@ -329,9 +389,8 @@ def run_backtest(
                 )
 
                 if result["all_passed"] and result["signal"]:
-                    if allowed_direction and result["signal"] != allowed_direction:
-                        pass  # Skip counter-trend
-                    else:
+                    skip = _quality_check(candles, i, result["signal"], "RELAXED_ORB", cfg, blocklist, allowed_direction, htf_dir)
+                    if not skip:
                         trade = _simulate_trade(
                             i, candle, result["signal"], result["atr"],
                             "RELAXED_ORB", candles, trade_date, vix, is_thursday, cfg,
@@ -340,17 +399,13 @@ def run_backtest(
                         if trade:
                             all_trades.append(trade)
                             net = trade["net_pnl"]
-                            daily_pnl += net
-                            capital += net
-                            trades_today += 1
-                            relaxed_orb_used = True
-                            orb_signal_used = True
-                            consecutive_losses = 0 if net > 0 else consecutive_losses + 1
+                            daily_pnl += net; capital += net; trades_today += 1
+                            relaxed_orb_used = True; orb_signal_used = True
+                            if net <= 0: consecutive_losses += 1; last_sl_time = candle["ts"]; last_sl_direction = result["signal"]
+                            else: consecutive_losses = 0
                             if verbose:
                                 sign = "+" if net >= 0 else ""
-                                print(f"  [{trade_date}] RORB {result['signal']:4s} | "
-                                      f"Entry={trade['entry_price']:.0f} Exit={trade['exit_price']:.0f} | "
-                                      f"P&L: {sign}₹{net:.0f} | {trade['exit_reason']}")
+                                print(f"  [{trade_date}] RORB {result['signal']:4s} | Entry={trade['entry_price']:.0f} Exit={trade['exit_price']:.0f} | P&L: {sign}₹{net:.0f} | {trade['exit_reason']}")
 
             if trades_today >= cfg.max_trades_per_day:
                 break
@@ -378,9 +433,8 @@ def run_backtest(
                 )
 
                 if mb["all_passed"] and mb["signal"]:
-                    if allowed_direction and mb["signal"] != allowed_direction:
-                        pass  # Skip counter-trend
-                    else:
+                    skip = _quality_check(candles, i, mb["signal"], "MOMENTUM_BREAKOUT", cfg, blocklist, allowed_direction, htf_dir)
+                    if not skip:
                         trade = _simulate_trade(
                             i, candle, mb["signal"], mb["atr"],
                             "MOMENTUM_BREAKOUT", candles, trade_date, vix, is_thursday, cfg,
@@ -389,16 +443,12 @@ def run_backtest(
                         if trade:
                             all_trades.append(trade)
                             net = trade["net_pnl"]
-                            daily_pnl += net
-                            capital += net
-                            trades_today += 1
-                            momentum_used = True
-                            consecutive_losses = 0 if net > 0 else consecutive_losses + 1
+                            daily_pnl += net; capital += net; trades_today += 1; momentum_used = True
+                            if net <= 0: consecutive_losses += 1; last_sl_time = candle["ts"]; last_sl_direction = mb["signal"]
+                            else: consecutive_losses = 0
                             if verbose:
                                 sign = "+" if net >= 0 else ""
-                                print(f"  [{trade_date}] MOM  {mb['signal']:4s} | "
-                                      f"Entry={trade['entry_price']:.0f} Exit={trade['exit_price']:.0f} | "
-                                      f"P&L: {sign}₹{net:.0f} | {trade['exit_reason']}")
+                                print(f"  [{trade_date}] MOM  {mb['signal']:4s} | Entry={trade['entry_price']:.0f} Exit={trade['exit_price']:.0f} | P&L: {sign}₹{net:.0f} | {trade['exit_reason']}")
 
             if trades_today >= cfg.max_trades_per_day:
                 break
@@ -421,9 +471,8 @@ def run_backtest(
                 )
 
                 if pb["all_passed"] and pb["signal"]:
-                    if allowed_direction and pb["signal"] != allowed_direction:
-                        pass  # Skip counter-trend
-                    else:
+                    skip = _quality_check(candles, i, pb["signal"], "EMA_PULLBACK", cfg, blocklist, allowed_direction, htf_dir)
+                    if not skip:
                         trade = _simulate_trade(
                             i, candle, pb["signal"], pb["atr"],
                             "EMA_PULLBACK", candles, trade_date, vix, is_thursday, cfg,
@@ -432,16 +481,12 @@ def run_backtest(
                         if trade:
                             all_trades.append(trade)
                             net = trade["net_pnl"]
-                            daily_pnl += net
-                            capital += net
-                            trades_today += 1
-                            ema_pullback_used = True
-                            consecutive_losses = 0 if net > 0 else consecutive_losses + 1
+                            daily_pnl += net; capital += net; trades_today += 1; ema_pullback_used = True
+                            if net <= 0: consecutive_losses += 1; last_sl_time = candle["ts"]; last_sl_direction = pb["signal"]
+                            else: consecutive_losses = 0
                             if verbose:
                                 sign = "+" if net >= 0 else ""
-                                print(f"  [{trade_date}] EMA  {pb['signal']:4s} | "
-                                      f"Entry={trade['entry_price']:.0f} Exit={trade['exit_price']:.0f} | "
-                                      f"P&L: {sign}₹{net:.0f} | {trade['exit_reason']}")
+                                print(f"  [{trade_date}] EMA  {pb['signal']:4s} | Entry={trade['entry_price']:.0f} Exit={trade['exit_price']:.0f} | P&L: {sign}₹{net:.0f} | {trade['exit_reason']}")
 
             if trades_today >= cfg.max_trades_per_day:
                 break
@@ -461,9 +506,8 @@ def run_backtest(
                 )
 
                 if reclaim["all_passed"] and reclaim["signal"]:
-                    if allowed_direction and reclaim["signal"] != allowed_direction:
-                        pass  # Skip counter-trend
-                    else:
+                    skip = _quality_check(candles, i, reclaim["signal"], "VWAP_RECLAIM", cfg, blocklist, allowed_direction, htf_dir)
+                    if not skip:
                         trade = _simulate_trade(
                             i, candle, reclaim["signal"], reclaim["atr"],
                             "VWAP_RECLAIM", candles, trade_date, vix, is_thursday, cfg,
@@ -472,16 +516,54 @@ def run_backtest(
                         if trade:
                             all_trades.append(trade)
                             net = trade["net_pnl"]
-                            daily_pnl += net
-                            capital += net
-                            trades_today += 1
-                            reclaim_signal_used = True
-                            consecutive_losses = 0 if net > 0 else consecutive_losses + 1
+                            daily_pnl += net; capital += net; trades_today += 1; reclaim_signal_used = True
+                            if net <= 0: consecutive_losses += 1; last_sl_time = candle["ts"]; last_sl_direction = reclaim["signal"]
+                            else: consecutive_losses = 0
                             if verbose:
                                 sign = "+" if net >= 0 else ""
-                                print(f"  [{trade_date}] RCL  {reclaim['signal']:4s} | "
-                                      f"Entry={trade['entry_price']:.0f} Exit={trade['exit_price']:.0f} | "
-                                      f"P&L: {sign}₹{net:.0f} | {trade['exit_reason']}")
+                                print(f"  [{trade_date}] RCL  {reclaim['signal']:4s} | Entry={trade['entry_price']:.0f} Exit={trade['exit_price']:.0f} | P&L: {sign}₹{net:.0f} | {trade['exit_reason']}")
+
+            # ── RE-ENTRY LOGIC ────────────────────────────────────────────
+            # After an SL hit, allow 1 re-entry if same setup forms within 30 min
+            if (
+                cfg.enable_reentry
+                and not reentry_used
+                and last_sl_time is not None
+                and last_sl_direction is not None
+                and trades_today < cfg.max_trades_per_day
+                and consecutive_losses < cfg.max_consecutive_losses
+                and daily_pnl > -daily_loss_limit
+            ):
+                from datetime import timedelta
+                reentry_window = timedelta(minutes=cfg.reentry_window_min)
+                if candle["ts"] - last_sl_time <= reentry_window:
+                    # Try VWAP reclaim as re-entry (most reliable after SL)
+                    if reclaim_start <= c_time <= reclaim_end:
+                        re_reclaim = evaluate_vwap_reclaim_signal(
+                            candles[:i + 1], i, vix,
+                            reclaim_min_rejection_points=cfg.reclaim_min_rejection_points,
+                            rsi_period=cfg.rsi_period, atr_period=cfg.atr_period,
+                            vix_max=cfg.vix_max,
+                        )
+                        if (re_reclaim["all_passed"] and re_reclaim["signal"] == last_sl_direction):
+                            q = compute_trade_quality(candles, i, re_reclaim["signal"])
+                            if q["tradeable"] and not (allowed_direction and re_reclaim["signal"] != allowed_direction):
+                                trade = _simulate_trade(
+                                    i, candle, re_reclaim["signal"], re_reclaim["atr"],
+                                    "VWAP_RECLAIM", candles, trade_date, vix, is_thursday, cfg,
+                                    risk_multiplier=risk_multiplier * 0.75,  # Reduced size on re-entry
+                                    filters=re_reclaim["filters"],
+                                )
+                                if trade:
+                                    trade["strategy"] = "VWAP_RECLAIM_REENTRY"
+                                    all_trades.append(trade)
+                                    net = trade["net_pnl"]
+                                    daily_pnl += net; capital += net; trades_today += 1; reentry_used = True
+                                    if net <= 0: consecutive_losses += 1
+                                    else: consecutive_losses = 0; last_sl_time = None
+                                    if verbose:
+                                        sign = "+" if net >= 0 else ""
+                                        print(f"  [{trade_date}] RE-ENTRY {re_reclaim['signal']:4s} | Entry={trade['entry_price']:.0f} | P&L: {sign}₹{net:.0f}")
 
         sys.stdout.flush()
 

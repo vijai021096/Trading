@@ -955,22 +955,34 @@ def market_state_endpoint():
 # ── Strategy toggle ───────────────────────────────────────────
 STRATEGY_STATE_FILE = _STATE_DIR / "kite_bot_strategy_state.json"
 
+_STRATEGY_DEFAULTS = {
+    "orb_enabled":               True,
+    "relaxed_orb_enabled":       True,
+    "momentum_breakout_enabled": True,
+    "ema_pullback_enabled":      True,
+    "vwap_reclaim_enabled":      True,
+    "quality_filter_enabled":    True,
+    "choppy_filter_enabled":     True,
+    "htf_filter_enabled":        True,
+}
+
 @app.get("/api/strategy/state")
 def get_strategy_state():
+    state = dict(_STRATEGY_DEFAULTS)
     if STRATEGY_STATE_FILE.exists():
         try:
-            return json.loads(STRATEGY_STATE_FILE.read_text())
+            saved = json.loads(STRATEGY_STATE_FILE.read_text())
+            state.update(saved)
         except Exception:
             pass
-    return {"orb_enabled": True, "vwap_enabled": True}
+    return state
 
 @app.post("/api/strategy/toggle")
 def toggle_strategy(body: dict):
     state = get_strategy_state()
-    if "orb_enabled" in body:
-        state["orb_enabled"] = bool(body["orb_enabled"])
-    if "vwap_enabled" in body:
-        state["vwap_enabled"] = bool(body["vwap_enabled"])
+    for key in _STRATEGY_DEFAULTS:
+        if key in body:
+            state[key] = bool(body[key])
     STRATEGY_STATE_FILE.write_text(json.dumps(state))
     return state
 
