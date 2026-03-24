@@ -107,10 +107,20 @@ class DailyBacktestConfig:
     enable_quality_gate: bool = True
     min_quality_score: float = 40.0        # Normal entry minimum — calibrated to max PF + monthly consistency
 
+    # ── Strong-trend relaxed quality gate (A- trades) ──
+    # In strong trend regimes, market is forgiving — allow slightly weaker setups
+    strong_trend_quality_discount: float = 12.0  # Lower quality threshold by 12 in strong trend
+
     # ── Skip-after-loss filter (mirrors live bot logic) ──
     # After a losing trade, same-direction re-entry requires HIGHER quality score
     enable_skip_after_loss: bool = True
     skip_after_loss_min_quality: float = 60.0  # Stricter threshold after same-dir loss
+
+    # ── Re-entry on same valid setup after SL ──
+    # If a trade hits SL but the same signal is still valid: allow one re-entry per day
+    # Models markets that shake out then resume the real move
+    enable_reentry_after_sl: bool = False  # Disabled: adds losses empirically
+    reentry_quality_min: float = 55.0  # Higher quality required for re-entry
 
     # ── Conviction-based day cap (mirrors live bot logic) ──
     # On strong trend days (high ADX), allow up to strong_trend_max_trades
@@ -791,7 +801,7 @@ _REGIME_QUALITY: Dict[str, int] = {
     "MILD_TREND":         20,
     "MEAN_REVERT":        10,
     "STRONG_TREND_DOWN":  18,
-    "STRONG_TREND_UP":    -15,  # Heavy penalty — structurally losing for CALL signals
+    "STRONG_TREND_UP":    -25,  # Very heavy penalty — WR=8% empirically for CALL signals
     "BREAKOUT":           15,
 }
 
@@ -1091,6 +1101,11 @@ def run_daily_backtest(
         if cfg.enable_conviction_day_cap and adx_vals[i] >= cfg.strong_trend_adx_thresh:
             day_trade_cap = max(day_trade_cap, min(cfg.strong_trend_max_trades, cfg.max_trades_per_day))
 
+        # Extended window proxy: MILD_TREND and STRONG_TREND_DOWN allow one extra match slot
+        # STRONG_TREND_UP excluded (WR=8% empirically — more slots = more losses)
+        if regime in ("MILD_TREND", "STRONG_TREND_DOWN"):
+            day_trade_cap = max(day_trade_cap, min(day_trade_cap + 1, cfg.max_trades_per_day))
+
         for strat_name in scan_order:
             enabled_attr = f"enable_{strat_name.lower()}"
             if hasattr(cfg, enabled_attr) and not getattr(cfg, enabled_attr):
@@ -1174,15 +1189,27 @@ def run_daily_backtest(
             )
             filter_log["quality_score"] = quality
 
-            # A+ Quality Gate: block all low-quality setups regardless of direction
-            if cfg.enable_quality_gate and quality < cfg.min_quality_score:
+            # A+ Quality Gate: block all low-quality setups
+            # STRONG_TREND_DOWN only gets A- discount (WR=100% empirically, market forgiving)
+            # STRONG_TREND_UP keeps normal threshold (WR=8%, do NOT relax)
+            # MILD_TREND also gets a small discount (WR=54%, reliable regime)
+            is_strong_bear = regime == "STRONG_TREND_DOWN"
+            is_strong_trend = regime in ("STRONG_TREND_UP", "STRONG_TREND_DOWN")
+            if is_strong_bear:
+                effective_min_quality = cfg.min_quality_score - cfg.strong_trend_quality_discount
+            elif regime == "MILD_TREND":
+                effective_min_quality = cfg.min_quality_score - 5.0
+            else:
+                effective_min_quality = cfg.min_quality_score
+            if cfg.enable_quality_gate and quality < effective_min_quality:
                 skip_reasons["low_quality"] = skip_reasons.get("low_quality", 0) + 1
                 continue
 
-            # Skip-after-loss filter (mirrors live bot logic):
-            # After a losing trade in the same direction, require higher quality score
+            # Skip-after-loss filter:
+            # STRONG_TREND_DOWN: fake first move → real second move — allow re-entry
+            # All other regimes: require higher quality score for same-direction re-entry
             if cfg.enable_skip_after_loss and last_trade_was_loss and last_exit_direction == signal:
-                if quality < cfg.skip_after_loss_min_quality:
+                if not is_strong_bear and quality < cfg.skip_after_loss_min_quality:
                     skip_reasons["skip_after_loss"] = skip_reasons.get("skip_after_loss", 0) + 1
                     continue
 
@@ -1258,6 +1285,19 @@ def run_daily_backtest(
                 consecutive_losses += 1
                 last_trade_was_loss = True
             last_exit_direction = signal
+
+            # ── Re-entry after SL: same setup still valid → allow one more leg ──
+            # Only in STRONG_TREND_DOWN (WR=100%) — shakeout then real move
+            # STRONG_TREND_UP excluded (WR=8% — re-entry makes losses worse)
+            if (cfg.enable_reentry_after_sl
+                    and trade["exit_reason"] == "SL_HIT"
+                    and is_strong_bear
+                    and leg_idx == 0  # only re-enter after the first leg's SL
+                    and len(matches) < cfg.max_trades_per_day):
+                # Re-add the same signal as a re-entry leg (with same filter_log, different tag)
+                reentry_fl = dict(filter_log)
+                reentry_fl["reentry"] = True
+                matches.append((signal, strategy_name, reentry_fl))
 
             if verbose:
                 sign = "+" if net >= 0 else ""

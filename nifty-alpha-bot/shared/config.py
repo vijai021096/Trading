@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     late_window_target_pct: float = 0.30       # 30% target (2.5x RR, achievable intraday)
     # Strategies allowed in late window (A+ only)
     late_window_strategies: str = "BREAKOUT_MOMENTUM,TREND_CONTINUATION,INSIDE_BAR_BREAK"
+    # Extended window for trending regimes (mild/strong trend: moves continue past 11:30)
+    trending_regime_window_end: str = "13:30"
+    trending_regimes_for_extended_window: str = "MILD_TREND,STRONG_TREND_UP,STRONG_TREND_DOWN"
 
     # ── Per-Trade Risk Sizing ─────────────────────────────────────
     risk_per_trade_pct: float = 0.02           # 2% target (but min 1 lot floor applies)

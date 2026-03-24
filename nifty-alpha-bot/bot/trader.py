@@ -230,9 +230,15 @@ class KiteORBTrader:
 
     def _in_daily_adaptive_window(self, now: datetime) -> bool:
         t = now.time()
-        return self._t(self.cfg.daily_adaptive_window_start) <= t <= self._t(
-            self.cfg.daily_adaptive_window_end
-        )
+        start = self._t(self.cfg.daily_adaptive_window_start)
+        # Use extended window end for trending regimes
+        extended_regimes = [r.strip() for r in self.cfg.trending_regimes_for_extended_window.split(",")]
+        regime_name = (self._daily_regime.name if self._daily_regime else "")
+        if regime_name in extended_regimes:
+            end = self._t(self.cfg.trending_regime_window_end)
+        else:
+            end = self._t(self.cfg.daily_adaptive_window_end)
+        return start <= t <= end
 
     def _roll_day(self, now: datetime) -> None:
         today = now.date()
@@ -718,11 +724,17 @@ class KiteORBTrader:
         # Pick best by composite score
         best_leg, best_conf, best_composite = max(scored, key=lambda x: x[2])
 
-        # A+ filter: confidence >= threshold AND quality implied by composite
-        if best_conf < self.cfg.min_confidence_score:
+        # A+ filter: confidence >= threshold
+        # In strong trend, allow A- (confidence >= 65) — market is forgiving
+        is_strong_trend = (
+            self._current_trend is not None and
+            self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR")
+        )
+        min_conf = 65.0 if is_strong_trend else self.cfg.min_confidence_score
+        if best_conf < min_conf:
             if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
                 logger.info(
-                    f"A+_FILTER SKIP: best confidence {best_conf:.0f} < {self.cfg.min_confidence_score:.0f} "
+                    f"A+_FILTER SKIP: best confidence {best_conf:.0f} < {min_conf:.0f} "
                     f"(composite={best_composite:.1f})"
                 )
             return
@@ -746,14 +758,16 @@ class KiteORBTrader:
         logger.info(f"MOMENTUM OK: {momentum_reason}")
 
         # ── Skip after same-direction loss (prevents chasing failed setups) ──
+        # Exception: strong trend days often shake out then resume — allow re-entry
         last_exit = getattr(self, '_last_exit_direction', None)
         last_was_loss = getattr(self, '_last_trade_was_loss', False)
-        if last_was_loss and last_exit == leg["direction"] and best_conf < 75:
-            logger.info(
-                f"SKIP_AFTER_LOSS: last {last_exit} trade was a loss, "
-                f"confidence {best_conf:.0f} < 75 — skipping same direction"
-            )
-            return
+        if last_was_loss and last_exit == leg["direction"] and not is_strong_trend:
+            if best_conf < 75:
+                logger.info(
+                    f"SKIP_AFTER_LOSS: last {last_exit} trade was a loss, "
+                    f"confidence {best_conf:.0f} < 75 — skipping same direction"
+                )
+                return
 
         # ── Late window A+ filter (after 10:30) ──────────────────────
         is_late = now.time() >= self._t(self.cfg.late_window_start)
@@ -772,11 +786,18 @@ class KiteORBTrader:
                     f"LATE_WINDOW SKIP: strategy {leg['strategy']} not in A+ list {allowed}"
                 )
                 return
-            # Overextension check — only in late window (early window: move is still fresh)
+            # Overextension check — only in late window
+            # Exception: very high conviction (>= 0.8) strong trend days can move 2-3%
             overextended, oe_reason = self._is_overextended(leg["direction"], candles)
             if overextended:
-                logger.info(f"OVEREXTENDED SKIP (late window): {oe_reason}")
-                return
+                conviction = self._current_trend.conviction if self._current_trend else 0.0
+                if conviction >= 0.8 and is_strong_trend:
+                    logger.info(
+                        f"OVEREXTENDED ALLOWED (strong conviction={conviction:.2f}): {oe_reason}"
+                    )
+                else:
+                    logger.info(f"OVEREXTENDED SKIP (late window): {oe_reason}")
+                    return
             sl_pct = self.cfg.late_window_sl_pct
             target_pct = self.cfg.late_window_target_pct
             logger.info(
