@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import axios from 'axios'
 import clsx from 'clsx'
 import {
   Radar, TrendingUp, TrendingDown, Clock, Activity, AlertCircle,
   RefreshCw, Loader2, Target, Zap, BarChart3, Layers, ChevronRight,
+  ChevronDown, CheckCircle2, XCircle, Brain,
 } from 'lucide-react'
 
 interface Leg {
@@ -67,6 +68,108 @@ function triggerHints(bw: Record<string, number | null | undefined> | undefined)
     )
   }
   return hints
+}
+
+// ── Filter log row: shows one indicator check ──────────────────────
+function FilterRow({ name, val }: { name: string; val: unknown }) {
+  if (val == null || typeof val !== 'object') return null
+  const v = val as Record<string, unknown>
+  const passed = v.passed as boolean | undefined
+  const value  = v.value
+  const detail = v.detail as string | undefined
+  return (
+    <div className="flex items-start gap-2 py-1 border-b border-line/10 last:border-0">
+      {passed === true  && <CheckCircle2 size={13} className="shrink-0 text-green mt-0.5" />}
+      {passed === false && <XCircle      size={13} className="shrink-0 text-red-l mt-0.5" />}
+      {passed == null   && <span className="w-3.5 h-3.5 shrink-0 rounded-full bg-text3/20 mt-0.5 inline-block" />}
+      <div className="min-w-0 flex-1">
+        <span className={clsx('font-mono text-[10px] font-bold', passed ? 'text-text2' : 'text-text3')}>
+          {name.replace(/_/g, ' ')}
+        </span>
+        {value != null && (
+          <span className="ml-1.5 text-[10px] font-mono text-cyan-l">
+            = {typeof value === 'number' ? (value as number).toFixed(3) : String(value)}
+          </span>
+        )}
+        {detail && <p className="text-[9px] text-text3 mt-0.5 leading-relaxed">{detail}</p>}
+      </div>
+    </div>
+  )
+}
+
+// ── Leg card with expandable filter log ────────────────────────────
+function LegCard({ leg, i }: { leg: Leg; i: number }) {
+  const [open, setOpen] = useState(false)
+  const filters = leg.filter_log ? Object.entries(leg.filter_log) : []
+  const passed  = filters.filter(([, v]) => (v as any)?.passed === true).length
+  const failed  = filters.filter(([, v]) => (v as any)?.passed === false).length
+
+  return (
+    <div className="rounded-xl border border-line/20 bg-surface/40 overflow-hidden">
+      <div className="p-4 flex flex-wrap gap-4 items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className={clsx(
+            'w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm',
+            leg.direction === 'CALL' ? 'bg-green/15 text-green' : 'bg-red/15 text-red-l',
+          )}>
+            {leg.direction === 'CALL' ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
+          </div>
+          <div>
+            <div className="text-sm font-bold text-text1">
+              Leg {leg.leg} · {leg.strategy.replace(/_/g, ' ')}
+            </div>
+            <div className="text-[10px] text-text3 font-mono">
+              Fires when bot is idle, window open, trades_today = {i}, risk OK
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-3 text-[11px] items-center">
+          <div className="px-3 py-1.5 rounded-lg bg-red/10 border border-red/15">
+            <span className="text-text3">SL </span>
+            <span className="font-mono font-bold text-red-l">{(leg.sl_pct * 100).toFixed(1)}%</span>
+          </div>
+          <div className="px-3 py-1.5 rounded-lg bg-green/10 border border-green/15">
+            <span className="text-text3">Tgt </span>
+            <span className="font-mono font-bold text-green-l">{(leg.target_pct * 100).toFixed(1)}%</span>
+          </div>
+          <div className="px-3 py-1.5 rounded-lg bg-accent/10 border border-accent/20">
+            <span className="text-text3">Lots </span>
+            <span className="font-mono font-bold text-accent">{leg.lots}</span>
+          </div>
+          {filters.length > 0 && (
+            <button
+              onClick={() => setOpen(o => !o)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface border border-line/25 text-[10px] font-bold text-text2 hover:border-accent/30 hover:text-accent transition-all"
+            >
+              <Brain size={11} />
+              {passed}✓ {failed > 0 ? `${failed}✗` : ''}
+              {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+            </button>
+          )}
+        </div>
+      </div>
+      <AnimatePresence>
+        {open && filters.length > 0 && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="overflow-hidden border-t border-line/15"
+          >
+            <div className="p-4 bg-surface/60">
+              <div className="text-[10px] font-bold text-text3 uppercase tracking-wider mb-2 flex items-center gap-1">
+                <Brain size={11} /> Bot reasoning — {leg.strategy.replace(/_/g, ' ')}
+              </div>
+              <div className="space-y-0">
+                {filters.map(([k, v]) => <FilterRow key={k} name={k} val={v} />)}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
 }
 
 export function WatchPage() {
@@ -197,40 +300,11 @@ export function WatchPage() {
           ) : (
             <div className="space-y-3">
               {data.executable_legs.map((leg, i) => (
-                <div key={i}
-                  className="rounded-xl border border-line/20 bg-surface/40 p-4 flex flex-wrap gap-4 items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className={clsx(
-                      'w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm',
-                      leg.direction === 'CALL' ? 'bg-green/15 text-green' : 'bg-red/15 text-red-l',
-                    )}>
-                      {leg.direction === 'CALL' ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
-                    </div>
-                    <div>
-                      <div className="text-sm font-bold text-text1">
-                        Leg {leg.leg} · {leg.strategy.replace(/_/g, ' ')}
-                      </div>
-                      <div className="text-[10px] text-text3 font-mono">
-                        Fires when bot is idle, window open, trades_today = {i}, risk OK
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-3 text-[11px]">
-                    <div className="px-3 py-1.5 rounded-lg bg-red/10 border border-red/15">
-                      <span className="text-text3">SL </span>
-                      <span className="font-mono font-bold text-red-l">{(leg.sl_pct * 100).toFixed(1)}%</span>
-                    </div>
-                    <div className="px-3 py-1.5 rounded-lg bg-green/10 border border-green/15">
-                      <span className="text-text3">Tgt </span>
-                      <span className="font-mono font-bold text-green-l">{(leg.target_pct * 100).toFixed(1)}%</span>
-                    </div>
-                    <div className="px-3 py-1.5 rounded-lg bg-accent/10 border border-accent/20">
-                      <span className="text-text3">Lots </span>
-                      <span className="font-mono font-bold text-accent">{leg.lots}</span>
-                    </div>
-                  </div>
-                </div>
+                <LegCard key={i} leg={leg} i={i} />
               ))}
+              <p className="text-[10px] text-text3 text-center pt-1">
+                Click <Brain size={10} className="inline" /> on any leg to see every filter the bot checked
+              </p>
             </div>
           )}
         </motion.div>
