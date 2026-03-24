@@ -8,7 +8,7 @@ import {
   Crosshair, ShieldCheck, TrendingUp, TrendingDown, Radio, Layers,
   Zap, Target, BarChart3, LineChart, Gauge, Timer, Trophy, Flame,
   ChevronRight, Power, ToggleLeft, ToggleRight, AlertOctagon, Ruler,
-  Brain, Compass, Waves, ChevronUp, ChevronDown, Minus
+  Brain, Compass, Waves, ChevronUp, ChevronDown, Minus, Wallet, Award, AlertTriangle
 } from 'lucide-react'
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
 import { useTradingStore } from '../stores/tradingStore'
@@ -33,7 +33,10 @@ export function Dashboard() {
   const pnl = botStatus?.daily_pnl ?? dailyPnl?.net_pnl ?? 0
   const currentCapital = botStatus?.current_capital ?? 25000
   const startingCapital = botStatus?.starting_capital ?? 25000
+  const peakCapital = (botStatus as any)?.peak_capital ?? currentCapital
   const drawdownPct = botStatus?.drawdown_pct ?? 0
+  const overallPnl = currentCapital - startingCapital
+  const overallPnlPct = startingCapital > 0 ? (overallPnl / startingCapital * 100) : 0
   const isHalted = botStatus?.halt_active ?? emergencyStop
   const thinking = botStatus?.thinking ?? ''
   const kiteConnected = botStatus?.kite_connected ?? false
@@ -176,6 +179,66 @@ export function Dashboard() {
           </div>
         </motion.div>
       </div>
+
+      {/* Portfolio Summary Strip */}
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
+        className="glass rounded-2xl px-5 py-3 flex items-center gap-6 flex-wrap">
+        <div className="flex items-center gap-2 shrink-0">
+          <Wallet size={14} className="text-text3" />
+          <span className="text-[11px] font-bold uppercase tracking-widest text-text3">Portfolio</span>
+        </div>
+        {/* Current Capital */}
+        <div className="flex flex-col">
+          <span className="text-[10px] text-text3 uppercase tracking-wider">Current Capital</span>
+          <span className="text-sm font-black text-text1">₹{currentCapital.toLocaleString('en-IN')}</span>
+        </div>
+        <div className="w-px h-8 bg-line/40 hidden sm:block" />
+        {/* All-time P&L */}
+        <div className="flex flex-col">
+          <span className="text-[10px] text-text3 uppercase tracking-wider">All-time P&L</span>
+          <div className="flex items-baseline gap-1.5">
+            <span className={clsx('text-sm font-black', overallPnl >= 0 ? 'text-green-l' : 'text-red-l')}>
+              {overallPnl >= 0 ? '+' : ''}₹{Math.abs(overallPnl).toLocaleString('en-IN')}
+            </span>
+            <span className={clsx('text-[10px] font-bold px-1.5 py-0.5 rounded', overallPnl >= 0 ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>
+              {overallPnl >= 0 ? '+' : ''}{overallPnlPct.toFixed(1)}%
+            </span>
+          </div>
+        </div>
+        <div className="w-px h-8 bg-line/40 hidden sm:block" />
+        {/* Starting Capital */}
+        <div className="flex flex-col">
+          <span className="text-[10px] text-text3 uppercase tracking-wider">Starting Capital</span>
+          <span className="text-sm font-semibold text-text2">₹{startingCapital.toLocaleString('en-IN')}</span>
+        </div>
+        <div className="w-px h-8 bg-line/40 hidden sm:block" />
+        {/* Peak Capital */}
+        <div className="flex flex-col">
+          <span className="text-[10px] text-text3 uppercase tracking-wider">Peak Capital</span>
+          <div className="flex items-center gap-1">
+            <Award size={11} className="text-amber" />
+            <span className="text-sm font-semibold text-text2">₹{peakCapital.toLocaleString('en-IN')}</span>
+          </div>
+        </div>
+        <div className="w-px h-8 bg-line/40 hidden sm:block" />
+        {/* Drawdown */}
+        <div className="flex flex-col">
+          <span className="text-[10px] text-text3 uppercase tracking-wider">Drawdown</span>
+          <div className="flex items-center gap-1">
+            {drawdownPct > 10 && <AlertTriangle size={11} className="text-amber" />}
+            <span className={clsx('text-sm font-semibold', drawdownPct > 15 ? 'text-red' : drawdownPct > 8 ? 'text-amber' : 'text-text2')}>
+              -{drawdownPct.toFixed(1)}%
+            </span>
+          </div>
+        </div>
+        {/* Daily P&L quick badge */}
+        <div className="ml-auto flex items-center gap-2 shrink-0">
+          <span className="text-[10px] text-text3">Today:</span>
+          <span className={clsx('text-xs font-black px-2 py-0.5 rounded-lg', pnl >= 0 ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>
+            {pnl >= 0 ? '+' : ''}₹{Math.abs(pnl).toLocaleString('en-IN')}
+          </span>
+        </div>
+      </motion.div>
 
       {/* Main content grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
