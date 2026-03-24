@@ -43,6 +43,27 @@ const EVENT_TYPES = [
   { id: 'LOOP_ERROR',        label: 'Errors',         color: 'red'    },
 ]
 
+type LogTab = 'all' | 'trades' | 'decisions' | 'errors' | 'skipped'
+
+const LOG_TABS: { id: LogTab; label: string; color: string }[] = [
+  { id: 'all',       label: 'All',       color: 'text3'  },
+  { id: 'trades',    label: 'Trades',    color: 'green'  },
+  { id: 'decisions', label: 'Decisions', color: 'cyan'   },
+  { id: 'errors',    label: 'Errors',    color: 'red'    },
+  { id: 'skipped',   label: 'Skipped',   color: 'amber'  },
+]
+
+function matchesTab(log: LogEntry, tab: LogTab): boolean {
+  if (tab === 'all') return true
+  const raw = JSON.stringify(log).toLowerCase()
+  const ev = (log.event ?? '').toUpperCase()
+  if (tab === 'trades') return ['TRADE_CLOSED', 'ENTRY', 'EXIT'].some(k => ev.includes(k)) || raw.includes('"trade"')
+  if (tab === 'decisions') return ['DAILY_REGIME', 'DAILY_ADAPTIVE', 'TREND', 'MOMENTUM', 'SIGNAL', 'CONFIDENCE', 'BEST_SIGNAL', 'A+_FILTER'].some(k => raw.includes(k.toLowerCase()))
+  if (tab === 'errors') return ['ERROR', 'EXCEPTION', 'FAILED', 'WARNING', 'CRITICAL'].some(k => raw.includes(k.toLowerCase()))
+  if (tab === 'skipped') return ['SKIP', 'LOW_QUALITY', 'OVEREXTENDED', 'MOMENTUM SKIP', 'LATE_WINDOW SKIP', 'SKIP_AFTER_LOSS'].some(k => raw.includes(k.toLowerCase()))
+  return true
+}
+
 export function LogsPage() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [loading, setLoading] = useState(true)
@@ -50,6 +71,7 @@ export function LogsPage() {
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<number | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [logTab, setLogTab] = useState<LogTab>('all')
 
   const fetchLogs = async () => {
     try {
@@ -80,12 +102,13 @@ export function LogsPage() {
   const filtered = useMemo(() => {
     let items = logs
     if (filter !== 'ALL') items = items.filter(l => l.event === filter)
+    if (logTab !== 'all') items = items.filter(l => matchesTab(l, logTab))
     if (search.trim()) {
       const q = search.toLowerCase()
       items = items.filter(l => JSON.stringify(l).toLowerCase().includes(q))
     }
     return items.reverse()
-  }, [logs, filter, search])
+  }, [logs, filter, logTab, search])
 
   const scanCount = useMemo(() => {
     const orb = logs.filter(l => l.event === 'ORB_SCAN').length
@@ -155,6 +178,26 @@ export function LogsPage() {
         )})}
       </div>
 
+      {/* IMPROVEMENT 6: Log tab filters */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {LOG_TABS.map(t => {
+          const activeTabMap: Record<string, string> = {
+            text3: 'bg-text3/12 border-text3/25 text-text3',
+            green: 'bg-green/12 border-green/25 text-green',
+            cyan: 'bg-cyan/12 border-cyan/25 text-cyan',
+            red: 'bg-red/12 border-red/25 text-red',
+            amber: 'bg-amber/12 border-amber/25 text-amber',
+          }
+          return (
+            <button key={t.id} onClick={() => setLogTab(t.id)}
+              className={clsx('px-4 py-1.5 rounded-xl text-[11px] font-bold border transition-all',
+                logTab === t.id ? activeTabMap[t.color] : 'bg-surface/50 border-line/20 text-text3 hover:text-text2')}>
+              {t.label}
+            </button>
+          )
+        })}
+      </div>
+
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2">
         {EVENT_TYPES.map(et => {
@@ -209,6 +252,39 @@ export function LogsPage() {
                 <div className="text-xs text-text3 mt-1">{desc}</div>
               </div>
             ))}
+          </div>
+        </div>
+      ) : logTab === 'skipped' && filtered.length > 0 ? (
+        /* IMPROVEMENT 6: Special skipped card format */
+        <div className="glass-card rounded-2xl p-4">
+          <div className="text-xs font-bold text-text3 uppercase tracking-wider mb-3">
+            {filtered.length} skipped signal{filtered.length > 1 ? 's' : ''} — reasons why bot passed
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {filtered.slice(0, 30).map((log, i) => {
+              const raw = JSON.stringify(log)
+              const reason = log.skip_reason ?? log.reason ?? (
+                raw.toLowerCase().includes('low_quality') ? 'LOW_QUALITY' :
+                raw.toLowerCase().includes('overextended') ? 'OVEREXTENDED' :
+                raw.toLowerCase().includes('late_window') ? 'LATE_WINDOW' :
+                raw.toLowerCase().includes('momentum skip') ? 'MOMENTUM_SKIP' :
+                raw.toLowerCase().includes('skip_after_loss') ? 'SKIP_AFTER_LOSS' :
+                'FILTERED'
+              )
+              return (
+                <div key={i} className="bg-amber/5 border border-amber/20 rounded-xl p-3">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <XCircle size={12} className="text-amber shrink-0" />
+                    <span className="text-[11px] font-bold text-text1 truncate">{log.event?.replace(/_/g, ' ')}</span>
+                  </div>
+                  <div className="text-xs font-bold text-amber">{String(reason).replace(/_/g, ' ')}</div>
+                  <div className="text-[9px] text-text3 font-mono mt-1.5">
+                    {new Date(log.ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                    {log.confidence != null && ` · conf=${Math.round(log.confidence)}`}
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </div>
       ) : (

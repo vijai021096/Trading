@@ -12,6 +12,21 @@ export function LivePnLPanel() {
   const todayCount = dailyPnl?.trades ?? 0
   const maxTrades = botStatus?.max_trades ?? 4
 
+  // IMPROVEMENT 3: P&L context calculations
+  const capital = (botStatus as any)?.capital ?? botStatus?.current_capital ?? 25000
+  const pnlPct = capital > 0 ? (pnl / capital * 100) : 0
+  const winRate = dailyPnl?.win_rate ?? 0
+  const profitFactor = (botStatus as any)?.profit_factor as number | undefined
+  // Today type badge from regime
+  const regime = (botStatus as any)?.daily_regime ?? (botStatus as any)?.regime ?? ''
+  const todayBadge = regime.includes('TREND') || regime === 'STRONG_BULL' || regime === 'BULL' || regime === 'STRONG_BEAR' || regime === 'BEAR'
+    ? { text: 'TREND DAY', cls: 'bg-green/10 text-green' }
+    : regime === 'VOLATILE'
+    ? { text: 'VOLATILE DAY', cls: 'bg-red/10 text-red' }
+    : regime === 'NEUTRAL' || regime
+    ? { text: 'RANGE DAY', cls: 'bg-amber/10 text-amber' }
+    : null
+
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
       {/* P&L card - hero card */}
@@ -43,6 +58,25 @@ export function LivePnLPanel() {
               </span>
             )}
           </div>
+          {/* IMPROVEMENT 3: P&L context sub-row */}
+          <div className="flex items-center gap-2 mt-2 flex-wrap text-[10px] text-text3">
+            <span className={clsx('font-semibold', pnl >= 0 ? 'text-green' : 'text-red')}>
+              {pnl >= 0 ? '▲' : '▼'} {pnl >= 0 ? '+' : ''}{pnlPct.toFixed(1)}% on ₹{(capital / 1000).toFixed(0)}k
+            </span>
+            <span>|</span>
+            <span>Win rate: <span className="font-bold text-text2">{winRate.toFixed(0)}%</span></span>
+            {profitFactor != null && (
+              <>
+                <span>|</span>
+                <span>PF: <span className="font-bold text-text2">{profitFactor.toFixed(1)}</span></span>
+              </>
+            )}
+          </div>
+          {todayBadge && (
+            <div className="mt-1.5">
+              <span className={clsx('text-[10px] font-bold px-2 py-0.5 rounded-lg', todayBadge.cls)}>{todayBadge.text}</span>
+            </div>
+          )}
         </div>
       </motion.div>
 

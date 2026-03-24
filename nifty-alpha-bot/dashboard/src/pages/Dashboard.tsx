@@ -16,6 +16,7 @@ import { useTradingStore } from '../stores/tradingStore'
 export function Dashboard() {
   const { position, trades, events, dailyPnl, connected, lastUpdate, emergencyStop, botStatus, marketState } = useTradingStore()
   const isActive = position.state === 'ACTIVE'
+  const [expandedTradeId, setExpandedTradeId] = useState<string | null>(null)
 
   const todayTrades = useMemo(() =>
     trades.filter(t => t.trade_date === new Date().toISOString().slice(0, 10)), [trades])
@@ -69,7 +70,10 @@ export function Dashboard() {
           )}
         </div>
         <div className="flex items-center gap-4 text-sm">
-          <div className="flex items-center gap-2">
+          {/* IMPROVEMENT 8: Glow effect when RUNNING/LIVE */}
+          <div className={clsx('flex items-center gap-2 px-2 py-1 rounded-lg transition-all',
+            (kiteConnected || connected) ? 'ring-1 ring-green/20' : '')}
+            style={(kiteConnected || connected) ? { boxShadow: '0 0 12px rgba(34,197,94,0.2)' } : {}}>
             <Activity size={14} className={kiteConnected ? 'text-green' : connected ? 'text-amber' : 'text-red'} />
             <span className={clsx('font-semibold', kiteConnected ? 'text-green' : connected ? 'text-amber' : 'text-red')}>
               {kiteConnected ? 'Kite Live' : connected ? 'WS Only' : 'Disconnected'}
@@ -236,6 +240,20 @@ export function Dashboard() {
                     <div>
                       <div className="text-lg font-bold text-text1">No Open Position</div>
                       <div className="text-sm text-text3 mt-1">{marketOpen ? 'Scanning for entry signals...' : 'Bot resumes at 9:15 AM IST'}</div>
+                  {/* IMPROVEMENT 7: Why no trades panel */}
+                  {marketOpen && todayTrades.length === 0 && botStatus?.state === 'RUNNING' && (
+                    <div className="mt-3 bg-surface/60 border border-line/25 rounded-xl p-3">
+                      <div className="text-xs font-bold text-text3 mb-2">No trades taken yet today</div>
+                      <div className="space-y-1.5 text-[11px] text-text3">
+                        <div>Market regime: <span className="text-text2 font-semibold">{marketState?.trend_state ?? 'Unknown'}</span> (waiting for trend)</div>
+                        {marketState?.regime_vix != null && (
+                          <div>VIX: <span className="text-text2 font-semibold">{marketState.regime_vix.toFixed(1)}</span> — no directional edge yet</div>
+                        )}
+                        <div>Signals scanned: <span className="text-text2 font-semibold">{botStatus.last_scan?.signals_detected ?? 0} setups found</span></div>
+                        <div className="text-green font-semibold mt-1">✔ This is correct bot behavior</div>
+                      </div>
+                    </div>
+                  )}
                     </div>
                   </div>
                   <div className={clsx('flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold border',
@@ -246,21 +264,33 @@ export function Dashboard() {
                 </div>
                 <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
                   {[
-                    { name: 'ORB', desc: 'Opening Range Breakout', time: '9:30–10:00', icon: Flame, color: 'text-amber' },
-                    { name: 'RELAXED ORB', desc: 'Wide-range breakout', time: '9:30–10:00', icon: Flame, color: 'text-amber' },
-                    { name: 'EMA PULLBACK', desc: 'EMA21 bounce on trend', time: '9:30–1:00 PM', icon: TrendingUp, color: 'text-accent' },
-                    { name: 'MOMENTUM', desc: 'N-candle range breakout', time: '9:30–12:00 PM', icon: Zap, color: 'text-green' },
-                    { name: 'VWAP RECLAIM', desc: 'VWAP cross confirmation', time: '10:00–1:30 PM', icon: Waves, color: 'text-cyan' },
-                  ].map(({ name, desc, time, icon: Icon, color }) => (
+                    { name: 'ORB', desc: 'Opening Range Breakout', time: '9:30–10:00', icon: Flame, color: 'text-amber', stratKey: 'ORB' },
+                    { name: 'RELAXED ORB', desc: 'Wide-range breakout', time: '9:30–10:00', icon: Flame, color: 'text-amber', stratKey: 'RELAXED_ORB' },
+                    { name: 'EMA PULLBACK', desc: 'EMA21 bounce on trend', time: '9:30–1:00 PM', icon: TrendingUp, color: 'text-accent', stratKey: 'EMA_PULLBACK' },
+                    { name: 'MOMENTUM', desc: 'N-candle range breakout', time: '9:30–12:00 PM', icon: Zap, color: 'text-green', stratKey: 'MOMENTUM_BREAKOUT' },
+                    { name: 'VWAP RECLAIM', desc: 'VWAP cross confirmation', time: '10:00–1:30 PM', icon: Waves, color: 'text-cyan', stratKey: 'VWAP_RECLAIM' },
+                  ].map(({ name, desc, time, icon: Icon, color, stratKey }) => {
+                    /* IMPROVEMENT 5: Strategy status indicator */
+                    const isThisActive = botStatus?.last_scan?.candidates?.some(c => c.strategy === stratKey)
+                    const isRunning = marketOpen && botStatus?.state === 'RUNNING'
+                    const stratStatus = !isRunning
+                      ? { label: '⛔ CLOSED', cls: 'bg-surface text-text3' }
+                      : isThisActive
+                      ? { label: '🔥 ACTIVE', cls: 'bg-green/10 text-green' }
+                      : { label: '⚡ SCANNING', cls: 'bg-accent/10 text-accent-l' }
+                    return (
                     <div key={name} className="bg-surface/50 rounded-xl p-3 border border-line/20 hover:border-line/40 transition-all group">
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <Icon size={13} className={color} />
-                        <span className="text-xs font-bold text-text1">{name}</span>
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <Icon size={13} className={color} />
+                          <span className="text-xs font-bold text-text1">{name}</span>
+                        </div>
+                        <span className={clsx('text-[9px] font-bold px-1.5 py-0.5 rounded-md', stratStatus.cls)}>{stratStatus.label}</span>
                       </div>
                       <div className="text-[11px] text-text3">{desc}</div>
                       <div className="text-[10px] text-text3 font-mono mt-1 flex items-center gap-1 opacity-70"><Timer size={10} /> {time}</div>
                     </div>
-                  ))}
+                  )})}
                 </div>
               </>
             )}
@@ -313,45 +343,113 @@ export function Dashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {todayTrades.map((t, i) => (
-                      <tr key={i} className="border-b border-line/10 hover:bg-card/40 transition-colors">
-                        <td className="py-3 px-4 font-mono text-text2">{new Date(t.entry_ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</td>
-                        <td className="py-3 px-4 font-mono font-semibold text-text1">{t.symbol?.slice(-12)}</td>
-                        <td className="py-3 px-4">
-                          <span className={clsx('inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-bold',
-                            t.direction === 'CALL' ? 'bg-green/15 text-green' : 'bg-red/15 text-red')}>
-                            {t.direction === 'CALL' ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
-                            {t.direction}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-right font-mono text-text2">₹{t.entry_price.toFixed(1)}</td>
-                        <td className="py-3 px-4 text-right font-mono text-text2">{t.exit_price ? `₹${t.exit_price.toFixed(1)}` : '--'}</td>
-                        <td className="py-3 px-4">
-                          <span className={clsx('px-2 py-0.5 rounded-lg text-xs font-bold',
-                            t.exit_reason === 'TARGET' ? 'bg-green/15 text-green' :
-                            t.exit_reason === 'SL_HIT' ? 'bg-red/15 text-red' : 'bg-surface text-text3')}>
-                            {t.exit_reason?.replace(/_/g, ' ') ?? '--'}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-right font-mono text-xs">
-                          {t.exit_reason === 'SL_HIT' && t.sl_slippage_pct != null ? (
-                            <span className={clsx('font-bold', Math.abs(t.sl_slippage_pct) > 1 ? 'text-red' : 'text-amber')}>
-                              {t.sl_slippage_pct > 0 ? '-' : '+'}{Math.abs(t.sl_slippage_pct).toFixed(1)}%
-                            </span>
-                          ) : <span className="text-text3">--</span>}
-                        </td>
-                        <td className="py-3 px-4 text-right font-mono text-xs">
-                          {t.entry_latency_ms != null ? (
-                            <span className={clsx('font-bold', t.entry_latency_ms > 2000 ? 'text-red' : t.entry_latency_ms > 500 ? 'text-amber' : 'text-green')}>
-                              {t.entry_latency_ms}ms
-                            </span>
-                          ) : <span className="text-text3">--</span>}
-                        </td>
-                        <td className={clsx('py-3 px-4 text-right font-mono font-bold', t.net_pnl >= 0 ? 'text-green' : 'text-red')}>
-                          {t.net_pnl >= 0 ? '+' : ''}₹{t.net_pnl.toLocaleString('en-IN')}
-                        </td>
-                      </tr>
-                    ))}
+                    {todayTrades.map((t, i) => {
+                      const tradeId = `${t.entry_ts}-${i}`
+                      const isExpanded = expandedTradeId === tradeId
+                      const isWin = t.net_pnl >= 0
+                      const conf = t.confidence ?? (t.filter_log?.confidence as number | undefined)
+                      return (
+                        <>
+                          <tr key={tradeId}
+                            className={clsx('border-b border-line/10 hover:bg-card/40 transition-colors cursor-pointer',
+                              isWin ? 'border-l-2 border-l-green' : 'border-l-2 border-l-red',
+                              isExpanded && 'bg-card/40')}
+                            onClick={() => setExpandedTradeId(isExpanded ? null : tradeId)}>
+                            <td className="py-3 px-4 font-mono text-text2">{new Date(t.entry_ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</td>
+                            <td className="py-3 px-4 font-mono font-semibold text-text1">{t.symbol?.slice(-12)}</td>
+                            <td className="py-3 px-4">
+                              <span className={clsx('inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-bold',
+                                t.direction === 'CALL' ? 'bg-green/15 text-green' : 'bg-red/15 text-red')}>
+                                {t.direction === 'CALL' ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
+                                {t.direction}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-right font-mono text-text2">₹{t.entry_price.toFixed(1)}</td>
+                            <td className="py-3 px-4 text-right font-mono text-text2">{t.exit_price ? `₹${t.exit_price.toFixed(1)}` : '--'}</td>
+                            <td className="py-3 px-4">
+                              <span className={clsx('px-2 py-0.5 rounded-lg text-xs font-bold',
+                                t.exit_reason === 'TARGET' ? 'bg-green/15 text-green' :
+                                t.exit_reason === 'SL_HIT' ? 'bg-red/15 text-red' : 'bg-surface text-text3')}>
+                                {t.exit_reason?.replace(/_/g, ' ') ?? '--'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-right font-mono text-xs">
+                              {t.exit_reason === 'SL_HIT' && t.sl_slippage_pct != null ? (
+                                <span className={clsx('font-bold', Math.abs(t.sl_slippage_pct) > 1 ? 'text-red' : 'text-amber')}>
+                                  {t.sl_slippage_pct > 0 ? '-' : '+'}{Math.abs(t.sl_slippage_pct).toFixed(1)}%
+                                </span>
+                              ) : <span className="text-text3">--</span>}
+                            </td>
+                            <td className="py-3 px-4 text-right font-mono text-xs">
+                              {t.entry_latency_ms != null ? (
+                                <span className={clsx('font-bold', t.entry_latency_ms > 2000 ? 'text-red' : t.entry_latency_ms > 500 ? 'text-amber' : 'text-green')}>
+                                  {t.entry_latency_ms}ms
+                                </span>
+                              ) : <span className="text-text3">--</span>}
+                            </td>
+                            <td className={clsx('py-3 px-4 text-right font-mono font-bold', isWin ? 'text-green' : 'text-red')}>
+                              {isWin ? '+' : ''}₹{t.net_pnl.toLocaleString('en-IN')}
+                            </td>
+                          </tr>
+                          {/* IMPROVEMENT 2: Expandable trade detail row */}
+                          {isExpanded && (
+                            <tr key={`${tradeId}-expanded`} className="bg-card/20">
+                              <td colSpan={9} className="px-6 py-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div>
+                                    <div className="flex items-center gap-4 mb-3 flex-wrap">
+                                      <span className="text-xs font-bold text-text3 uppercase tracking-wider">Strategy:</span>
+                                      <span className="text-sm font-bold text-accent-l">{t.strategy?.replace(/_/g, ' ') ?? '--'}</span>
+                                      {conf != null && (
+                                        <span className={clsx('text-xs font-bold px-2 py-0.5 rounded-lg',
+                                          conf >= 70 ? 'bg-green/15 text-green' : conf >= 50 ? 'bg-amber/15 text-amber' : 'bg-surface text-text3')}>
+                                          Confidence: {Math.round(conf)} {conf >= 70 ? '✅' : conf >= 50 ? '⚠️' : '❌'}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-xs font-bold text-text3 uppercase tracking-wider mb-2">Why taken:</div>
+                                    <div className="space-y-1.5">
+                                      {t.filter_log && Object.entries(t.filter_log).slice(0, 5).map(([k, v]) => (
+                                        <div key={k} className={clsx('flex items-center gap-2 text-[11px]', v ? 'text-green' : 'text-text3')}>
+                                          <span>{v ? '✅' : '⬜'}</span>
+                                          <span className="capitalize">{k.replace(/_/g, ' ')}</span>
+                                        </div>
+                                      ))}
+                                      {!t.filter_log && (
+                                        <>
+                                          <div className="flex items-center gap-2 text-[11px] text-green"><span>✅</span><span>Signal passed all filters</span></div>
+                                          <div className="flex items-center gap-2 text-[11px] text-green"><span>✅</span><span>Direction: {t.direction}</span></div>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <div className="text-xs font-bold text-text3 uppercase tracking-wider mb-2">
+                                      Why it {isWin ? 'worked' : 'failed'}:
+                                    </div>
+                                    <div className={clsx('rounded-xl p-3 border text-sm', isWin ? 'bg-green/5 border-green/20' : 'bg-red/5 border-red/20')}>
+                                      {isWin ? (
+                                        <div className="flex flex-col gap-1.5">
+                                          <span className="text-green font-bold">[WIN] ✅ {t.exit_reason === 'TARGET' ? 'Target hit — clean trade' : `Exit: ${t.exit_reason?.replace(/_/g, ' ') ?? 'closed'}`}</span>
+                                          <span className="text-[11px] text-text3">P&L: +₹{t.net_pnl.toLocaleString('en-IN')}</span>
+                                        </div>
+                                      ) : (
+                                        <div className="flex flex-col gap-1.5">
+                                          <span className="text-red font-bold">[LOSS] ❌ Exit: {t.exit_reason?.replace(/_/g, ' ') ?? 'closed'}</span>
+                                          {t.exit_reason === 'SL_HIT' && <span className="text-[11px] text-red">❌ Structure broke early — SL triggered</span>}
+                                          {conf != null && conf < 70 && <span className="text-[11px] text-amber">❌ Confidence borderline ({Math.round(conf)} &lt; 70 threshold)</span>}
+                                          <span className="text-[11px] text-text3">P&L: -₹{Math.abs(t.net_pnl).toLocaleString('en-IN')}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -363,6 +461,38 @@ export function Dashboard() {
               </div>
             )}
           </motion.div>
+          {/* IMPROVEMENT 9: Missed Opportunities tracker */}
+          {(() => {
+            const skipReasons = (botStatus as any)?.skip_reasons as Array<{ strategy: string; reason: string }> | undefined
+            if (!skipReasons || skipReasons.length === 0) return null
+            const potentialPnl = skipReasons.length * 2500
+            return (
+              <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.26 }}
+                className="glass-card rounded-2xl p-5 border border-amber/20 neon-border">
+                <div className="flex items-center gap-2 mb-3">
+                  <BarChart3 size={15} className="text-amber" />
+                  <span className="text-sm font-bold uppercase tracking-widest text-amber">Missed Opportunities Today</span>
+                </div>
+                <div className="flex items-center gap-4 mb-3">
+                  <div>
+                    <div className="text-xl font-black text-amber">+₹{potentialPnl.toLocaleString('en-IN')}</div>
+                    <div className="text-[11px] text-text3">{skipReasons.length} signal{skipReasons.length > 1 ? 's' : ''} skipped · est. potential</div>
+                  </div>
+                </div>
+                <div className="text-[11px] font-bold text-text3 uppercase tracking-wider mb-2">Top misses:</div>
+                <div className="space-y-1.5">
+                  {skipReasons.slice(0, 3).map((s, i) => (
+                    <div key={i} className="flex items-center gap-2 text-[11px]">
+                      <span className="text-amber">•</span>
+                      <span className="font-bold text-text2">{s.strategy?.replace(/_/g, ' ') ?? 'Signal'}</span>
+                      <span className="text-text3">— skipped:</span>
+                      <span className="font-semibold text-amber">{s.reason?.replace(/_/g, ' ') ?? 'filtered'}</span>
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            )
+          })()}
         </div>
 
         {/* Right 1/3 */}
@@ -709,6 +839,62 @@ function MarketIntelligence() {
         </div>
       )}
 
+      {/* IMPROVEMENT 1: Market Decision Panel */}
+      {ms && (
+        <div className="mt-4 border-t border-line/20 pt-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Brain size={13} className="text-accent" />
+            <span className="text-xs font-black uppercase tracking-widest text-accent">Market Decision</span>
+          </div>
+          {(() => {
+            const convPct = (ms.trend_conviction ?? 0)
+            const trendKey = ms.trend_state ?? 'NEUTRAL'
+            const biasLabel = trendKey.replace(/_/g, ' ')
+            const confLevel = convPct >= 0.7 ? 'HIGH' : convPct >= 0.4 ? 'MODERATE' : 'LOW'
+            const confPct = Math.round(convPct * 100)
+            let actionLabel = 'WAIT — No edge right now'
+            let actionCls = 'bg-surface text-text3'
+            if (convPct > 0.6 && (trendKey === 'STRONG_BULL' || trendKey === 'STRONG_BEAR')) {
+              actionLabel = trendKey === 'STRONG_BULL' ? 'CALL SETUP — READY 🔥' : 'PUT SETUP — READY 🔥'
+              actionCls = trendKey === 'STRONG_BULL' ? 'bg-green/15 text-green' : 'bg-red/15 text-red'
+            } else if (convPct > 0.4 && (trendKey === 'BULL' || trendKey === 'BEAR')) {
+              actionLabel = `SCANNING — ${trendKey} BIAS`
+              actionCls = trendKey === 'BULL' ? 'bg-green/10 text-green' : 'bg-red/10 text-red'
+            } else if (trendKey === 'VOLATILE') {
+              actionLabel = '⚠️ AVOID — High Risk'
+              actionCls = 'bg-red/10 text-red'
+            }
+            return (
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-text3">Bias</span>
+                  <span className={clsx('font-bold', meta.color)}>{biasLabel}</span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-text3">Confidence</span>
+                  <span className={clsx('font-bold', convPct >= 0.7 ? 'text-green' : convPct >= 0.4 ? 'text-amber' : 'text-text3')}>
+                    {confLevel} ({confPct}%)
+                  </span>
+                </div>
+                <div className={clsx('px-3 py-2 rounded-xl text-xs font-bold text-center border', actionCls, 'border-current/20')}>
+                  {actionLabel}
+                </div>
+                <div className="text-[10px] font-bold text-text3 uppercase tracking-wider mt-1">Next Triggers:</div>
+                <div className="space-y-1 text-[11px] text-text3">
+                  {ms.regime_adx != null && (
+                    <div>• ADX {ms.regime_adx.toFixed(0)} — {ms.regime_adx >= 25 ? 'Trend confirmed' : 'Awaiting breakout'}</div>
+                  )}
+                  {ms.regime_rsi != null && (
+                    <div>• RSI {ms.regime_rsi.toFixed(0)} — {ms.regime_rsi > 60 ? 'Bullish momentum' : ms.regime_rsi < 40 ? 'Bearish momentum' : 'Neutral zone'}</div>
+                  )}
+                  <div>• Watch EMA pullback levels</div>
+                </div>
+              </div>
+            )
+          })()}
+        </div>
+      )}
+
       {!ms && (
         <div className="text-center py-4">
           <Brain size={20} className="text-text3 mx-auto mb-2 opacity-40" />
@@ -721,6 +907,7 @@ function MarketIntelligence() {
 
 /* ── Nifty Live Price ──────────────────────────────────────── */
 function NiftyChart() {
+  const { marketState } = useTradingStore()
   const [niftyPrice, setNiftyPrice] = useState<number | null>(null)
   const [change, setChange] = useState(0)
   const [changePct, setChangePct] = useState(0)
@@ -767,7 +954,28 @@ function NiftyChart() {
             </span>
           )}
         </div>
-        <span className="text-xs text-text3">Live · 15s refresh</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-text3">Live · 15s refresh</span>
+          {/* IMPROVEMENT 4: Regime badge */}
+          {niftyPrice && (() => {
+            const reg = marketState?.trend_state ?? ''
+            const badge =
+              reg === 'STRONG_BULL' || reg === 'BULL'
+                ? { text: 'TREND DAY ↑', cls: 'bg-green/15 text-green border-green/30' }
+                : reg === 'STRONG_BEAR' || reg === 'BEAR'
+                ? { text: 'TREND DAY ↓', cls: 'bg-red/15 text-red border-red/30' }
+                : reg === 'VOLATILE'
+                ? { text: 'VOLATILE — CAUTION', cls: 'bg-red/10 text-red border-red/20' }
+                : reg === 'NEUTRAL'
+                ? { text: 'RANGE DAY', cls: 'bg-amber/10 text-amber border-amber/20' }
+                : null
+            return badge ? (
+              <span className={clsx('inline-flex items-center px-2.5 py-1 rounded-lg text-[11px] font-bold border', badge.cls)}>
+                {badge.text}
+              </span>
+            ) : null
+          })()}
+        </div>
       </div>
       {niftyPrice && ohlc.open && (
         <div className="grid grid-cols-4 gap-3">
