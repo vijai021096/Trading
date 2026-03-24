@@ -46,24 +46,25 @@ export function useWebSocket() {
 
   const fetchBotStatus = async () => {
     try {
-      const events = await axios.get(`${API_BASE}/events?limit=50`)
-      const evts = events.data?.events || events.data || []
-      const hb = evts.find((e: any) => e.event === 'HEARTBEAT')
-      if (hb) {
-        store.setBotStatus(hb)
-        if (hb.trend_state) {
+      // /api/bot-status returns the latest HEARTBEAT event — full rich payload with
+      // paper_mode, capital, kite_connected, trading_engine, skip_reasons, etc.
+      const r = await axios.get(`${API_BASE}/bot-status`)
+      const bs = r.data
+      if (bs) {
+        store.setBotStatus(bs)
+        if (bs.trend_state) {
           store.setMarketState({
-            trend_state: hb.trend_state,
-            trend_direction: hb.trend_direction,
-            trend_conviction: hb.trend_conviction,
-            risk_multiplier: hb.risk_multiplier,
-            strategy_priority: hb.strategy_priority || [],
-            trend_scores: hb.trend_scores || {},
-            regime: hb.regime,
-            regime_atr_ratio: hb.regime_atr_ratio,
-            regime_adx: hb.regime_adx,
-            regime_vix: hb.regime_vix,
-            regime_rsi: hb.regime_rsi,
+            trend_state: bs.trend_state,
+            trend_direction: bs.trend_direction,
+            trend_conviction: bs.trend_conviction,
+            risk_multiplier: bs.risk_multiplier,
+            strategy_priority: bs.strategy_priority || [],
+            trend_scores: bs.trend_scores || {},
+            regime: bs.regime,
+            regime_atr_ratio: bs.regime_atr_ratio,
+            regime_adx: bs.regime_adx,
+            regime_vix: bs.regime_vix,
+            regime_rsi: bs.regime_rsi,
           })
         }
       }

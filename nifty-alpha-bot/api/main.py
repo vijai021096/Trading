@@ -591,6 +591,34 @@ def health():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 
+@app.get("/api/bot-status")
+def bot_status_rest():
+    """REST endpoint returning the latest full bot status (same as WebSocket push).
+    Reads the most recent HEARTBEAT event which contains paper_mode, capital,
+    kite_connected, trading_engine, skip_reasons, etc."""
+    ev = _get_latest_event("HEARTBEAT")
+    if ev:
+        return ev
+    # Fallback when bot hasn't started yet
+    return {
+        "state": "IDLE",
+        "market_open": False,
+        "paper_mode": settings.paper_mode,
+        "starting_capital": settings.capital,
+        "current_capital": settings.capital,
+        "peak_capital": settings.capital,
+        "drawdown_pct": 0.0,
+        "trading_engine": settings.trading_engine,
+        "max_trades": settings.max_trades_per_day,
+        "trades_today": 0,
+        "daily_pnl": 0.0,
+        "kite_connected": False,
+        "halt_active": False,
+        "consecutive_losses": 0,
+        "skip_reasons": [],
+    }
+
+
 @app.get("/api/status")
 def status():
     pos = read_position()
