@@ -5,11 +5,12 @@ import { TrendingUp, TrendingDown, Target, ShieldCheck, BarChart3, Layers, Zap, 
 import { useTradingStore } from '../../stores/tradingStore'
 
 export function LivePnLPanel() {
-  const { position, dailyPnl, trades } = useTradingStore()
+  const { position, dailyPnl, trades, botStatus } = useTradingStore()
   const pnl      = dailyPnl?.net_pnl ?? 0
   const isActive = position.state === 'ACTIVE'
   const hasTrade = isActive || position.state === 'ENTRY_PENDING'
   const todayCount = dailyPnl?.trades ?? 0
+  const maxTrades = botStatus?.max_trades ?? 4
 
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -128,21 +129,21 @@ export function LivePnLPanel() {
             </div>
           </div>
           <div className="text-lg font-extrabold stat-val text-text1">
-            {isActive ? (position.strategy ?? '--') : `${todayCount} / 3`}
+            {isActive ? (position.strategy ?? '--') : `${todayCount} / ${maxTrades}`}
           </div>
           <div className="text-[11px] text-text3 mt-1">
             {isActive ? (
               <span>Entry <span className="font-mono font-bold text-text2">₹{position.entry_price?.toFixed(0) ?? '--'}</span></span>
             ) : (
               <span className="flex items-center gap-2">
-                <span>Max 3/day</span>
-                {todayCount >= 3 && <span className="text-amber font-bold">LIMIT</span>}
+                <span>Max {maxTrades}/day</span>
+                {todayCount >= maxTrades && <span className="text-amber font-bold">LIMIT</span>}
               </span>
             )}
           </div>
           {/* Usage dots */}
           <div className="flex gap-1 mt-2">
-            {[0,1,2].map(i => (
+            {Array.from({ length: maxTrades }).map((_, i) => (
               <div key={i} className={clsx('w-2 h-2 rounded-full transition-all', i < todayCount ? 'bg-accent glow-accent' : 'bg-surface border border-line/50')} />
             ))}
           </div>

@@ -161,20 +161,22 @@ function buildEntryReasoning(log: Record<string, unknown> | undefined): string {
 }
 
 const REGIME_BLURB: Record<string, string> = {
-  TRENDING: 'Trending regime: ADX-style pressure favored breakout and momentum-style setups.',
-  RANGING: 'Ranging regime: two-sided action favored VWAP, fades, and pullback entries.',
-  VOLATILE: 'Volatile regime: wider noise and VIX/ATR stress — mean-reversion and quick trims.',
-  LOW_VOL: 'Low-volatility regime: compressed ranges; breakouts can extend slowly.',
+  STRONG_TREND_UP:   'Strong uptrend: all indicators bullish — high conviction CALL bias, breakout and continuation setups.',
+  STRONG_TREND_DOWN: 'Strong downtrend: all indicators bearish — high conviction PUT bias, continuation setups preferred.',
+  MILD_TREND:        'Mild trend: directional bias present but not extreme — pullback and VWAP setups work best.',
+  MEAN_REVERT:       'Mean-reversion regime: price stretched from equilibrium — fades, range bounces, and VWAP entries.',
+  BREAKOUT:          'Breakout regime: compression and inside bar patterns detected — breakout momentum setups preferred.',
+  VOLATILE:          'Volatile regime: elevated VIX/ATR — only high-conviction gap fades and reversal setups allowed.',
 }
 
 const STRATEGY_WHY: Record<string, string> = {
-  ORB: 'ORB targets continuation after the prior session range is resolved with trend and momentum confirmation.',
-  RELAXED_ORB: 'Relaxed ORB allows marginal trend days to participate with softer EMA/RSI gates.',
-  VWAP_RECLAIM: 'VWAP reclaim plays mean-reversion-to-anchor after a measurable rejection and cross.',
-  MEAN_REVERSION: 'Mean reversion sells strength and buys weakness inside a balanced session.',
-  RANGE_FADE: 'Range fade fades stretched prints back toward the developing value area.',
-  EMA_PULLBACK: 'EMA pullback buys/sells shallow dips into a moving-average stack in-line with bias.',
-  GAP_MOMENTUM: 'Gap momentum rides opening imbalance when follow-through confirms.',
+  TREND_CONTINUATION: 'Trend continuation: pullback to EMA stack in a confirmed trend with VWAP support, targets resumption of primary move.',
+  BREAKOUT_MOMENTUM:  'Breakout momentum: N-candle range breakout with volume surge and EMA alignment — rides fresh directional momentum.',
+  REVERSAL_SNAP:      'Reversal snap: RSI extreme exhaustion combined with reversal candle pattern — high-probability mean-reversion.',
+  GAP_FADE:           'Gap fade: opening gaps that statistically fill — fades over-extension at open for a quick mean-reversion trade.',
+  RANGE_BOUNCE:       'Range bounce: bounce off prior-day support/resistance in a ranging market — defined risk with tight SL at level.',
+  INSIDE_BAR_BREAK:   'Inside bar break: low-volatility compression breakout — low-risk entry into the next directional expansion move.',
+  VWAP_CROSS:         'VWAP cross: institutional flow confirmation — cross of VWAP after prior deviation signals smart-money repositioning.',
 }
 
 function strategyWhyText(strategy?: string, regime?: string): string {
@@ -202,7 +204,7 @@ function vixContext(vix?: number): string {
 
 function computeGrade(t: JournalTrade): { grade: 'A' | 'B' | 'C' | 'D'; blurb: string } {
   const exit = normalizeExit(t.exit_reason)
-  const qty = num(t.qty, (num(t.lots, 1) * 75))
+  const qty = num(t.qty, (num(t.lots, 1) * 65))
   const riskAbs = Math.abs(t.entry_price - t.sl_price) * qty
   const rr = computeRewardRisk(t) ?? 0
   const win = num(t.net_pnl) > 0

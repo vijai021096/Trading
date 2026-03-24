@@ -772,6 +772,7 @@ def get_config():
             STRATEGY_BACKTEST_WR, STRATEGY_BACKTEST_PF,
         )
         return {
+            "bot_version": "v3.1.0",
             "capital": settings.capital,
             "lot_size": settings.lot_size,
             "vix_max": settings.vix_max,

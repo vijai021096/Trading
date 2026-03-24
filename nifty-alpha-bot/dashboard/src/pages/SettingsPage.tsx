@@ -454,7 +454,7 @@ function SystemInfoPanel() {
   useEffect(() => { axios.get('/api/strategy/config').then(r => setCfg(r.data)).catch(() => {}) }, [])
 
   const items = cfg ? [
-    ['Bot Version', 'v3.0.0'],
+    ['Bot Version', cfg.bot_version ?? 'v3.1.0'],
     ['Trading engine', String(cfg.trading_engine || '—').replace(/_/g, ' ')],
     ['API', 'FastAPI + WebSocket'],
     ['Exchange', 'NSE / NFO'],

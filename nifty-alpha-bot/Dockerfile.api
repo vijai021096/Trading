@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements-api.txt -r requirements-backtest.
 COPY shared/ shared/
 COPY kite_broker/ kite_broker/
 COPY backtest/ backtest/
+COPY bot/ bot/
 COPY api/ api/
 
 RUN mkdir -p /app/state /app/logs

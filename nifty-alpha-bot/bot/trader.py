@@ -334,6 +334,8 @@ class KiteORBTrader:
 
         # Check if SL-M order got executed (SL hit at exchange)
         if self._active_slm_order_id and self.cfg.use_slm_exit:
+            if pos.state != PositionState.ACTIVE:
+                return
             slm_status = self.client.get_order_status(self._active_slm_order_id)
             if str(slm_status.get("status", "")).upper() == "COMPLETE":
                 fill_price = float(slm_status.get("average_price", current_price) or current_price)
@@ -1020,8 +1022,20 @@ class KiteORBTrader:
                 self._active_slm_order_id = slm_resp.get("order_id")
                 logger.info(f"SL-M placed: trigger={sl_price:.2f} order_id={self._active_slm_order_id}")
             except Exception as e:
-                logger.error(f"SL-M placement failed: {e} — will use software SL")
-                self._active_slm_order_id = None
+                logger.error(f"SL-M placement failed: {e} — exiting position immediately for safety")
+                _log_event("SLM_PLACEMENT_FAILED", {"symbol": symbol, "error": str(e), "action": "emergency_exit"})
+                try:
+                    exit_resp = self.client.place_order(
+                        symbol=symbol, qty=qty, side="SELL",
+                        exchange="NFO", product="MIS",
+                    )
+                    self.client.confirm_fill(exit_resp.get("order_id", ""), timeout_seconds=15)
+                    logger.info("Emergency exit placed after SL-M failure")
+                except Exception as exit_err:
+                    logger.error(f"EMERGENCY EXIT FAILED: {exit_err} — CHECK KITE MANUALLY!")
+                    _log_event("EMERGENCY_EXIT_FAILED", {"symbol": symbol, "error": str(exit_err)})
+                    self._notify(f"🚨 EMERGENCY: SL-M failed AND exit failed for {symbol}. CHECK KITE NOW!")
+                return
 
         filter_log["regime"] = {"passed": True, "value": regime.regime, "detail": regime.detail}
         if self._current_trend:
@@ -1118,6 +1132,27 @@ class KiteORBTrader:
             f"DD halt: {self.cfg.max_drawdown_pct:.0f}%\n"
             f"SL: {'SL-M' if self.cfg.use_slm_exit else 'Software'}"
         )
+
+        # Startup broker sync — if bot restarted mid-trade, verify position is still open
+        if not self.cfg.paper_mode and self.sm.is_active:
+            try:
+                broker_qty = self.client.get_open_qty(self.sm.position.symbol)
+                current_price = self.client.get_quote(self.sm.position.symbol, "NFO")
+                was_synced = self.sm.sync_with_broker(broker_qty, last_price=current_price)
+                if was_synced:
+                    logger.warning(
+                        f"STARTUP SYNC: position for {self.sm.position.symbol} was closed externally "
+                        f"(broker_qty={broker_qty}) — resetting to IDLE"
+                    )
+                    self._active_slm_order_id = None
+                    self._notify(f"⚠️ Startup sync: position closed externally. Check Kite.")
+                else:
+                    logger.info(
+                        f"STARTUP SYNC: broker position confirmed active "
+                        f"qty={self.sm.position.qty} symbol={self.sm.position.symbol}"
+                    )
+            except Exception as e:
+                logger.warning(f"Startup broker sync failed: {e}")
 
         api_failures = 0
 

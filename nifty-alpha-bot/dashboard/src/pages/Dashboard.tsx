@@ -28,7 +28,7 @@ export function Dashboard() {
   const marketOpen = botStatus?.market_open ?? (new Date().getHours() >= 9 && (new Date().getHours() < 15 || (new Date().getHours() === 15 && new Date().getMinutes() <= 30)))
   const marketStatus = botStatus?.market_status ?? (marketOpen ? 'OPEN' : 'CLOSED')
   const todayCount = botStatus?.trades_today ?? dailyPnl?.trades ?? 0
-  const maxTrades = botStatus?.max_trades ?? 3
+  const maxTrades = botStatus?.max_trades ?? 4
   const pnl = botStatus?.daily_pnl ?? dailyPnl?.net_pnl ?? 0
   const currentCapital = botStatus?.current_capital ?? 25000
   const startingCapital = botStatus?.starting_capital ?? 25000
@@ -37,7 +37,7 @@ export function Dashboard() {
   const thinking = botStatus?.thinking ?? ''
   const kiteConnected = botStatus?.kite_connected ?? false
   const paperMode = botStatus?.paper_mode ?? true
-  const tradingEngine = botStatus?.trading_engine ?? 'intraday'
+  const tradingEngine = botStatus?.trading_engine ?? 'daily_adaptive'
   const isDailyEngine = String(tradingEngine).toLowerCase() === 'daily_adaptive'
 
   const maxPnl = Math.max(...todayTrades.map(t => t.net_pnl), 0)
@@ -400,7 +400,7 @@ export function Dashboard() {
               <span className="text-sm font-bold uppercase tracking-widest text-text3">Risk Monitor</span>
             </div>
             {(() => {
-              const maxDailyLossPct = botStatus?.max_daily_loss_pct ?? 0.08
+              const maxDailyLossPct = botStatus?.max_daily_loss_pct ?? 0.25
               const lossLimit = Math.round(currentCapital * maxDailyLossPct)
               const riskPct = Math.min(100, Math.max(0, pnl < 0 ? (Math.abs(pnl) / Math.max(lossLimit, 1)) * 100 : 0))
               const riskLevel = riskPct > 80 ? 'CRITICAL' : riskPct > 50 ? 'HIGH' : riskPct > 20 ? 'MODERATE' : 'LOW'
@@ -441,7 +441,7 @@ export function Dashboard() {
                     </div>
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-text3">Risk/Trade</span>
-                      <span className="font-bold font-mono text-text2">{((botStatus?.risk_per_trade_pct ?? 0.04) * 100).toFixed(1)}%</span>
+                      <span className="font-bold font-mono text-text2">{((botStatus?.risk_per_trade_pct ?? 0.02) * 100).toFixed(1)}%</span>
                     </div>
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-text3">Consec. Losses</span>
@@ -512,25 +512,32 @@ const TREND_META: Record<string, { label: string; color: string; bg: string; bor
 }
 
 const REGIME_META: Record<string, { color: string; bg: string }> = {
-  TRENDING:  { color: 'text-green', bg: 'bg-green/10' },
-  RANGING:   { color: 'text-amber', bg: 'bg-amber/10' },
-  VOLATILE:  { color: 'text-red',   bg: 'bg-red/10'   },
+  STRONG_TREND_UP:   { color: 'text-green',   bg: 'bg-green/15'   },
+  STRONG_TREND_DOWN: { color: 'text-red',      bg: 'bg-red/15'     },
+  MILD_TREND:        { color: 'text-green',    bg: 'bg-green/8'    },
+  MEAN_REVERT:       { color: 'text-amber',    bg: 'bg-amber/10'   },
+  BREAKOUT:          { color: 'text-accent',   bg: 'bg-accent/10'  },
+  VOLATILE:          { color: 'text-red',      bg: 'bg-red/10'     },
 }
 
 const STRAT_COLORS: Record<string, string> = {
-  ORB:               'text-amber',
-  MOMENTUM_BREAKOUT: 'text-green',
-  EMA_PULLBACK:      'text-accent',
-  VWAP_RECLAIM:      'text-cyan',
-  RELAXED_ORB:       'text-amber/70',
+  TREND_CONTINUATION: 'text-green',
+  BREAKOUT_MOMENTUM:  'text-accent',
+  REVERSAL_SNAP:      'text-red',
+  GAP_FADE:           'text-amber',
+  RANGE_BOUNCE:       'text-cyan',
+  INSIDE_BAR_BREAK:   'text-purple-400',
+  VWAP_CROSS:         'text-blue-400',
 }
 
 const STRAT_WINDOWS: Record<string, string> = {
-  ORB:               '9:30–10:00 AM',
-  RELAXED_ORB:       '9:30–10:00 AM',
-  EMA_PULLBACK:      '9:30–1:00 PM',
-  MOMENTUM_BREAKOUT: '9:30–12:00 PM',
-  VWAP_RECLAIM:      '10:00–1:30 PM',
+  TREND_CONTINUATION: '9:16–10:30 AM',
+  BREAKOUT_MOMENTUM:  '9:16–10:30 AM',
+  REVERSAL_SNAP:      '9:16–10:30 AM',
+  GAP_FADE:           '9:16–10:30 AM',
+  RANGE_BOUNCE:       '9:16–10:30 AM',
+  INSIDE_BAR_BREAK:   '9:16–10:30 AM',
+  VWAP_CROSS:         '9:16–10:30 AM',
 }
 
 function MarketIntelligence() {

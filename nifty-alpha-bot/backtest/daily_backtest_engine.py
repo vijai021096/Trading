@@ -120,6 +120,10 @@ class DailyBacktestConfig:
     vix_volatile: float = 22.5
     min_option_premium: float = 4.5
 
+    # ── SL / Target: EMA_FRESH_CROSS ──
+    sl_pct_efc: float = 0.20    # 20% SL — standard momentum entry
+    target_pct_efc: float = 0.55  # 2.75× RR (cross days have strong follow-through)
+
     # ── Strategy enable flags ──
     enable_trend_continuation: bool = True
     enable_breakout_momentum: bool = True
@@ -128,6 +132,14 @@ class DailyBacktestConfig:
     enable_range_bounce: bool = True
     enable_inside_bar_break: bool = True
     enable_vwap_cross: bool = True
+    enable_ema_fresh_cross: bool = True
+
+    # ── Fallback signal: fires when no primary strategy matches ──
+    # NOTE: Backtested as harmful for intraday (WR=10%). Kept as option, disabled by default.
+    enable_fallback_ema_cross: bool = False
+    sl_pct_fb: float = 0.15      # 15% SL — tighter than primary (18-22%)
+    target_pct_fb: float = 0.375  # 2.5x RR
+    fallback_vix_max: float = 22.0  # Skip fallback on very high VIX days
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -280,12 +292,12 @@ def _classify_regime(
 # ═══════════════════════════════════════════════════════════════════
 
 STRATEGY_PRIORITY = {
-    "STRONG_TREND_UP":   ["BREAKOUT_MOMENTUM", "TREND_CONTINUATION"],
-    "STRONG_TREND_DOWN": ["BREAKOUT_MOMENTUM", "TREND_CONTINUATION"],
-    "MILD_TREND":        ["TREND_CONTINUATION", "BREAKOUT_MOMENTUM", "VWAP_CROSS", "GAP_FADE", "INSIDE_BAR_BREAK"],
+    "STRONG_TREND_UP":   ["BREAKOUT_MOMENTUM", "TREND_CONTINUATION", "EMA_FRESH_CROSS"],
+    "STRONG_TREND_DOWN": ["BREAKOUT_MOMENTUM", "TREND_CONTINUATION", "EMA_FRESH_CROSS"],
+    "MILD_TREND":        ["EMA_FRESH_CROSS", "TREND_CONTINUATION", "BREAKOUT_MOMENTUM", "VWAP_CROSS", "GAP_FADE", "INSIDE_BAR_BREAK"],
     "MEAN_REVERT":       ["RANGE_BOUNCE", "GAP_FADE", "REVERSAL_SNAP", "VWAP_CROSS", "INSIDE_BAR_BREAK"],
-    "BREAKOUT":          ["BREAKOUT_MOMENTUM", "INSIDE_BAR_BREAK", "TREND_CONTINUATION", "GAP_FADE"],
-    "VOLATILE":          ["GAP_FADE", "REVERSAL_SNAP"],
+    "BREAKOUT":          ["BREAKOUT_MOMENTUM", "EMA_FRESH_CROSS", "INSIDE_BAR_BREAK", "TREND_CONTINUATION", "GAP_FADE"],
+    "VOLATILE":          ["GAP_FADE", "REVERSAL_SNAP"],  # EMA_FRESH_CROSS excluded — VIX too high
 }
 
 # Regime-adaptive SL/target multipliers: (sl_mult, tgt_mult)
@@ -306,6 +318,8 @@ SL_TARGET_MAP = {
     "RANGE_BOUNCE":       ("sl_pct_rb", "target_pct_rb"),
     "INSIDE_BAR_BREAK":   ("sl_pct_ib", "target_pct_ib"),
     "VWAP_CROSS":         ("sl_pct_vc", "target_pct_vc"),
+    "EMA_FRESH_CROSS":    ("sl_pct_efc", "target_pct_efc"),
+    "FALLBACK_EMA_CROSS": ("sl_pct_fb", "target_pct_fb"),
 }
 
 ALL_STRATEGIES = set(SL_TARGET_MAP.keys())
@@ -644,6 +658,87 @@ def _check_vwap_cross(
     return None
 
 
+def _check_ema_fresh_cross(
+    i: int, highs: list, lows: list, closes: list, opens: list,
+    ema_fast_vals: list, ema_slow_vals: list, ema_trend_vals: list,
+    rsi: float, vwap_vals: list, cfg: DailyBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """EMA_FRESH_CROSS: A+ setup — enter on the exact day EMA8 crosses EMA21.
+
+    Why this is the best new A+ setup:
+      - TREND_CONTINUATION requires 3+ days of aligned EMAs (trend already established)
+      - This fires on the actual CROSS DAY — the earliest valid momentum entry
+      - A cross of EMA8/EMA21 on daily bars is high-conviction institutional signal
+      - EMA50 must confirm direction (no counter-trend setups)
+      - RSI must be in the 'has-room-to-run' zone (not overextended)
+      - Today's candle body must confirm the direction (not just a wick cross)
+      - Close must be above/below VWAP (institutional anchoring)
+
+    This does NOT overlap with TREND_CONTINUATION (which requires trend already established
+    for 3 days). The cross day is specifically missed by all 7 existing strategies.
+    """
+    if i < 6:
+        return None
+
+    ema_f, ema_s, ema_t = ema_fast_vals[i], ema_slow_vals[i], ema_trend_vals[i]
+    today_close, today_open = closes[i], opens[i]
+    today_range = highs[i] - lows[i]
+    body_ratio = abs(today_close - today_open) / today_range if today_range > 0 else 0
+    vwap = vwap_vals[i]
+
+    # Detect whether EMA8 crossed EMA21 within the last 3 bars
+    # Cross day = most conviction; bars 1-2 after cross = continuation confirmation
+    cross_bar = None
+    for lookback in range(1, 4):
+        j = i - lookback
+        if j < 1:
+            break
+        prev_f, prev_s = ema_fast_vals[j - 1], ema_slow_vals[j - 1]
+        cur_f, cur_s = ema_fast_vals[j], ema_slow_vals[j]
+        if prev_f <= prev_s and cur_f > cur_s:    # bullish cross at bar j
+            cross_bar = ("bull", lookback)
+            break
+        if prev_f >= prev_s and cur_f < cur_s:    # bearish cross at bar j
+            cross_bar = ("bear", lookback)
+            break
+
+    if cross_bar is None:
+        return None
+
+    cross_dir, bars_ago = cross_bar
+    # Reduce RSI tolerance as we move further from cross day (tighter confirmation needed)
+    rsi_bull_max = 72.0 - bars_ago * 4   # day0=72, day1=68, day2=64
+    rsi_bear_min = 28.0 + bars_ago * 4   # day0=28, day1=32, day2=36
+
+    if (cross_dir == "bull"
+        and ema_f > ema_s and ema_f > ema_t   # EMA50 confirms up
+        and today_close > today_open           # Green candle
+        and body_ratio >= 0.38
+        and today_close > vwap                 # VWAP support
+        and 46.0 <= rsi <= rsi_bull_max):
+        return ("CALL", "EMA_FRESH_CROSS", {
+            "cross": {"passed": True, "detail": f"EMA8 crossed above EMA21 {bars_ago}d ago"},
+            "trend": {"passed": True, "detail": f"EMA21 {ema_s:.0f} > EMA50 {ema_t:.0f}"},
+            "candle": {"passed": True, "detail": f"Green body {body_ratio:.0%} above VWAP"},
+            "rsi": {"passed": True, "detail": f"RSI {rsi:.1f}, max allowed {rsi_bull_max:.0f}"},
+        })
+
+    if (cross_dir == "bear"
+        and ema_f < ema_s and ema_f < ema_t   # EMA50 confirms down
+        and today_close < today_open           # Red candle
+        and body_ratio >= 0.38
+        and today_close < vwap                 # Below VWAP
+        and rsi_bear_min <= rsi <= 54.0):
+        return ("PUT", "EMA_FRESH_CROSS", {
+            "cross": {"passed": True, "detail": f"EMA8 crossed below EMA21 {bars_ago}d ago"},
+            "trend": {"passed": True, "detail": f"EMA21 {ema_s:.0f} < EMA50 {ema_t:.0f}"},
+            "candle": {"passed": True, "detail": f"Red body {body_ratio:.0%} below VWAP"},
+            "rsi": {"passed": True, "detail": f"RSI {rsi:.1f}, min allowed {rsi_bear_min:.0f}"},
+        })
+
+    return None
+
+
 # ═══════════════════════════════════════════════════════════════════
 # OPTION SIMULATION
 # ═══════════════════════════════════════════════════════════════════
@@ -900,6 +995,12 @@ def run_daily_backtest(
                 signal_result = _check_vwap_cross(
                     i, closes, opens, highs, lows,
                     vwap_vals, rsi, ema_fast_vals, ema_slow_vals, cfg)
+            elif strat_name == "EMA_FRESH_CROSS":
+                if vix <= 21.0:
+                    signal_result = _check_ema_fresh_cross(
+                        i, highs, lows, closes, opens,
+                        ema_fast_vals, ema_slow_vals, ema_trend_vals,
+                        rsi, vwap_vals, cfg)
 
             if signal_result is not None and strat_name not in seen_strat:
                 sig, sn, fl = signal_result
@@ -907,6 +1008,16 @@ def run_daily_backtest(
                 matches.append((sig, sn, dict(fl)))
                 if len(matches) >= day_trade_cap:
                     break
+
+        # Fallback: EMA cross direction when no primary strategy fires
+        if not matches and cfg.enable_fallback_ema_cross and vix <= cfg.fallback_vix_max:
+            ema_f = ema_fast_vals[i]
+            ema_s = ema_slow_vals[i]
+            rsi_fb = rsi_vals[i]
+            if ema_f > ema_s and rsi_fb >= 50:
+                matches.append(("CALL", "FALLBACK_EMA_CROSS", {"ema_cross": "bullish", "rsi": round(rsi_fb, 1)}))
+            elif ema_f < ema_s and rsi_fb <= 50:
+                matches.append(("PUT", "FALLBACK_EMA_CROSS", {"ema_cross": "bearish", "rsi": round(rsi_fb, 1)}))
 
         if not matches:
             skip_reasons["no_signal"] = skip_reasons.get("no_signal", 0) + 1
@@ -1147,6 +1258,12 @@ def collect_strategy_matches_for_index(
             signal_result = _check_vwap_cross(
                 i, closes, opens, highs, lows,
                 vwap_vals, rsi, ema_fast_vals, ema_slow_vals, cfg)
+        elif strat_name == "EMA_FRESH_CROSS":
+            if vix <= 21.0:
+                signal_result = _check_ema_fresh_cross(
+                    i, highs, lows, closes, opens,
+                    ema_fast_vals, ema_slow_vals, ema_trend_vals,
+                    rsi, vwap_vals, cfg)
 
         if signal_result is not None and strat_name not in seen_strat:
             sig, sn, fl = signal_result
@@ -1154,6 +1271,16 @@ def collect_strategy_matches_for_index(
             matches.append((sig, sn, dict(fl)))
             if len(matches) >= day_trade_cap:
                 break
+
+    # Fallback: EMA cross direction when no primary strategy fires
+    if not matches and cfg.enable_fallback_ema_cross and vix <= cfg.fallback_vix_max:
+        ema_f = series["ema_fast_vals"][i]
+        ema_s = series["ema_slow_vals"][i]
+        rsi_fb = series["rsi_vals"][i]
+        if ema_f > ema_s and rsi_fb >= 50:
+            matches.append(("CALL", "FALLBACK_EMA_CROSS", {"ema_cross": "bullish", "rsi": round(rsi_fb, 1)}))
+        elif ema_f < ema_s and rsi_fb <= 50:
+            matches.append(("PUT", "FALLBACK_EMA_CROSS", {"ema_cross": "bearish", "rsi": round(rsi_fb, 1)}))
 
     return regime, matches, day_trade_cap
 

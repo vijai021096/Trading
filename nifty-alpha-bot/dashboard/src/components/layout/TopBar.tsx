@@ -31,7 +31,8 @@ export function TopBar({ currentPage, onNavigate }: { currentPage: Page; onNavig
   const pnl = dailyPnl?.net_pnl ?? 0
   const pnlPos = pnl >= 0
   const h = new Date().getHours()
-  const marketOpen = h >= 9 && h < 16
+  const m = new Date().getMinutes()
+  const marketOpen = (h === 9 && m >= 15) || (h > 9 && h < 15) || (h === 15 && m <= 30)
 
   const handleStop = async () => {
     if (!emergencyStop) {

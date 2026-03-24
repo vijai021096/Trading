@@ -59,6 +59,13 @@ class DailyBacktestConfig:
     rsi_oversold_skip: float = 25.0
     vix_max: float = 18.0
 
+    # Fallback signal — fires on non-gap days to ensure at least 1 trade/day
+    enable_fallback_signal: bool = False
+    fallback_vix_max: float = 22.0        # Allow slightly higher VIX for fallback
+    fallback_sl_max_pct: float = 0.07     # Tighter SL (7%) to protect PF
+    fallback_rsi_bull_min: float = 50.0   # EMA cross + RSI > 50 → CALL
+    fallback_rsi_bear_max: float = 50.0   # EMA cross + RSI < 50 → PUT
+
     # SL/Target
     atr_period: int = 14
     atr_sl_multiplier: float = 1.2
@@ -225,6 +232,7 @@ def simulate_daily_trade(
     atr: float,
     cfg: DailyBacktestConfig,
     future_days_data: List[dict],
+    is_fallback: bool = False,
 ) -> Dict[str, Any]:
     """
     Simulate holding the option for up to 5 days (or until SL/target/expiry).
@@ -235,7 +243,9 @@ def simulate_daily_trade(
     expiry = get_nearest_thursday(entry_date)
     is_thursday = entry_date.weekday() == 3
 
-    max_sl_pct = cfg.thursday_max_loss_pct if is_thursday else cfg.atr_sl_max_pct
+    # Fallback trades use tighter SL to protect PF
+    base_sl_max = cfg.fallback_sl_max_pct if is_fallback else cfg.atr_sl_max_pct
+    max_sl_pct = cfg.thursday_max_loss_pct if is_thursday else base_sl_max
 
     # Estimate SL % using ATR
     estimated_delta = 0.50
@@ -442,6 +452,7 @@ def _run_backtest_on_df(
         put_threshold = prev_low * (1 - cfg.breakout_buffer_pct)
         open_price = float(row["open"])
         signal = None
+        is_fallback = False
 
         if open_price >= call_threshold:
             if ema_f > ema_s and cfg.rsi_bull_min <= rsi <= cfg.rsi_overbought_skip:
@@ -449,6 +460,15 @@ def _run_backtest_on_df(
         elif open_price <= put_threshold:
             if ema_f < ema_s and cfg.rsi_oversold_skip <= rsi <= cfg.rsi_bear_max:
                 signal = "PUT"
+
+        # Fallback signal: no gap today → use EMA cross direction with tighter SL
+        if signal is None and cfg.enable_fallback_signal and vix <= cfg.fallback_vix_max:
+            if ema_f > ema_s and rsi >= cfg.fallback_rsi_bull_min and rsi <= cfg.rsi_overbought_skip:
+                signal = "CALL"
+                is_fallback = True
+            elif ema_f < ema_s and rsi <= cfg.fallback_rsi_bear_max and rsi >= cfg.rsi_oversold_skip:
+                signal = "PUT"
+                is_fallback = True
 
         if signal is None:
             continue
@@ -472,12 +492,14 @@ def _run_backtest_on_df(
             atr=atr,
             cfg=cfg,
             future_days_data=future_rows,
+            is_fallback=is_fallback,
         )
 
         if trade["status"] != "COMPLETED":
             continue
 
         trade["regime"] = regime
+        trade["strategy"] = "FALLBACK_ORB" if is_fallback else "ORB_DAILY"
         all_trades.append(trade)
         net = trade["net_pnl"]
         capital += net
@@ -491,13 +513,27 @@ def _run_backtest_on_df(
         if verbose:
             sign = "+" if net >= 0 else ""
             regime_tag = f"[{regime[:3]}]"
+            fb_tag = "[FB]" if is_fallback else "    "
             print(
-                f"  [{trade_date}] {signal:4s} {regime_tag} | "
+                f"  [{trade_date}] {signal:4s} {fb_tag} {regime_tag} | "
                 f"Entry=₹{trade['entry_price']:.0f} Exit=₹{trade['exit_price']:.0f} | "
                 f"P&L: {sign}₹{net:.0f} | {trade['exit_reason']} | slip={trade['slippage_pct']:.2f}%"
             )
 
     metrics = compute_metrics(all_trades, cfg.capital)
+
+    # Breakdown by signal type
+    primary = [t for t in all_trades if t.get("strategy") != "FALLBACK_ORB"]
+    fallback = [t for t in all_trades if t.get("strategy") == "FALLBACK_ORB"]
+    if verbose and fallback:
+        p_wins = sum(1 for t in primary if t["net_pnl"] > 0)
+        f_wins = sum(1 for t in fallback if t["net_pnl"] > 0)
+        p_pnl = sum(t["net_pnl"] for t in primary)
+        f_pnl = sum(t["net_pnl"] for t in fallback)
+        print(f"\n  Signal breakdown:")
+        print(f"    Primary  (gap breakout): {len(primary):3d} trades | WR: {p_wins/len(primary)*100:.0f}% | P&L: ₹{p_pnl:+,.0f}" if primary else "    Primary  (gap breakout): 0 trades")
+        print(f"    Fallback (EMA cross)   : {len(fallback):3d} trades | WR: {f_wins/len(fallback)*100:.0f}% | P&L: ₹{f_pnl:+,.0f}" if fallback else "    Fallback (EMA cross)   : 0 trades")
+
     return {
         "trades": all_trades,
         "metrics": metrics,
@@ -627,6 +663,7 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--walk-forward", action="store_true", dest="walk_forward")
     parser.add_argument("--stress", action="store_true", help="Run at 0.5%%, 0.75%%, 1%% slippage and compare")
+    parser.add_argument("--fallback", action="store_true", help="Enable fallback EMA-cross signal on non-gap days")
     args = parser.parse_args()
 
     if args.walk_forward:
@@ -664,7 +701,11 @@ if __name__ == "__main__":
 
     else:
         slip = args.slippage if args.slippage is not None else 0.005
-        cfg = DailyBacktestConfig(capital=args.capital, slippage_pct=slip)
+        cfg = DailyBacktestConfig(
+            capital=args.capital,
+            slippage_pct=slip,
+            enable_fallback_signal=args.fallback,
+        )
         result = run_daily_backtest(cfg, years=args.years, verbose=not args.quiet)
         print_report(result)
-        save_results(result, tag="daily")
+        save_results(result, tag="daily_fallback" if args.fallback else "daily")
