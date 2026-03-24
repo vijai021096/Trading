@@ -54,7 +54,14 @@ class Settings(BaseSettings):
     nifty_option_lot_size: int = 65
     daily_base_lots: int = 1
     daily_adaptive_window_start: str = "09:16"
-    daily_adaptive_window_end: str = "10:30"
+    daily_adaptive_window_end: str = "13:00"
+    # Late window: tighter A+ filters apply after the early window
+    late_window_start: str = "10:30"
+    late_window_vix_max: float = 22.0          # VIX must be calm for late entries
+    late_window_sl_pct: float = 0.12           # 12% SL (less time to recover)
+    late_window_target_pct: float = 0.30       # 30% target (2.5x RR, achievable intraday)
+    # Strategies allowed in late window (A+ only)
+    late_window_strategies: str = "BREAKOUT_MOMENTUM,TREND_CONTINUATION,INSIDE_BAR_BREAK"
 
     # ── Per-Trade Risk Sizing ─────────────────────────────────────
     risk_per_trade_pct: float = 0.02           # 2% target (but min 1 lot floor applies)

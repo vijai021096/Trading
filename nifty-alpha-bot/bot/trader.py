@@ -587,6 +587,34 @@ class KiteORBTrader:
         candle = {"close": spot, "open": spot, "high": spot, "low": spot, "ts": now}
 
         leg = legs[idx]
+
+        # ── Late window A+ filter (after 10:30) ──────────────────────
+        is_late = now.time() >= self._t(self.cfg.late_window_start)
+        if is_late:
+            # VIX must be calm
+            if effective_vix > self.cfg.late_window_vix_max:
+                logger.info(
+                    f"LATE_WINDOW SKIP: VIX {effective_vix:.1f} > {self.cfg.late_window_vix_max} "
+                    f"(A+ filter — only trade in calm markets after {self.cfg.late_window_start})"
+                )
+                return
+            # Strategy must be A+ tier
+            allowed = [s.strip() for s in self.cfg.late_window_strategies.split(",")]
+            if leg["strategy"] not in allowed:
+                logger.info(
+                    f"LATE_WINDOW SKIP: strategy {leg['strategy']} not in A+ list {allowed}"
+                )
+                return
+            sl_pct = self.cfg.late_window_sl_pct
+            target_pct = self.cfg.late_window_target_pct
+            logger.info(
+                f"LATE_WINDOW ENTRY: {leg['strategy']} {leg['direction']} | "
+                f"VIX={effective_vix:.1f} ok | SL={sl_pct*100:.0f}% TGT={target_pct*100:.0f}%"
+            )
+        else:
+            sl_pct = float(leg["sl_pct"])
+            target_pct = float(leg["target_pct"])
+
         self._enter_trade(
             signal=leg["direction"],
             strategy=leg["strategy"],
@@ -595,8 +623,8 @@ class KiteORBTrader:
             filter_log=dict(leg.get("filter_log") or {}),
             vix=effective_vix,
             regime=stub_regime,
-            sl_pct_override=float(leg["sl_pct"]),
-            target_pct_override=float(leg["target_pct"]),
+            sl_pct_override=sl_pct,
+            target_pct_override=target_pct,
             risk_multiplier=1.0,
             fixed_option_lots=int(leg["lots"]),
         )
