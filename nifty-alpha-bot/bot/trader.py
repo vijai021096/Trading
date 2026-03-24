@@ -446,8 +446,21 @@ class KiteORBTrader:
                     filled = self.client.confirm_fill(order_id, timeout_seconds=15)
 
                     if filled:
-                        status = self.client.get_order_status(order_id)
-                        fill_price = float(status.get("average_price", approx_price) or approx_price)
+                        # Retry fetching average_price up to 3 times — Kite may not
+                        # populate it immediately even after status = COMPLETE
+                        for _price_attempt in range(3):
+                            status = self.client.get_order_status(order_id)
+                            avg = float(status.get("average_price", 0) or 0)
+                            if avg > 0:
+                                fill_price = avg
+                                break
+                            time.sleep(0.5)
+                        else:
+                            fill_price = approx_price
+                            logger.warning(
+                                f"Exit {order_id}: average_price not populated after retries — "
+                                f"using approx ₹{approx_price:.2f}. Check Kite for actual fill."
+                            )
                         logger.info(f"Exit confirmed: order={order_id} price={fill_price:.2f} (attempt {attempt})")
                         break
                     else:
