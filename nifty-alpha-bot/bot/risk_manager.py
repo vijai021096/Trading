@@ -78,6 +78,13 @@ class RiskManager:
                 self.current_capital = data.get("current_capital", self.capital)
                 self.state.peak_capital = data.get("peak_capital", self.capital)
                 self.state.consecutive_losses = data.get("consecutive_losses", 0)
+                # Restore intraday counters only if saved date matches today
+                saved_date = data.get("trade_date", "")
+                today = date.today().isoformat()
+                if saved_date == today:
+                    self.state.trades_today = data.get("trades_today", 0)
+                    self.state.daily_pnl = data.get("daily_pnl", 0.0)
+                    self.state.trade_date = date.today()
             except Exception:
                 pass
 
@@ -88,6 +95,9 @@ class RiskManager:
                 "current_capital": round(self.current_capital, 2),
                 "peak_capital": round(self.state.peak_capital, 2),
                 "consecutive_losses": self.state.consecutive_losses,
+                "trade_date": self.state.trade_date.isoformat(),
+                "trades_today": self.state.trades_today,
+                "daily_pnl": round(self.state.daily_pnl, 2),
                 "updated_at": datetime.now().isoformat(),
             }
             RISK_STATE_FILE.write_text(json.dumps(data, indent=2))
