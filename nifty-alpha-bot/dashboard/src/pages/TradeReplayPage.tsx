@@ -402,6 +402,7 @@ function StepDetailPanel({ step, trade }: { step: number; trade: ReplayTrade }) 
 
 export function TradeReplayPage() {
   const [trades, setTrades] = useState<ReplayTrade[]>([])
+  const [source, setSource] = useState<'live' | 'backtest'>('live')
   const [strategy, setStrategy] = useState('BOTH')
   const [startDate, setStartDate] = useState('2024-01-01')
   const [endDate, setEndDate] = useState(new Date().toISOString().slice(0, 10))
@@ -419,13 +420,27 @@ export function TradeReplayPage() {
     setLoading(true)
     setError('')
     try {
-      const r = await axios.post<{ trades?: ReplayTrade[] }>('/api/backtest/run', {
-        strategy,
-        start_date: startDate,
-        end_date: endDate,
-      })
-      const list = Array.isArray(r.data.trades) ? r.data.trades : []
-      setTrades(list)
+      if (source === 'live') {
+        const r = await axios.get<{ trades: ReplayTrade[] }>('/api/trades?limit=500')
+        const raw = Array.isArray(r.data?.trades) ? r.data.trades : []
+        const list: ReplayTrade[] = raw.map((t) => ({
+          ...t,
+          trade_date: t.trade_date || String((t as unknown as Record<string,unknown>).entry_time || (t as unknown as Record<string,unknown>).ts || '').slice(0, 10),
+          entry_ts: t.entry_ts || (t as unknown as Record<string,unknown>).entry_time as string || '',
+          exit_ts: t.exit_ts || (t as unknown as Record<string,unknown>).exit_time as string || '',
+          vix: t.vix ?? (t as unknown as Record<string,unknown>).vix_at_entry as number,
+          regime: t.regime || 'DAILY_ADAPTIVE',
+        }))
+        setTrades(list)
+      } else {
+        const r = await axios.post<{ trades?: ReplayTrade[] }>('/api/backtest/run', {
+          strategy,
+          start_date: startDate,
+          end_date: endDate,
+        })
+        const list = Array.isArray(r.data.trades) ? r.data.trades : []
+        setTrades(list)
+      }
       setSelectedIdx(0)
       setStep(0)
       setPlaying(false)
@@ -436,7 +451,7 @@ export function TradeReplayPage() {
     } finally {
       setLoading(false)
     }
-  }, [strategy, startDate, endDate])
+  }, [source, strategy, startDate, endDate])
 
   const pause = useCallback(() => setPlaying(false), [])
   const play = useCallback(() => {
@@ -511,7 +526,7 @@ export function TradeReplayPage() {
           </div>
           <div>
             <h1 className="text-lg font-extrabold text-text1 tracking-tight">Trade Replay</h1>
-            <p className="text-[11px] text-text3">Step-through playback from backtest trade data (no simulated ticks)</p>
+            <p className="text-[11px] text-text3">Step-through playback of live or backtest trades</p>
           </div>
         </div>
       </motion.div>
@@ -523,44 +538,66 @@ export function TradeReplayPage() {
             animate={{ opacity: 1, y: 0 }}
             className="glass-card rounded-2xl p-4 neon-border"
           >
-            <div className="flex items-center gap-2 mb-3">
-              <Layers size={13} className="text-accent" />
-              <span className="text-[11px] font-bold tracking-[0.15em] uppercase text-text3">Load from backtest</span>
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <div className="flex items-center gap-2">
+                <Layers size={13} className="text-accent" />
+                <span className="text-[11px] font-bold tracking-[0.15em] uppercase text-text3">
+                  {source === 'live' ? 'Live trades' : 'Load from backtest'}
+                </span>
+              </div>
+              <div className="flex items-center gap-1 bg-bg rounded-xl p-1 border border-line/20">
+                {(['live', 'backtest'] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setSource(s)}
+                    className={clsx(
+                      'px-2.5 py-0.5 rounded-lg text-[10px] font-bold transition-all',
+                      source === s ? 'bg-accent text-white shadow' : 'text-text3 hover:text-text1',
+                    )}
+                  >
+                    {s === 'live' ? 'Live' : 'Backtest'}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="space-y-2.5">
-              <div>
-                <label className="block text-[9px] font-bold text-text3 uppercase tracking-wider mb-1">Strategy</label>
-                <select
-                  value={strategy}
-                  onChange={(e) => setStrategy(e.target.value)}
-                  className="w-full bg-surface border border-line/30 rounded-xl px-3 py-2 text-[11px] text-text1 focus:border-accent/40 focus:outline-none font-semibold cursor-pointer"
-                >
-                  <option value="BOTH">ALL — Multi-strategy</option>
-                  <option value="ORB">ORB</option>
-                  <option value="VWAP">VWAP</option>
-                  <option value="MR">MR</option>
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[9px] font-bold text-text3 uppercase mb-1">Start</label>
-                  <input
-                    type="date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    className="w-full bg-surface border border-line/30 rounded-xl px-2 py-2 text-[10px] text-text1 font-mono focus:border-accent/40 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[9px] font-bold text-text3 uppercase mb-1">End</label>
-                  <input
-                    type="date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    className="w-full bg-surface border border-line/30 rounded-xl px-2 py-2 text-[10px] text-text1 font-mono focus:border-accent/40 focus:outline-none"
-                  />
-                </div>
-              </div>
+              {source === 'backtest' && (
+                <>
+                  <div>
+                    <label className="block text-[9px] font-bold text-text3 uppercase tracking-wider mb-1">Strategy</label>
+                    <select
+                      value={strategy}
+                      onChange={(e) => setStrategy(e.target.value)}
+                      className="w-full bg-surface border border-line/30 rounded-xl px-3 py-2 text-[11px] text-text1 focus:border-accent/40 focus:outline-none font-semibold cursor-pointer"
+                    >
+                      <option value="BOTH">ALL — Multi-strategy</option>
+                      <option value="ORB">ORB</option>
+                      <option value="VWAP">VWAP</option>
+                      <option value="MR">MR</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[9px] font-bold text-text3 uppercase mb-1">Start</label>
+                      <input
+                        type="date"
+                        value={startDate}
+                        onChange={(e) => setStartDate(e.target.value)}
+                        className="w-full bg-surface border border-line/30 rounded-xl px-2 py-2 text-[10px] text-text1 font-mono focus:border-accent/40 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-bold text-text3 uppercase mb-1">End</label>
+                      <input
+                        type="date"
+                        value={endDate}
+                        onChange={(e) => setEndDate(e.target.value)}
+                        className="w-full bg-surface border border-line/30 rounded-xl px-2 py-2 text-[10px] text-text1 font-mono focus:border-accent/40 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
               <motion.button
                 type="button"
                 onClick={loadTrades}
@@ -575,7 +612,7 @@ export function TradeReplayPage() {
                 )}
               >
                 {loading ? <Loader2 size={14} className="animate-spin" /> : <BarChart3 size={14} />}
-                {loading ? 'Loading…' : 'Load Trades'}
+                {loading ? 'Loading…' : source === 'live' ? 'Load Live Trades' : 'Load Trades'}
               </motion.button>
             </div>
           </motion.div>
