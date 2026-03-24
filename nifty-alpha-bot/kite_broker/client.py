@@ -242,10 +242,13 @@ class KiteClient:
         exchange: str = "NFO",
         product: str = "MIS",
     ) -> Dict[str, Any]:
-        """Place SL-M (Stop Loss Market) order for exit protection.
-        Triggers a market sell when price drops to trigger_price."""
+        """Place SL (Stop Loss Limit) order for exit protection.
+        Zerodha discontinued SL-M for F&O; using SL with limit price 1.5% below trigger.
+        Triggers a limit sell at price when price drops to trigger_price."""
         tick = 0.05
         trigger = round(float(trigger_price) / tick) * tick
+        # Limit price 1.5% below trigger — gives buffer for fill in fast-moving options
+        limit_px = round(trigger * 0.985 / tick) * tick
 
         kwargs: Dict[str, Any] = dict(
             variety=self.kite.VARIETY_REGULAR,
@@ -254,28 +257,31 @@ class KiteClient:
             transaction_type=self.kite.TRANSACTION_TYPE_SELL,
             quantity=qty,
             product=product,
-            order_type=self.kite.ORDER_TYPE_SLM,
+            order_type=self.kite.ORDER_TYPE_SL,
             validity=self.kite.VALIDITY_DAY,
             trigger_price=trigger,
+            price=limit_px,
         )
 
         order_id = self._call(self.kite.place_order, **kwargs)
-        return {"order_id": order_id, "status": "SLM_PLACED", "trigger_price": trigger}
+        return {"order_id": order_id, "status": "SL_PLACED", "trigger_price": trigger, "limit_price": limit_px}
 
     def modify_slm_order(
         self,
         order_id: str,
         new_trigger_price: float,
     ) -> bool:
-        """Modify existing SL-M order trigger price (for trailing SL)."""
+        """Modify existing SL (stop-loss limit) order trigger price (for trailing SL)."""
         tick = 0.05
         trigger = round(float(new_trigger_price) / tick) * tick
+        limit_px = round(trigger * 0.985 / tick) * tick
         try:
             self._call(
                 self.kite.modify_order,
                 self.kite.VARIETY_REGULAR,
                 order_id,
                 trigger_price=trigger,
+                price=limit_px,
             )
             return True
         except Exception:

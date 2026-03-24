@@ -1022,19 +1022,21 @@ class KiteORBTrader:
                 self._active_slm_order_id = slm_resp.get("order_id")
                 logger.info(f"SL-M placed: trigger={sl_price:.2f} order_id={self._active_slm_order_id}")
             except Exception as e:
-                logger.error(f"SL-M placement failed: {e} — exiting position immediately for safety")
-                _log_event("SLM_PLACEMENT_FAILED", {"symbol": symbol, "error": str(e), "action": "emergency_exit"})
+                logger.error(f"SL placement failed: {e} — exiting position immediately for safety")
+                _log_event("SL_PLACEMENT_FAILED", {"symbol": symbol, "error": str(e), "action": "emergency_exit"})
                 try:
                     exit_resp = self.client.place_order(
                         symbol=symbol, qty=qty, side="SELL",
                         exchange="NFO", product="MIS",
                     )
                     self.client.confirm_fill(exit_resp.get("order_id", ""), timeout_seconds=15)
-                    logger.info("Emergency exit placed after SL-M failure")
+                    logger.info("Emergency exit placed after SL placement failure")
                 except Exception as exit_err:
                     logger.error(f"EMERGENCY EXIT FAILED: {exit_err} — CHECK KITE MANUALLY!")
                     _log_event("EMERGENCY_EXIT_FAILED", {"symbol": symbol, "error": str(exit_err)})
-                    self._notify(f"🚨 EMERGENCY: SL-M failed AND exit failed for {symbol}. CHECK KITE NOW!")
+                    self._notify(f"🚨 EMERGENCY: SL failed AND exit failed for {symbol}. CHECK KITE NOW!")
+                # Record trade so trades_today is incremented — prevents re-entry loop on next scan
+                self.risk.record_trade(0.0)
                 return
 
         filter_log["regime"] = {"passed": True, "value": regime.regime, "detail": regime.detail}
