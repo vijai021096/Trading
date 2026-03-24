@@ -134,9 +134,21 @@ class Settings(BaseSettings):
     atr_sl_max_pct: float = 0.30
     rr_min: float = 2.0
 
-    trail_trigger_pct: float = 0.20
-    trail_lock_step_pct: float = 0.10
-    break_even_trigger_pct: float = 0.12
+    trail_trigger_pct: float = 0.14
+    trail_lock_step_pct: float = 0.09
+    break_even_trigger_pct: float = 0.08
+
+    # ── Signal quality thresholds ─────────────────────────────────────
+    min_confidence_score: float = 70.0      # min confidence to take any trade
+    min_quality_score: float = 4.0          # min quality score (0-5 scale)
+    structure_exit_min_profit_pct: float = 0.05  # only exit on structure break if 5%+ in profit
+
+    # ── Conviction-based max trades ───────────────────────────────────
+    strong_trend_conviction_min: float = 0.70   # conviction >= this → allow more trades
+    strong_trend_max_trades: int = 3            # max trades on strong trend days
+
+    # ── Overextension filter ──────────────────────────────────────────
+    overextended_move_pct: float = 0.015    # if Nifty moved >1.5% intraday in signal direction, skip in late window
 
     thursday_max_loss_pct: float = 0.06
 

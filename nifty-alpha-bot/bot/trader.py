@@ -99,6 +99,8 @@ class KiteORBTrader:
         self._trend_logged_today = False
         self._daily_regime_classified = False
         self._day_stopped_profit = False
+        self._last_trade_was_loss: bool = False
+        self._last_exit_direction: Optional[str] = None
         self._last_broker_sync: float = 0.0
         self._orb_signal_used = False
         self._momentum_signal_used = False
@@ -201,6 +203,30 @@ class KiteORBTrader:
             )
 
         return momentum_ok, reason
+
+    def _is_overextended(self, direction: str, candles: List[Dict]) -> tuple[bool, str]:
+        """Skip late entries if Nifty has already moved too far in signal direction."""
+        if len(candles) < 2:
+            return False, "insufficient candles"
+        open_price = candles[0]["open"]
+        current = candles[-1]["close"]
+        if not open_price:
+            return False, "no open price"
+        intraday_move = (current - open_price) / open_price
+        threshold = self.cfg.overextended_move_pct
+        if direction == "PUT" and intraday_move < -threshold:
+            return True, f"overextended DOWN: Nifty already {intraday_move*100:.1f}% from open (limit -{threshold*100:.1f}%)"
+        if direction == "CALL" and intraday_move > threshold:
+            return True, f"overextended UP: Nifty already +{intraday_move*100:.1f}% from open (limit +{threshold*100:.1f}%)"
+        return False, f"not overextended: intraday_move={intraday_move*100:.2f}%"
+
+    def _compute_composite_score(self, confidence: float, filter_log: dict) -> float:
+        """Composite entry score = confidence * 0.5 + quality * 10 + conviction * 20.
+        Returns 0-120 range. Used to rank multiple signal candidates."""
+        from shared.quality_filter import compute_trade_quality
+        quality = compute_trade_quality(filter_log) if filter_log else 0.0
+        conviction = self._current_trend.conviction if self._current_trend else 0.0
+        return confidence * 0.5 + quality * 10 + conviction * 20
 
     def _in_daily_adaptive_window(self, now: datetime) -> bool:
         t = now.time()
@@ -366,6 +392,29 @@ class KiteORBTrader:
         elif not self.cfg.use_slm_exit and current_price <= pos.current_sl:
             exit_reason = "SL_HIT"
 
+        # Structure-based exit: exit early on trend reversal candles if already in profit
+        if not exit_reason and len(candles) >= 2:
+            gain_pct = (current_price - pos.entry_price) / pos.entry_price if pos.entry_price > 0 else 0
+            if gain_pct >= self.cfg.structure_exit_min_profit_pct:
+                last_c = candles[-1]
+                prev_c = candles[-2]
+                # For PUT position: Nifty making higher lows = bounce = PUT reversing
+                if pos.direction == "PUT":
+                    if (last_c["low"] > prev_c["low"] and last_c["close"] > prev_c["close"]):
+                        exit_reason = "STRUCTURE_BREAK"
+                        logger.info(
+                            f"STRUCTURE_BREAK (PUT): Nifty higher low {prev_c['low']:.0f}→{last_c['low']:.0f}, "
+                            f"close {prev_c['close']:.0f}→{last_c['close']:.0f} | gain={gain_pct*100:.1f}%"
+                        )
+                # For CALL position: Nifty making lower highs = reversal = CALL reversing
+                elif pos.direction == "CALL":
+                    if (last_c["high"] < prev_c["high"] and last_c["close"] < prev_c["close"]):
+                        exit_reason = "STRUCTURE_BREAK"
+                        logger.info(
+                            f"STRUCTURE_BREAK (CALL): Nifty lower high {prev_c['high']:.0f}→{last_c['high']:.0f}, "
+                            f"close {prev_c['close']:.0f}→{last_c['close']:.0f} | gain={gain_pct*100:.1f}%"
+                        )
+
         # Check if SL-M order got executed (SL hit at exchange)
         if self._active_slm_order_id and self.cfg.use_slm_exit:
             if pos.state != PositionState.ACTIVE:
@@ -506,6 +555,9 @@ class KiteORBTrader:
 
         net = trade_record["net_pnl"]
         self.risk.record_trade(net)
+        # Track last trade outcome for skip-after-loss logic
+        self._last_trade_was_loss = net < 0
+        self._last_exit_direction = pos.direction
         _log_event("TRADE_CLOSED", trade_record)
 
         # Stop trading for the day if profit >= 2R
@@ -607,6 +659,17 @@ class KiteORBTrader:
         legs: List[Dict[str, Any]] = plan.get("executable_legs") or []
         day_cap = int(plan.get("day_trade_cap") or self.cfg.max_trades_per_day)
         day_cap = min(day_cap, self.cfg.max_trades_per_day)
+
+        # Conviction-based max trades: allow more entries on genuinely strong trend days
+        if (self._current_trend is not None
+                and self._current_trend.conviction >= self.cfg.strong_trend_conviction_min
+                and self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR")):
+            day_cap = min(self.cfg.strong_trend_max_trades, self.cfg.max_trades_per_day)
+            logger.info(
+                f"STRONG_TREND: conviction={self._current_trend.conviction:.2f} → "
+                f"day_cap expanded to {day_cap}"
+            )
+
         idx = int(self.risk.status().get("trades_today", 0))
         if idx >= len(legs) or idx >= day_cap:
             return
@@ -633,11 +696,46 @@ class KiteORBTrader:
             return
         candle = {"close": spot, "open": spot, "high": spot, "low": spot, "ts": now}
 
-        leg = legs[idx]
+        # ── Best signal selection: score all remaining legs, pick highest ──
+        remaining_legs = legs[idx:]
+        scored = []
+        for l in remaining_legs:
+            from shared.trend_detector import compute_signal_confidence
+            stub_trend = self._current_trend or TrendResult(
+                state=TrendState.NEUTRAL, direction="NEUTRAL", conviction=0,
+                risk_multiplier=0.6, strategy_priority=[]
+            )
+            conf = compute_signal_confidence(
+                l["strategy"], l["direction"], stub_regime.regime, stub_trend,
+                dict(l.get("filter_log") or {}), effective_vix,
+            )
+            composite = self._compute_composite_score(conf, dict(l.get("filter_log") or {}))
+            scored.append((l, conf, composite))
+
+        if not scored:
+            return
+
+        # Pick best by composite score
+        best_leg, best_conf, best_composite = max(scored, key=lambda x: x[2])
+
+        # A+ filter: confidence >= threshold AND quality implied by composite
+        if best_conf < self.cfg.min_confidence_score:
+            if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
+                logger.info(
+                    f"A+_FILTER SKIP: best confidence {best_conf:.0f} < {self.cfg.min_confidence_score:.0f} "
+                    f"(composite={best_composite:.1f})"
+                )
+            return
+
+        logger.info(
+            f"BEST_SIGNAL: {best_leg['strategy']} {best_leg['direction']} "
+            f"confidence={best_conf:.0f} composite={best_composite:.1f}"
+        )
+
+        leg = best_leg
 
         # ── Intraday momentum confirmation ────────────────────────────
         # Validate that recent 5m candles still confirm the signal direction.
-        # Prevents entering stale signals on bot restart or when price has reversed.
         candles = self._candle_cache or self._refresh_candles(now)
         momentum_ok, momentum_reason = self._confirm_intraday_momentum(leg["direction"], candles)
         if not momentum_ok:
@@ -646,6 +744,16 @@ class KiteORBTrader:
             return
 
         logger.info(f"MOMENTUM OK: {momentum_reason}")
+
+        # ── Skip after same-direction loss (prevents chasing failed setups) ──
+        last_exit = getattr(self, '_last_exit_direction', None)
+        last_was_loss = getattr(self, '_last_trade_was_loss', False)
+        if last_was_loss and last_exit == leg["direction"] and best_conf < 75:
+            logger.info(
+                f"SKIP_AFTER_LOSS: last {last_exit} trade was a loss, "
+                f"confidence {best_conf:.0f} < 75 — skipping same direction"
+            )
+            return
 
         # ── Late window A+ filter (after 10:30) ──────────────────────
         is_late = now.time() >= self._t(self.cfg.late_window_start)
@@ -663,6 +771,11 @@ class KiteORBTrader:
                 logger.info(
                     f"LATE_WINDOW SKIP: strategy {leg['strategy']} not in A+ list {allowed}"
                 )
+                return
+            # Overextension check — only in late window (early window: move is still fresh)
+            overextended, oe_reason = self._is_overextended(leg["direction"], candles)
+            if overextended:
+                logger.info(f"OVEREXTENDED SKIP (late window): {oe_reason}")
                 return
             sl_pct = self.cfg.late_window_sl_pct
             target_pct = self.cfg.late_window_target_pct
