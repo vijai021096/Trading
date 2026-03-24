@@ -168,6 +168,40 @@ class KiteORBTrader:
             logger.warning(f"Daily NIFTY fetch failed: {e}")
             return None
 
+    def _confirm_intraday_momentum(self, direction: str, candles: List[Dict]) -> tuple[bool, str]:
+        """Check last 3 completed 5m candles confirm the signal direction before entry.
+        Prevents entering stale signals on restart or when price has reversed.
+        Returns (ok, reason_string).
+        """
+        completed = [c for c in candles if c.get("ts") is not None][-4:-1]  # last 3 completed
+        if len(completed) < 2:
+            return True, "insufficient candles — skipping momentum check"
+
+        # Count bullish vs bearish candles
+        bull = sum(1 for c in completed if c["close"] >= c["open"])
+        bear = len(completed) - bull
+
+        # VWAP as simple average of recent candle closes (proxy)
+        avg_close = sum(c["close"] for c in completed) / len(completed)
+        current_close = completed[-1]["close"]
+
+        if direction == "PUT":
+            # Need majority bearish candles + current price below recent average
+            momentum_ok = bear >= 2 and current_close <= avg_close
+            reason = (
+                f"PUT momentum: {bear}/{len(completed)} bear candles, "
+                f"price {current_close:.0f} vs avg {avg_close:.0f}"
+            )
+        else:
+            # CALL: majority bullish + price above average
+            momentum_ok = bull >= 2 and current_close >= avg_close
+            reason = (
+                f"CALL momentum: {bull}/{len(completed)} bull candles, "
+                f"price {current_close:.0f} vs avg {avg_close:.0f}"
+            )
+
+        return momentum_ok, reason
+
     def _in_daily_adaptive_window(self, now: datetime) -> bool:
         t = now.time()
         return self._t(self.cfg.daily_adaptive_window_start) <= t <= self._t(
@@ -587,6 +621,18 @@ class KiteORBTrader:
         candle = {"close": spot, "open": spot, "high": spot, "low": spot, "ts": now}
 
         leg = legs[idx]
+
+        # ── Intraday momentum confirmation ────────────────────────────
+        # Validate that recent 5m candles still confirm the signal direction.
+        # Prevents entering stale signals on bot restart or when price has reversed.
+        candles = self._candle_cache or self._refresh_candles(now)
+        momentum_ok, momentum_reason = self._confirm_intraday_momentum(leg["direction"], candles)
+        if not momentum_ok:
+            if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
+                logger.info(f"MOMENTUM SKIP: {leg['direction']} not confirmed — {momentum_reason}")
+            return
+
+        logger.info(f"MOMENTUM OK: {momentum_reason}")
 
         # ── Late window A+ filter (after 10:30) ──────────────────────
         is_late = now.time() >= self._t(self.cfg.late_window_start)
