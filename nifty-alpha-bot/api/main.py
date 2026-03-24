@@ -304,7 +304,7 @@ async def heartbeat_loop():
             # Today's trades
             today_str = now.strftime("%Y-%m-%d")
             all_trades = get_trades_from_events()
-            today_trades = [t for t in all_trades if str(t.get("trade_date", t.get("entry_ts", "")))[:10] == today_str]
+            today_trades = [t for t in all_trades if _trade_date(t) == today_str]
             today_pnl = sum(t.get("net_pnl", 0) for t in today_trades)
 
             # Halt flag
@@ -534,6 +534,15 @@ def read_position() -> dict:
         return {"state": "UNKNOWN"}
 
 
+def _trade_date(t: dict) -> str:
+    """Extract YYYY-MM-DD from a TRADE_CLOSED event regardless of field name."""
+    for key in ("trade_date", "entry_ts", "entry_time", "ts"):
+        val = t.get(key, "")
+        if val:
+            return str(val)[:10]
+    return ""
+
+
 def get_trades_from_events() -> List[dict]:
     events = read_all_events()
     return [e for e in events if e.get("event") == "TRADE_CLOSED"]
@@ -542,7 +551,7 @@ def get_trades_from_events() -> List[dict]:
 def daily_pnl_summary() -> dict:
     trades = get_trades_from_events()
     today = date.today().isoformat()
-    today_trades = [t for t in trades if str(t.get("trade_date", t.get("entry_ts", "")))[:10] == today]
+    today_trades = [t for t in trades if _trade_date(t) == today]
     total = sum(float(t.get("net_pnl", 0)) for t in today_trades)
     wins = sum(1 for t in today_trades if float(t.get("net_pnl", 0)) > 0)
     return {
@@ -672,7 +681,7 @@ def daily_watch():
 def trades(limit: int = 100, date_filter: Optional[str] = None):
     all_trades = get_trades_from_events()
     if date_filter:
-        all_trades = [t for t in all_trades if str(t.get("trade_date", t.get("entry_ts", "")))[:10] == date_filter]
+        all_trades = [t for t in all_trades if _trade_date(t) == date_filter]
     return {"trades": all_trades[-limit:], "total": len(all_trades)}
 
 
@@ -680,7 +689,7 @@ def trades(limit: int = 100, date_filter: Optional[str] = None):
 def trades_today():
     today = date.today().isoformat()
     all_trades = get_trades_from_events()
-    today_trades = [t for t in all_trades if str(t.get("trade_date", t.get("entry_ts", "")))[:10] == today]
+    today_trades = [t for t in all_trades if _trade_date(t) == today]
     return {"trades": today_trades, "date": today}
 
 
@@ -694,7 +703,7 @@ def sl_slippage_stats():
     items = []
     for t in sl_trades:
         items.append({
-            "date": str(t.get("trade_date", t.get("entry_ts", "")))[:10],
+            "date": _trade_date(t),
             "symbol": t.get("symbol", ""),
             "trigger_price": t.get("sl_trigger_price"),
             "fill_price": t.get("sl_fill_price"),
@@ -1049,8 +1058,7 @@ def _run_backtest_sync(months: int, capital: float, strategy: str = "BOTH",
     if eq and trades_list:
         eq_with_dates.append({"date": "Start", "equity": eq[0]})
         for i, t in enumerate(trades_list):
-            td = t.get("trade_date", t.get("entry_ts", ""))
-            date_str = td.isoformat() if hasattr(td, "isoformat") else str(td)[:10]
+            date_str = _trade_date(t)
             if i + 1 < len(eq):
                 eq_with_dates.append({"date": date_str, "equity": eq[i + 1]})
         if len(eq) > len(trades_list) + 1:

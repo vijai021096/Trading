@@ -463,7 +463,10 @@ class KiteORBTrader:
 
         # Stop trading for the day if profit >= 2R
         if net > 0 and pos.entry_price > 0:
-            sl_pct_used = (pos.entry_price - pos.current_sl) / pos.entry_price if pos.current_sl > 0 else 0.28
+            # Use original SL pct (distance from entry to initial sl), clamped positive
+            # current_sl may be above entry when trailing — use cfg fallback in that case
+            raw_sl_pct = (pos.entry_price - pos.current_sl) / pos.entry_price if pos.current_sl > 0 else 0
+            sl_pct_used = raw_sl_pct if raw_sl_pct > 0 else self.cfg.risk_per_trade_pct
             one_r = pos.entry_price * sl_pct_used * pos.qty
             daily_pnl = self.risk.status().get("daily_pnl", 0)
             if daily_pnl >= one_r * 2:
