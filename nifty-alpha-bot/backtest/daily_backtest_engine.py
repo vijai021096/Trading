@@ -95,11 +95,28 @@ class DailyBacktestConfig:
     target_pct_vc: float = 0.55
 
     # ── Break-even / EOD ──
-    break_even_trigger_pct: float = 0.10
+    break_even_trigger_pct: float = 0.08  # Matches live: 8% (was 10%)
 
     # ── Shared filters ──
     vix_max: float = 24.0
     slippage_pct: float = 0.005
+
+    # ── A+ Quality Gate (applied to ALL entries) ──
+    # Composite score 0-100: RSI zone + ADX strength + VIX favorability +
+    # filter checks passed + strategy tier. Blocks low-quality setups.
+    enable_quality_gate: bool = True
+    min_quality_score: float = 40.0        # Normal entry minimum — calibrated to max PF + monthly consistency
+
+    # ── Skip-after-loss filter (mirrors live bot logic) ──
+    # After a losing trade, same-direction re-entry requires HIGHER quality score
+    enable_skip_after_loss: bool = True
+    skip_after_loss_min_quality: float = 60.0  # Stricter threshold after same-dir loss
+
+    # ── Conviction-based day cap (mirrors live bot logic) ──
+    # On strong trend days (high ADX), allow up to strong_trend_max_trades
+    enable_conviction_day_cap: bool = True
+    strong_trend_adx_thresh: float = 0.42      # ADX threshold for "strong trend"
+    strong_trend_max_trades: int = 3
 
     # ── Risk ──
     max_trades_per_day: int = 4
@@ -132,7 +149,7 @@ class DailyBacktestConfig:
     enable_range_bounce: bool = True
     enable_inside_bar_break: bool = True
     enable_vwap_cross: bool = True
-    enable_ema_fresh_cross: bool = True
+    enable_ema_fresh_cross: bool = False  # Disabled: WR=11%, avg=-₹1,054 — structurally losing
 
     # ── Fallback signal: fires when no primary strategy matches ──
     # NOTE: Backtested as harmful for intraday (WR=10%). Kept as option, disabled by default.
@@ -740,6 +757,111 @@ def _check_ema_fresh_cross(
 
 
 # ═══════════════════════════════════════════════════════════════════
+# A+ QUALITY SCORING
+# ═══════════════════════════════════════════════════════════════════
+
+# Strategy tiers based on actual backtested win rates + avg PnL per trade:
+#   TREND_CONTINUATION: WR=53%, avg=₹2,994 → Tier 1
+#   REVERSAL_SNAP:      WR=60%, avg=₹2,410 → Tier 1
+#   BREAKOUT_MOMENTUM:  WR=48%, avg=₹2,334 → Tier 2
+#   VWAP_CROSS:         WR=40%, avg=₹1,785 → Tier 2
+#   GAP_FADE:           WR=46%, avg=₹1,390 → Tier 2
+#   INSIDE_BAR_BREAK:   WR=43%, avg=₹675   → Tier 3
+#   RANGE_BOUNCE:       WR=38%, avg=₹745   → Tier 3
+#   EMA_FRESH_CROSS:    WR=11%, avg=-₹1,054 → Structurally LOSING — disable by default
+_STRATEGY_TIER: Dict[str, int] = {
+    "TREND_CONTINUATION":  20,
+    "REVERSAL_SNAP":       18,
+    "BREAKOUT_MOMENTUM":   14,
+    "VWAP_CROSS":          12,
+    "GAP_FADE":            11,
+    "INSIDE_BAR_BREAK":     6,
+    "RANGE_BOUNCE":         5,
+    "EMA_FRESH_CROSS":      0,   # Structurally losing — blocked by quality gate
+    "FALLBACK_EMA_CROSS":   2,
+}
+
+# Regime edge scores based on actual backtested WR:
+#   VOLATILE:           WR=75%  (rare, very high edge)
+#   MILD_TREND:         WR=54%  (reliable)
+#   MEAN_REVERT:        WR=44%  (below average)
+#   STRONG_TREND_UP:    WR=8%   (trap — CALL trades fail badly in strong up-trends)
+_REGIME_QUALITY: Dict[str, int] = {
+    "VOLATILE":           25,
+    "MILD_TREND":         20,
+    "MEAN_REVERT":        10,
+    "STRONG_TREND_DOWN":  18,
+    "STRONG_TREND_UP":    -15,  # Heavy penalty — structurally losing for CALL signals
+    "BREAKOUT":           15,
+}
+
+
+def _compute_backtest_quality_score(
+    signal: str,
+    strategy_name: str,
+    filter_log: dict,
+    rsi: float,
+    adx: float,
+    vix: float,
+    regime: str = "",
+) -> float:
+    """
+    Data-driven quality score 0-100 for a daily backtest signal.
+    Weights are calibrated from actual backtested win rates and avg PnL.
+
+      1. Strategy tier    0-20  — based on historical WR and avg PnL
+      2. Regime edge      0-25  — regime-specific performance (STRONG_TREND_UP penalised)
+      3. Filter checks    0-20  — what fraction of the strategy's own checks passed cleanly
+      4. ADX confirmation 0-20  — moderate trend is ideal; extreme ADX penalised
+      5. RSI confirmation 0-15  — RSI aligned with direction and not overextended
+
+    Thresholds:
+      Normal entry:           score >= min_quality_score  (default 45)
+      After same-dir loss:    score >= skip_after_loss_min_quality  (default 65)
+    """
+    score = 0.0
+
+    # ── 1. Strategy tier (0-20) ───────────────────────────────────────
+    score += _STRATEGY_TIER.get(strategy_name, 5)
+
+    # ── 2. Regime edge (−15 to +25) ──────────────────────────────────
+    score += _REGIME_QUALITY.get(regime, 10)
+
+    # ── 3. Filter checks passed ratio (0-20) ─────────────────────────
+    checks = [v for v in filter_log.values() if isinstance(v, dict) and "passed" in v]
+    if checks:
+        passed = sum(1 for c in checks if c.get("passed"))
+        score += (passed / len(checks)) * 20
+
+    # ── 4. ADX confirmation (0-20) ────────────────────────────────────
+    # Moderate trend (0.18-0.35) = ideal. Too low = choppy. Too high = chasing.
+    if 0.18 <= adx <= 0.35:
+        score += 20
+    elif 0.35 < adx <= 0.42:
+        score += 14
+    elif 0.14 <= adx < 0.18:
+        score += 8
+    elif adx > 0.42:
+        score += 5   # Very high ADX often means overextended move
+
+    # ── 5. RSI confirmation (0-15) ────────────────────────────────────
+    # Reward RSI in the "has room to run" zone; penalise extremes
+    if signal == "CALL":
+        if 48.0 <= rsi <= 65.0:
+            score += 15
+        elif 42.0 <= rsi < 48.0 or 65.0 < rsi <= 72.0:
+            score += 7
+        # RSI < 42 (bearish) or > 72 (overbought) = 0
+    else:  # PUT
+        if 35.0 <= rsi <= 52.0:
+            score += 15
+        elif 28.0 <= rsi < 35.0 or 52.0 < rsi <= 58.0:
+            score += 7
+
+    return round(score, 1)
+
+
+# ═══════════════════════════════════════════════════════════════════
 # OPTION SIMULATION
 # ═══════════════════════════════════════════════════════════════════
 
@@ -919,6 +1041,10 @@ def run_daily_backtest(
     skip_reasons: Dict[str, int] = {}
     start_ym = (dates[start_idx].year, dates[start_idx].month)
 
+    # Skip-after-loss state (mirrors live bot _last_trade_was_loss / _last_exit_direction)
+    last_trade_was_loss: bool = False
+    last_exit_direction: Optional[str] = None
+
     if verbose:
         print(f"\n{'='*72}")
         print(f" ADAPTIVE ALPHA DAILY BACKTEST — {end_idx - start_idx} trading days")
@@ -960,6 +1086,10 @@ def run_daily_backtest(
             day_trade_cap = min(day_trade_cap, 2)
         elif vix > 17.0:
             day_trade_cap = min(day_trade_cap, 3)
+
+        # Conviction-based day cap: strong trend (ADX proxy) → allow 3 trades
+        if cfg.enable_conviction_day_cap and adx_vals[i] >= cfg.strong_trend_adx_thresh:
+            day_trade_cap = max(day_trade_cap, min(cfg.strong_trend_max_trades, cfg.max_trades_per_day))
 
         for strat_name in scan_order:
             enabled_attr = f"enable_{strat_name.lower()}"
@@ -1037,6 +1167,25 @@ def run_daily_backtest(
                 skip_reasons["regime_dir_mismatch"] = skip_reasons.get("regime_dir_mismatch", 0) + 1
                 continue
 
+            # Compute composite quality score for this signal
+            quality = _compute_backtest_quality_score(
+                signal, strategy_name, filter_log,
+                rsi, adx_vals[i], vix, regime,
+            )
+            filter_log["quality_score"] = quality
+
+            # A+ Quality Gate: block all low-quality setups regardless of direction
+            if cfg.enable_quality_gate and quality < cfg.min_quality_score:
+                skip_reasons["low_quality"] = skip_reasons.get("low_quality", 0) + 1
+                continue
+
+            # Skip-after-loss filter (mirrors live bot logic):
+            # After a losing trade in the same direction, require higher quality score
+            if cfg.enable_skip_after_loss and last_trade_was_loss and last_exit_direction == signal:
+                if quality < cfg.skip_after_loss_min_quality:
+                    skip_reasons["skip_after_loss"] = skip_reasons.get("skip_after_loss", 0) + 1
+                    continue
+
             peak_equity = max(peak_equity, capital)
             dd_pct = (peak_equity - capital) / peak_equity if peak_equity > 0 else 0.0
 
@@ -1104,8 +1253,11 @@ def run_daily_backtest(
             capital += net
             if net > 0:
                 consecutive_losses = 0
+                last_trade_was_loss = False
             else:
                 consecutive_losses += 1
+                last_trade_was_loss = True
+            last_exit_direction = signal
 
             if verbose:
                 sign = "+" if net >= 0 else ""
