@@ -101,6 +101,10 @@ class KiteORBTrader:
         self._day_stopped_profit = False
         self._last_trade_was_loss: bool = False
         self._last_exit_direction: Optional[str] = None
+        self._last_exit_reason: str = ""
+        self._last_trade_pnl: float = 0.0
+        self._last_trade_strategy: str = ""
+        self._skip_reasons_today: list = []
         self._last_broker_sync: float = 0.0
         self._orb_signal_used = False
         self._momentum_signal_used = False
@@ -258,6 +262,10 @@ class KiteORBTrader:
             self._momentum_signal_used = False
             self._ema_pullback_signal_used = False
             self._reclaim_signal_used = False
+            self._skip_reasons_today = []
+            self._last_exit_reason = ""
+            self._last_trade_pnl = 0.0
+            self._last_trade_strategy = ""
             self._current_expiry = self.client.get_nearest_expiry("NIFTY")
             logger.info(f"Day rolled: {today} | Expiry: {self._current_expiry}")
 
@@ -564,6 +572,9 @@ class KiteORBTrader:
         # Track last trade outcome for skip-after-loss logic
         self._last_trade_was_loss = net < 0
         self._last_exit_direction = pos.direction
+        self._last_exit_reason = exit_reason
+        self._last_trade_pnl = net
+        self._last_trade_strategy = pos.strategy or ""
         _log_event("TRADE_CLOSED", trade_record)
 
         # Stop trading for the day if profit >= 2R
@@ -737,6 +748,11 @@ class KiteORBTrader:
                     f"A+_FILTER SKIP: best confidence {best_conf:.0f} < {min_conf:.0f} "
                     f"(composite={best_composite:.1f})"
                 )
+            self._skip_reasons_today.append({
+                "strategy": best_leg["strategy"], "direction": best_leg.get("direction", ""),
+                "reason": f"Confidence {best_conf:.0f} < {min_conf:.0f} threshold",
+                "conf": round(best_conf, 1),
+            })
             return
 
         logger.info(
@@ -767,6 +783,11 @@ class KiteORBTrader:
                     f"SKIP_AFTER_LOSS: last {last_exit} trade was a loss, "
                     f"confidence {best_conf:.0f} < 75 — skipping same direction"
                 )
+                self._skip_reasons_today.append({
+                    "strategy": leg["strategy"], "direction": leg["direction"],
+                    "reason": "Skip after loss — same direction, confidence < 75",
+                    "conf": round(best_conf, 1),
+                })
                 return
 
         # ── Late window A+ filter (after 10:30) ──────────────────────
@@ -778,6 +799,11 @@ class KiteORBTrader:
                     f"LATE_WINDOW SKIP: VIX {effective_vix:.1f} > {self.cfg.late_window_vix_max} "
                     f"(A+ filter — only trade in calm markets after {self.cfg.late_window_start})"
                 )
+                self._skip_reasons_today.append({
+                    "strategy": leg["strategy"], "direction": leg.get("direction", ""),
+                    "reason": f"Late window — VIX {effective_vix:.1f} > {self.cfg.late_window_vix_max}",
+                    "conf": round(best_conf, 1),
+                })
                 return
             # Strategy must be A+ tier
             allowed = [s.strip() for s in self.cfg.late_window_strategies.split(",")]
@@ -785,6 +811,11 @@ class KiteORBTrader:
                 logger.info(
                     f"LATE_WINDOW SKIP: strategy {leg['strategy']} not in A+ list {allowed}"
                 )
+                self._skip_reasons_today.append({
+                    "strategy": leg["strategy"], "direction": leg.get("direction", ""),
+                    "reason": f"Late window — {leg['strategy']} not in A+ tier",
+                    "conf": round(best_conf, 1),
+                })
                 return
             # Overextension check — only in late window
             # Exception: very high conviction (>= 0.8) strong trend days can move 2-3%
@@ -797,6 +828,11 @@ class KiteORBTrader:
                     )
                 else:
                     logger.info(f"OVEREXTENDED SKIP (late window): {oe_reason}")
+                    self._skip_reasons_today.append({
+                        "strategy": leg["strategy"], "direction": leg.get("direction", ""),
+                        "reason": f"Overextended — {oe_reason}",
+                        "conf": round(best_conf, 1),
+                    })
                     return
             sl_pct = self.cfg.late_window_sl_pct
             target_pct = self.cfg.late_window_target_pct
@@ -1418,6 +1454,10 @@ class KiteORBTrader:
                         "remaining_daily_loss": rs["remaining_daily_loss"],
                         "halted": rs["trading_halted"],
                         "halt_reason": rs.get("halt_reason", ""),
+                        "last_exit_reason": self._last_exit_reason,
+                        "last_trade_pnl": self._last_trade_pnl,
+                        "last_trade_strategy": self._last_trade_strategy,
+                        "skip_reasons": self._skip_reasons_today[-5:],
                     }
                     logger.info(
                         f"HEARTBEAT [{mode}] "

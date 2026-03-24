@@ -15,7 +15,12 @@ export function LivePnLPanel() {
   // IMPROVEMENT 3: P&L context calculations
   const capital = (botStatus as any)?.capital ?? botStatus?.current_capital ?? 25000
   const pnlPct = capital > 0 ? (pnl / capital * 100) : 0
-  const winRate = dailyPnl?.win_rate ?? 0
+  // Fix 1: Accurate win rate from trades array (exclude breakeven)
+  const today = new Date().toISOString().slice(0, 10)
+  const todayTrades = trades.filter(t => t.trade_date === today)
+  const closedToday = todayTrades.filter(t => Math.abs(t.net_pnl) > 0.01)
+  const todayWins = closedToday.filter(t => t.net_pnl > 0).length
+  const winRate = closedToday.length > 0 ? Math.round(todayWins / closedToday.length * 100) : 0
   const profitFactor = (botStatus as any)?.profit_factor as number | undefined
   // Today type badge from regime
   const regime = (botStatus as any)?.daily_regime ?? (botStatus as any)?.regime ?? ''
@@ -47,8 +52,8 @@ export function LivePnLPanel() {
           <div className="flex items-center gap-2 mt-1.5">
             <span className="text-[11px] text-text3">{todayCount} trades</span>
             <span className="text-[11px] text-text3">·</span>
-            <span className={clsx('text-[11px] font-semibold', (dailyPnl?.win_rate ?? 0) >= 50 ? 'text-green' : 'text-text3')}>
-              {(dailyPnl?.win_rate ?? 0).toFixed(0)}% win
+            <span className={clsx('text-[11px] font-semibold', winRate >= 50 ? 'text-green' : closedToday.length === 0 ? 'text-text3' : 'text-red')}>
+              {winRate}% win
             </span>
             {todayCount > 0 && (
               <span className={clsx('inline-flex items-center gap-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded',
@@ -64,7 +69,7 @@ export function LivePnLPanel() {
               {pnl >= 0 ? '▲' : '▼'} {pnl >= 0 ? '+' : ''}{pnlPct.toFixed(1)}% on ₹{(capital / 1000).toFixed(0)}k
             </span>
             <span>|</span>
-            <span>Win rate: <span className="font-bold text-text2">{winRate.toFixed(0)}%</span></span>
+            <span>Win rate: <span className={clsx('font-bold', winRate >= 50 ? 'text-green' : closedToday.length === 0 ? 'text-text2' : 'text-red')}>{winRate}%</span></span>
             {profitFactor != null && (
               <>
                 <span>|</span>

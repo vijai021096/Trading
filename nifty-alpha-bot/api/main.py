@@ -565,14 +565,17 @@ def daily_pnl_summary() -> dict:
     today = date.today().isoformat()
     today_trades = [t for t in trades if _trade_date(t) == today]
     total = sum(float(t.get("net_pnl", 0)) for t in today_trades)
-    wins = sum(1 for t in today_trades if float(t.get("net_pnl", 0)) > 0)
+    # Only closed (non-zero pnl) trades count for win/loss — exclude open/breakeven
+    closed = [t for t in today_trades if abs(float(t.get("net_pnl", 0))) > 0.01]
+    wins = sum(1 for t in closed if float(t.get("net_pnl", 0)) > 0)
+    losses = len(closed) - wins
     return {
         "date": today,
         "trades": len(today_trades),
         "wins": wins,
-        "losses": len(today_trades) - wins,
+        "losses": losses,
         "net_pnl": round(total, 2),
-        "win_rate": round(wins / len(today_trades) * 100, 1) if today_trades else 0.0,
+        "win_rate": round(wins / len(closed) * 100, 1) if closed else 0.0,
     }
 
 
@@ -748,13 +751,15 @@ def pnl_daily():
 def pnl_summary():
     trades = get_trades_from_events()
     total = sum(float(t.get("net_pnl", 0)) for t in trades)
-    wins = sum(1 for t in trades if float(t.get("net_pnl", 0)) > 0)
+    closed = [t for t in trades if abs(float(t.get("net_pnl", 0))) > 0.01]
+    wins = sum(1 for t in closed if float(t.get("net_pnl", 0)) > 0)
+    losses = len(closed) - wins
     return {
         "total_trades": len(trades),
         "wins": wins,
-        "losses": len(trades) - wins,
+        "losses": losses,
         "total_net_pnl": round(total, 2),
-        "win_rate": round(wins / len(trades) * 100, 1) if trades else 0.0,
+        "win_rate": round(wins / len(closed) * 100, 1) if closed else 0.0,
         "daily": daily_pnl_summary(),
     }
 

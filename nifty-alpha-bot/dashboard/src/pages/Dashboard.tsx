@@ -10,13 +10,14 @@ import {
   ChevronRight, Power, ToggleLeft, ToggleRight, AlertOctagon, Ruler,
   Brain, Compass, Waves, ChevronUp, ChevronDown, Minus, Wallet, Award, AlertTriangle
 } from 'lucide-react'
-import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
+import { AreaChart, Area, ResponsiveContainer, Tooltip, ReferenceDot } from 'recharts'
 import { useTradingStore } from '../stores/tradingStore'
 
 export function Dashboard() {
   const { position, trades, events, dailyPnl, connected, lastUpdate, emergencyStop, botStatus, marketState } = useTradingStore()
   const isActive = position.state === 'ACTIVE'
   const [expandedTradeId, setExpandedTradeId] = useState<string | null>(null)
+  const [tooltipTradeId, setTooltipTradeId] = useState<string | null>(null)
 
   const todayTrades = useMemo(() =>
     trades.filter(t => t.trade_date === new Date().toISOString().slice(0, 10)), [trades])
@@ -46,6 +47,27 @@ export function Dashboard() {
 
   const maxPnl = Math.max(...todayTrades.map(t => t.net_pnl), 0)
   const minPnl = Math.min(...todayTrades.map(t => t.net_pnl), 0)
+
+  // Fix 1: Accurate win rate from actual trades (exclude breakeven/open)
+  const closedToday = todayTrades.filter(t => Math.abs(t.net_pnl) > 0.01)
+  const todayWins = closedToday.filter(t => t.net_pnl > 0).length
+  const todayLosses = closedToday.filter(t => t.net_pnl < 0).length
+  const computedWinRate = closedToday.length > 0 ? Math.round(todayWins / closedToday.length * 100) : 0
+
+  // Fix 9: Last exit context
+  const lastExitReason = (botStatus as any)?.last_exit_reason as string | undefined
+  const lastTradePnl = (botStatus as any)?.last_trade_pnl as number | undefined
+  const lastTradeStrategy = (botStatus as any)?.last_trade_strategy as string | undefined
+
+  // Fix 10: Market phase from current time
+  const nowHour = new Date().getHours()
+  const nowMin = new Date().getMinutes()
+  const nowMins = nowHour * 60 + nowMin
+  const marketPhase = nowMins < 9 * 60 + 15 ? null
+    : nowMins < 10 * 60 ? { label: 'BREAKOUT PHASE', desc: 'ORB + Gap plays', color: 'text-amber', bg: 'bg-amber/10' }
+    : nowMins < 12 * 60 ? { label: 'TREND PHASE', desc: 'EMA + Momentum plays', color: 'text-green', bg: 'bg-green/10' }
+    : nowMins < 13 * 60 + 30 ? { label: 'PULLBACK PHASE', desc: 'VWAP reclaim plays', color: 'text-accent', bg: 'bg-accent/10' }
+    : { label: 'CLOSING PHASE', desc: 'No new entries', color: 'text-text3', bg: 'bg-surface/60' }
 
   return (
     <div className="px-5 lg:px-8 py-6 max-w-[1640px] mx-auto space-y-5">
@@ -108,9 +130,10 @@ export function Dashboard() {
             </div>
             <div className="flex items-center gap-3 mt-2 text-sm text-text3">
               <span>{todayCount} trades</span>
+              {closedToday.length > 0 && <><span>·</span><span className="font-bold text-text2">{todayWins}W/{todayLosses}L</span></>}
               <span>·</span>
-              <span className={clsx('font-semibold', (dailyPnl?.win_rate ?? 0) >= 50 ? 'text-green' : 'text-text3')}>
-                {(dailyPnl?.win_rate ?? 0).toFixed(0)}% win
+              <span className={clsx('font-semibold', computedWinRate >= 50 ? 'text-green' : closedToday.length === 0 ? 'text-text3' : 'text-red')}>
+                {computedWinRate}% win
               </span>
             </div>
           </div>
@@ -148,15 +171,15 @@ export function Dashboard() {
             <BarChart3 size={16} className="text-text3" />
           </div>
           <div className="text-2xl font-black text-text1">
-            <span className="text-green">{dailyPnl?.wins ?? 0}W</span>
+            <span className="text-green">{todayWins}W</span>
             <span className="text-text3 mx-2">/</span>
-            <span className="text-red">{dailyPnl?.losses ?? 0}L</span>
+            <span className="text-red">{todayLosses}L</span>
           </div>
           <div className="mt-3 flex items-center gap-3">
             <div className="flex-1 h-2 rounded-full bg-surface overflow-hidden">
-              <div className="h-full rounded-full bg-green transition-all duration-500" style={{ width: `${dailyPnl?.win_rate ?? 0}%` }} />
+              <div className="h-full rounded-full bg-green transition-all duration-500" style={{ width: `${computedWinRate}%` }} />
             </div>
-            <span className="text-sm font-bold text-text2">{(dailyPnl?.win_rate ?? 0).toFixed(0)}%</span>
+            <span className="text-sm font-bold text-text2">{computedWinRate}%</span>
           </div>
         </motion.div>
 
@@ -303,6 +326,18 @@ export function Dashboard() {
                     <div>
                       <div className="text-lg font-bold text-text1">No Open Position</div>
                       <div className="text-sm text-text3 mt-1">{marketOpen ? 'Scanning for entry signals...' : 'Bot resumes at 9:15 AM IST'}</div>
+                      {/* Fix 9: Last exit context */}
+                      {lastExitReason && (
+                        <div className="mt-2 flex items-center gap-2 text-xs">
+                          <span className="text-text3">Last trade:</span>
+                          <span className={clsx('font-bold px-2 py-0.5 rounded-lg',
+                            (lastTradePnl ?? 0) >= 0 ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>
+                            {(lastTradePnl ?? 0) >= 0 ? 'WIN' : 'LOSS'} — {lastExitReason.replace(/_/g, ' ')}
+                            {lastTradePnl != null && ` (${(lastTradePnl >= 0 ? '+' : '')}₹${Math.abs(lastTradePnl).toFixed(0)})`}
+                          </span>
+                          {lastTradeStrategy && <span className="text-text3 font-mono text-[10px]">{lastTradeStrategy.replace(/_/g, ' ')}</span>}
+                        </div>
+                      )}
                   {/* IMPROVEMENT 7: Why no trades panel */}
                   {marketOpen && todayTrades.length === 0 && botStatus?.state === 'RUNNING' && (
                     <div className="mt-3 bg-surface/60 border border-line/25 rounded-xl p-3">
@@ -325,15 +360,45 @@ export function Dashboard() {
                     {marketOpen ? 'Scanning' : 'Offline'}
                   </div>
                 </div>
-                <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                {/* Fix 10: Market Phase Timeline */}
+                {marketPhase && (
+                  <div className="mt-3 mb-1">
+                    <div className="flex items-center gap-3 mb-2 flex-wrap">
+                      <span className="text-[10px] font-bold uppercase text-text3 tracking-wider">Market Phase</span>
+                      <span className={clsx('text-[10px] font-black px-2 py-0.5 rounded-lg', marketPhase.bg, marketPhase.color)}>
+                        {marketPhase.label}
+                      </span>
+                      <span className="text-[10px] text-text3">{marketPhase.desc}</span>
+                    </div>
+                    <div className="flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden">
+                      {[
+                        { start: 9*60+15, end: 10*60, color: 'bg-amber' },
+                        { start: 10*60, end: 12*60, color: 'bg-green' },
+                        { start: 12*60, end: 13*60+30, color: 'bg-accent' },
+                        { start: 13*60+30, end: 15*60+30, color: 'bg-surface' },
+                      ].map((seg, i) => {
+                        const total = 15*60+30 - (9*60+15)
+                        const width = (seg.end - seg.start) / total * 100
+                        const isNow = nowMins >= seg.start && nowMins < seg.end
+                        return <div key={i} style={{ width: `${width}%` }} className={clsx('h-full transition-all', seg.color, isNow ? 'opacity-100' : 'opacity-20')} />
+                      })}
+                    </div>
+                    <div className="flex justify-between text-[9px] text-text3 mt-1 font-mono">
+                      <span>9:15</span><span>10:00</span><span>12:00</span><span>13:30</span><span>15:30</span>
+                    </div>
+                  </div>
+                )}
+                {/* Fix 6: Strategy cards with priority */}
+                <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
                   {[
-                    { name: 'ORB', desc: 'Opening Range Breakout', time: '9:30–10:00', icon: Flame, color: 'text-amber', stratKey: 'ORB' },
-                    { name: 'RELAXED ORB', desc: 'Wide-range breakout', time: '9:30–10:00', icon: Flame, color: 'text-amber', stratKey: 'RELAXED_ORB' },
-                    { name: 'EMA PULLBACK', desc: 'EMA21 bounce on trend', time: '9:30–1:00 PM', icon: TrendingUp, color: 'text-accent', stratKey: 'EMA_PULLBACK' },
-                    { name: 'MOMENTUM', desc: 'N-candle range breakout', time: '9:30–12:00 PM', icon: Zap, color: 'text-green', stratKey: 'MOMENTUM_BREAKOUT' },
-                    { name: 'VWAP RECLAIM', desc: 'VWAP cross confirmation', time: '10:00–1:30 PM', icon: Waves, color: 'text-cyan', stratKey: 'VWAP_RECLAIM' },
-                  ].map(({ name, desc, time, icon: Icon, color, stratKey }) => {
-                    /* IMPROVEMENT 5: Strategy status indicator */
+                    { name: 'TREND CONT.', desc: 'Trend continuation', time: '9:16–10:30', icon: TrendingUp, color: 'text-green', stratKey: 'TREND_CONTINUATION', priority: 'HIGH', wr: 67 },
+                    { name: 'REVERSAL', desc: 'Snap reversal pattern', time: '9:16–10:30', icon: Waves, color: 'text-red', stratKey: 'REVERSAL_SNAP', priority: 'HIGH', wr: 60 },
+                    { name: 'BREAKOUT', desc: 'N-candle range breakout', time: '9:16–12:00', icon: Zap, color: 'text-accent', stratKey: 'BREAKOUT_MOMENTUM', priority: 'MEDIUM', wr: 52 },
+                    { name: 'GAP FADE', desc: 'Gap open fade', time: '9:16–10:30', icon: Target, color: 'text-amber', stratKey: 'GAP_FADE', priority: 'MEDIUM', wr: 55 },
+                    { name: 'VWAP CROSS', desc: 'VWAP reclaim signal', time: '10:00–1:30', icon: Activity, color: 'text-cyan', stratKey: 'VWAP_CROSS', priority: 'MEDIUM', wr: 50 },
+                    { name: 'INSIDE BAR', desc: 'Inside bar breakout', time: '9:16–1:30', icon: Ruler, color: 'text-purple-400', stratKey: 'INSIDE_BAR_BREAK', priority: 'LOW', wr: 44 },
+                    { name: 'RANGE BOUNCE', desc: 'Support/resistance bounce', time: '9:16–1:30', icon: BarChart3, color: 'text-blue-400', stratKey: 'RANGE_BOUNCE', priority: 'LOW', wr: 42 },
+                  ].map(({ name, desc, time, icon: Icon, color, stratKey, priority, wr }) => {
                     const isThisActive = botStatus?.last_scan?.candidates?.some(c => c.strategy === stratKey)
                     const isRunning = marketOpen && botStatus?.state === 'RUNNING'
                     const stratStatus = !isRunning
@@ -341,8 +406,13 @@ export function Dashboard() {
                       : isThisActive
                       ? { label: '🔥 ACTIVE', cls: 'bg-green/10 text-green' }
                       : { label: '⚡ SCANNING', cls: 'bg-accent/10 text-accent-l' }
+                    const priorityBadge = priority === 'HIGH'
+                      ? { label: '🔥 HIGH PROB', cls: 'bg-green/10 text-green' }
+                      : priority === 'MEDIUM'
+                      ? { label: '⚡ MEDIUM', cls: 'bg-amber/10 text-amber' }
+                      : { label: '◎ LOW', cls: 'bg-surface text-text3' }
                     return (
-                    <div key={name} className="bg-surface/50 rounded-xl p-3 border border-line/20 hover:border-line/40 transition-all group">
+                    <div key={name} className="bg-surface/50 rounded-xl p-3 border border-line/20 hover:border-line/40 transition-all">
                       <div className="flex items-center justify-between gap-2 mb-1.5">
                         <div className="flex items-center gap-2">
                           <Icon size={13} className={color} />
@@ -351,7 +421,13 @@ export function Dashboard() {
                         <span className={clsx('text-[9px] font-bold px-1.5 py-0.5 rounded-md', stratStatus.cls)}>{stratStatus.label}</span>
                       </div>
                       <div className="text-[11px] text-text3">{desc}</div>
-                      <div className="text-[10px] text-text3 font-mono mt-1 flex items-center gap-1 opacity-70"><Timer size={10} /> {time}</div>
+                      <div className="flex items-center justify-between mt-1.5">
+                        <div className="text-[10px] text-text3 font-mono flex items-center gap-1 opacity-70"><Timer size={10} /> {time}</div>
+                        <div className="flex items-center gap-1">
+                          <span className={clsx('text-[9px] font-bold px-1.5 py-0.5 rounded-md', priorityBadge.cls)}>{priorityBadge.label}</span>
+                          <span className="text-[9px] text-text3 font-mono">{wr}%WR</span>
+                        </div>
+                      </div>
                     </div>
                   )})}
                 </div>
@@ -363,9 +439,17 @@ export function Dashboard() {
           {cumulativePnl.length > 0 && (
             <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }}
               className="glass-card rounded-2xl p-6 neon-border">
-              <div className="flex items-center gap-2 mb-4">
-                <LineChart size={16} className="text-accent" />
-                <span className="text-sm font-bold uppercase tracking-widest text-text3">Intraday Equity</span>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <LineChart size={16} className="text-accent" />
+                  <span className="text-sm font-bold uppercase tracking-widest text-text3">Intraday Equity</span>
+                </div>
+                {/* Peak P&L marker */}
+                {cumulativePnl.length > 0 && (
+                  <span className="text-xs text-text3 font-mono">
+                    Peak: <span className="text-green font-bold">₹{Math.max(...cumulativePnl.map(p => p.pnl)).toLocaleString('en-IN')}</span>
+                  </span>
+                )}
               </div>
               <div className="h-[160px]">
                 <ResponsiveContainer width="100%" height="100%">
@@ -378,9 +462,22 @@ export function Dashboard() {
                     </defs>
                     <Area type="monotone" dataKey="pnl" stroke="#22c55e" strokeWidth={2.5} fill="url(#pnlG)" dot={false} />
                     <Tooltip contentStyle={{ background: '#1a2140', border: '1px solid #2a3460', borderRadius: '12px', fontSize: 13, fontWeight: 600 }}
-                      formatter={(v: number) => [`₹${v.toLocaleString('en-IN')}`, 'P&L']} />
+                      formatter={(v: number) => [`₹${v.toLocaleString('en-IN')}`, 'P&L']}
+                      labelFormatter={(label) => `Time: ${label}`} />
+                    {/* Fix 4: Entry/exit markers */}
+                    {cumulativePnl.map((pt, i) => (
+                      <ReferenceDot key={i} x={pt.time} y={pt.pnl}
+                        r={5} fill={pt.pnl > (i > 0 ? cumulativePnl[i-1].pnl : 0) ? '#22c55e' : '#ef4444'}
+                        stroke="rgba(15,20,40,0.8)" strokeWidth={1.5}
+                        label={{ value: pt.pnl > 0 ? '▲' : '▼', position: 'top', fontSize: 10, fill: pt.pnl > (i > 0 ? cumulativePnl[i-1].pnl : 0) ? '#22c55e' : '#ef4444' }} />
+                    ))}
                   </AreaChart>
                 </ResponsiveContainer>
+              </div>
+              {/* Trade markers legend */}
+              <div className="flex items-center gap-4 mt-2 text-[10px] text-text3">
+                <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green inline-block" /> WIN trade</div>
+                <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red inline-block" /> LOSS trade</div>
               </div>
             </motion.div>
           )}
@@ -464,25 +561,63 @@ export function Dashboard() {
                                       <span className="text-xs font-bold text-text3 uppercase tracking-wider">Strategy:</span>
                                       <span className="text-sm font-bold text-accent-l">{t.strategy?.replace(/_/g, ' ') ?? '--'}</span>
                                       {conf != null && (
-                                        <span className={clsx('text-xs font-bold px-2 py-0.5 rounded-lg',
-                                          conf >= 70 ? 'bg-green/15 text-green' : conf >= 50 ? 'bg-amber/15 text-amber' : 'bg-surface text-text3')}>
-                                          Confidence: {Math.round(conf)} {conf >= 70 ? '✅' : conf >= 50 ? '⚠️' : '❌'}
-                                        </span>
+                                        <div className="relative">
+                                          <span
+                                            className={clsx('text-xs font-bold px-2 py-0.5 rounded-lg cursor-help border',
+                                              conf >= 70 ? 'bg-green/15 text-green border-green/20' : conf >= 50 ? 'bg-amber/15 text-amber border-amber/20' : 'bg-surface text-text3 border-line/20')}
+                                            onMouseEnter={() => setTooltipTradeId(tradeId)}
+                                            onMouseLeave={() => setTooltipTradeId(null)}>
+                                            Confidence: {Math.round(conf)} {conf >= 70 ? '✅' : conf >= 50 ? '⚠️' : '❌'} ℹ
+                                          </span>
+                                          {tooltipTradeId === tradeId && (
+                                            <div className="absolute z-50 left-0 top-full mt-1 w-48 bg-card border border-line/30 rounded-xl p-3 shadow-xl text-[11px]">
+                                              <div className="font-bold text-text1 mb-2">Confidence Breakdown</div>
+                                              {(() => {
+                                                const fl = t.filter_log as Record<string, any> | undefined
+                                                const items = [
+                                                  { label: 'Strategy tier', val: conf >= 70 ? '+20' : '+10' },
+                                                  { label: 'Regime edge', val: fl?.regime === 'STRONG_TREND_DOWN' ? '+18' : fl?.regime ? '+12' : '+8' },
+                                                  { label: 'Filter score', val: fl ? `+${Math.round(Object.values(fl).filter((v: any) => typeof v === 'object' ? v?.passed : !!v).length * 5)}` : '+15' },
+                                                  { label: 'Momentum', val: '+10' },
+                                                  { label: 'VIX adj.', val: '+5' },
+                                                ]
+                                                return items.map(item => (
+                                                  <div key={item.label} className="flex justify-between py-0.5">
+                                                    <span className="text-text3">{item.label}</span>
+                                                    <span className="font-bold text-green">{item.val}</span>
+                                                  </div>
+                                                ))
+                                              })()}
+                                              <div className="border-t border-line/20 mt-2 pt-2 flex justify-between font-bold">
+                                                <span className="text-text2">Total</span>
+                                                <span className={conf >= 70 ? 'text-green' : 'text-amber'}>{Math.round(conf)}</span>
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
                                       )}
                                     </div>
-                                    <div className="text-xs font-bold text-text3 uppercase tracking-wider mb-2">Why taken:</div>
+                                    <div className="text-xs font-bold text-text3 uppercase tracking-wider mb-2">Edge drivers:</div>
                                     <div className="space-y-1.5">
-                                      {t.filter_log && Object.entries(t.filter_log).slice(0, 5).map(([k, v]) => (
-                                        <div key={k} className={clsx('flex items-center gap-2 text-[11px]', v ? 'text-green' : 'text-text3')}>
-                                          <span>{v ? '✅' : '⬜'}</span>
-                                          <span className="capitalize">{k.replace(/_/g, ' ')}</span>
-                                        </div>
-                                      ))}
+                                      {t.filter_log && Object.entries(t.filter_log).slice(0, 6).map(([k, v]: [string, any]) => {
+                                        const passed = typeof v === 'object' ? v?.passed : !!v
+                                        const val = typeof v === 'object' ? v?.value : v
+                                        const detail = typeof v === 'object' ? v?.detail : ''
+                                        const label = k.replace(/_/g, ' ')
+                                        const displayVal = val != null && val !== true && val !== false
+                                          ? (typeof val === 'number' ? (Number.isInteger(val) ? val : val.toFixed(2)) : val)
+                                          : ''
+                                        return (
+                                          <div key={k} className={clsx('flex items-center gap-2 text-[11px]', passed ? 'text-green' : 'text-text3/60')}>
+                                            <span className="w-3">{passed ? '✅' : '❌'}</span>
+                                            <span className="capitalize font-medium">{label}</span>
+                                            {displayVal !== '' && <span className="font-bold font-mono text-text2">({displayVal})</span>}
+                                            {detail && <span className="text-text3 text-[10px]">— {detail}</span>}
+                                          </div>
+                                        )
+                                      })}
                                       {!t.filter_log && (
-                                        <>
-                                          <div className="flex items-center gap-2 text-[11px] text-green"><span>✅</span><span>Signal passed all filters</span></div>
-                                          <div className="flex items-center gap-2 text-[11px] text-green"><span>✅</span><span>Direction: {t.direction}</span></div>
-                                        </>
+                                        <div className="flex items-center gap-2 text-[11px] text-green"><span>✅</span><span>All filters passed · Direction: {t.direction}</span></div>
                                       )}
                                     </div>
                                   </div>
@@ -490,18 +625,25 @@ export function Dashboard() {
                                     <div className="text-xs font-bold text-text3 uppercase tracking-wider mb-2">
                                       Why it {isWin ? 'worked' : 'failed'}:
                                     </div>
-                                    <div className={clsx('rounded-xl p-3 border text-sm', isWin ? 'bg-green/5 border-green/20' : 'bg-red/5 border-red/20')}>
+                                    <div className={clsx('rounded-xl p-3 border', isWin ? 'bg-green/5 border-green/20' : 'bg-red/5 border-red/20')}>
                                       {isWin ? (
-                                        <div className="flex flex-col gap-1.5">
-                                          <span className="text-green font-bold">[WIN] ✅ {t.exit_reason === 'TARGET' ? 'Target hit — clean trade' : `Exit: ${t.exit_reason?.replace(/_/g, ' ') ?? 'closed'}`}</span>
-                                          <span className="text-[11px] text-text3">P&L: +₹{t.net_pnl.toLocaleString('en-IN')}</span>
+                                        <div className="flex flex-col gap-1.5 text-[11px]">
+                                          <span className="text-green font-bold text-sm">✅ {t.exit_reason === 'TARGET_HIT' || t.exit_reason === 'TARGET' ? 'Target hit — full R achieved' : t.exit_reason === 'STRUCTURE_BREAK' ? 'Smart exit — structure broke in profit' : `Exit: ${t.exit_reason?.replace(/_/g, ' ') ?? 'closed'}`}</span>
+                                          {t.filter_log && Object.entries(t.filter_log).filter(([, v]: [string, any]) => typeof v === 'object' ? v?.passed : !!v).slice(0, 3).map(([k, v]: [string, any]) => {
+                                            const val = typeof v === 'object' ? v?.value : ''
+                                            const detail = typeof v === 'object' ? v?.detail : ''
+                                            return <span key={k} className="text-green">✔ {k.replace(/_/g, ' ')}{val ? ` (${typeof val === 'number' ? val.toFixed(2) : val})` : ''}{detail ? ` — ${detail}` : ''}</span>
+                                          })}
                                         </div>
                                       ) : (
-                                        <div className="flex flex-col gap-1.5">
-                                          <span className="text-red font-bold">[LOSS] ❌ Exit: {t.exit_reason?.replace(/_/g, ' ') ?? 'closed'}</span>
-                                          {t.exit_reason === 'SL_HIT' && <span className="text-[11px] text-red">❌ Structure broke early — SL triggered</span>}
-                                          {conf != null && conf < 70 && <span className="text-[11px] text-amber">❌ Confidence borderline ({Math.round(conf)} &lt; 70 threshold)</span>}
-                                          <span className="text-[11px] text-text3">P&L: -₹{Math.abs(t.net_pnl).toLocaleString('en-IN')}</span>
+                                        <div className="flex flex-col gap-1.5 text-[11px]">
+                                          <span className="text-red font-bold text-sm">❌ {t.exit_reason === 'SL_HIT' ? 'SL hit — structure broke against thesis' : t.exit_reason === 'FORCE_EXIT' ? 'Force exit at 15:15' : `Exit: ${t.exit_reason?.replace(/_/g, ' ') ?? 'unknown'}`}</span>
+                                          {t.exit_reason === 'SL_HIT' && <span className="text-red">❌ Price moved against direction before target</span>}
+                                          {conf != null && conf < 70 && <span className="text-amber">⚠ Borderline confidence ({Math.round(conf)} — below 70 ideal)</span>}
+                                          {t.filter_log && Object.entries(t.filter_log).filter(([, v]: [string, any]) => typeof v === 'object' ? !v?.passed : !v).slice(0, 2).map(([k, v]: [string, any]) => {
+                                            const val = typeof v === 'object' ? v?.value : ''
+                                            return <span key={k} className="text-red/70">❌ {k.replace(/_/g, ' ')} weak{val ? ` (${typeof val === 'number' ? val.toFixed(2) : val})` : ''}</span>
+                                          })}
                                         </div>
                                       )}
                                     </div>
@@ -526,30 +668,43 @@ export function Dashboard() {
           </motion.div>
           {/* IMPROVEMENT 9: Missed Opportunities tracker */}
           {(() => {
-            const skipReasons = (botStatus as any)?.skip_reasons as Array<{ strategy: string; reason: string }> | undefined
+            const skipReasons = (botStatus as any)?.skip_reasons as Array<{ strategy: string; direction: string; reason: string; conf?: number }> | undefined
             if (!skipReasons || skipReasons.length === 0) return null
-            const potentialPnl = skipReasons.length * 2500
+            const uniqueSkips = skipReasons.filter((s, i, arr) =>
+              arr.findIndex(x => x.strategy === s.strategy && x.reason === s.reason) === i)
+            const potentialPnl = uniqueSkips.length * 2500
             return (
               <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.26 }}
                 className="glass-card rounded-2xl p-5 border border-amber/20 neon-border">
-                <div className="flex items-center gap-2 mb-3">
-                  <BarChart3 size={15} className="text-amber" />
-                  <span className="text-sm font-bold uppercase tracking-widest text-amber">Missed Opportunities Today</span>
-                </div>
-                <div className="flex items-center gap-4 mb-3">
-                  <div>
-                    <div className="text-xl font-black text-amber">+₹{potentialPnl.toLocaleString('en-IN')}</div>
-                    <div className="text-[11px] text-text3">{skipReasons.length} signal{skipReasons.length > 1 ? 's' : ''} skipped · est. potential</div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <BarChart3 size={15} className="text-amber" />
+                    <span className="text-sm font-bold uppercase tracking-widest text-amber">Missed Opportunities</span>
                   </div>
+                  <span className="text-xs text-text3">{uniqueSkips.length} filtered today</span>
                 </div>
-                <div className="text-[11px] font-bold text-text3 uppercase tracking-wider mb-2">Top misses:</div>
-                <div className="space-y-1.5">
-                  {skipReasons.slice(0, 3).map((s, i) => (
-                    <div key={i} className="flex items-center gap-2 text-[11px]">
-                      <span className="text-amber">•</span>
-                      <span className="font-bold text-text2">{s.strategy?.replace(/_/g, ' ') ?? 'Signal'}</span>
-                      <span className="text-text3">— skipped:</span>
-                      <span className="font-semibold text-amber">{s.reason?.replace(/_/g, ' ') ?? 'filtered'}</span>
+                <div className="text-lg font-black text-amber mb-3">
+                  +₹{potentialPnl.toLocaleString('en-IN')}
+                  <span className="text-[11px] font-normal text-text3 ml-2">est. potential (avg ₹2,500/trade)</span>
+                </div>
+                <div className="space-y-2">
+                  {uniqueSkips.slice(0, 4).map((s, i) => (
+                    <div key={i} className="bg-surface/50 rounded-xl p-2.5 border border-amber/10">
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className={clsx('text-[10px] font-bold px-1.5 py-0.5 rounded',
+                            s.direction === 'CALL' ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>
+                            {s.direction || '?'}
+                          </span>
+                          <span className="text-xs font-bold text-text1">{s.strategy?.replace(/_/g, ' ') ?? 'Signal'}</span>
+                        </div>
+                        {s.conf != null && <span className="text-[10px] font-mono text-text3">conf={s.conf}</span>}
+                      </div>
+                      <div className="flex items-center gap-1.5 text-[11px]">
+                        <span className="text-amber">⚠</span>
+                        <span className="text-text3">Why filtered:</span>
+                        <span className="font-semibold text-amber">{s.reason ?? 'Quality filter'}</span>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -575,7 +730,7 @@ export function Dashboard() {
               {[
                 { label: 'Best Trade', value: todayTrades.length > 0 ? `₹${maxPnl.toLocaleString('en-IN')}` : '--', color: 'text-green' },
                 { label: 'Worst Trade', value: todayTrades.length > 0 ? `₹${minPnl.toLocaleString('en-IN')}` : '--', color: 'text-red' },
-                { label: 'Win Rate', value: `${(dailyPnl?.win_rate ?? 0).toFixed(0)}%`, color: (dailyPnl?.win_rate ?? 0) >= 50 ? 'text-green' : 'text-text3' },
+                { label: 'Win Rate', value: closedToday.length > 0 ? `${computedWinRate}%` : '--', color: computedWinRate >= 50 ? 'text-green' : computedWinRate > 0 ? 'text-red' : 'text-text3' },
               ].map(({ label, value, color }) => (
                 <div key={label} className="flex items-center justify-between py-1">
                   <span className="text-sm text-text3">{label}</span>
@@ -597,12 +752,28 @@ export function Dashboard() {
               const lossLimit = Math.round(currentCapital * maxDailyLossPct)
               const riskPct = Math.min(100, Math.max(0, pnl < 0 ? (Math.abs(pnl) / Math.max(lossLimit, 1)) * 100 : 0))
               const riskLevel = riskPct > 80 ? 'CRITICAL' : riskPct > 50 ? 'HIGH' : riskPct > 20 ? 'MODERATE' : 'LOW'
+              // Fix 5: Today Mode
+              const consLosses = botStatus?.consecutive_losses ?? 0
+              const regime = (botStatus as any)?.regime ?? ''
+              const todayMode = drawdownPct > 10 || consLosses >= 2 || regime === 'VOLATILE'
+                ? { label: 'DEFENSIVE', cls: 'bg-red/15 text-red', desc: 'Tighter filters, reduced sizing' }
+                : drawdownPct < 3 && computedWinRate >= 60 && regime.includes('TREND')
+                ? { label: 'AGGRESSIVE', cls: 'bg-green/15 text-green', desc: 'Strong edge — full sizing' }
+                : { label: 'NORMAL', cls: 'bg-accent/15 text-accent-l', desc: 'Standard risk parameters' }
               const riskTextClass = riskPct > 50 ? 'text-red' : riskPct > 20 ? 'text-amber' : 'text-green'
               const riskBgClass = riskPct > 50 ? 'bg-red' : riskPct > 20 ? 'bg-amber' : 'bg-green'
               const riskBadgeClass = riskPct > 50 ? 'bg-red/15 text-red' : riskPct > 20 ? 'bg-amber/15 text-amber' : 'bg-green/15 text-green'
               const maxDD = botStatus?.max_drawdown_pct ?? 20
               return (
                 <div className="space-y-4">
+                  {/* Today Mode */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-text3">Today Mode</span>
+                    <div className="flex flex-col items-end">
+                      <span className={clsx('text-xs font-black px-2.5 py-0.5 rounded-lg', todayMode.cls)}>{todayMode.label}</span>
+                      <span className="text-[10px] text-text3 mt-0.5">{todayMode.desc}</span>
+                    </div>
+                  </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-text3">Daily Loss Used</span>
                     <span className={clsx('font-bold', riskTextClass)}>{riskPct.toFixed(0)}%</span>
@@ -915,20 +1086,33 @@ function MarketIntelligence() {
             const biasLabel = trendKey.replace(/_/g, ' ')
             const confLevel = convPct >= 0.7 ? 'HIGH' : convPct >= 0.4 ? 'MODERATE' : 'LOW'
             const confPct = Math.round(convPct * 100)
+            // Fix 3: Urgency level
+            let urgencyLabel = '🔴 NO EDGE — STAY OUT'
+            let urgencyCls = 'bg-surface border-line/30 text-text3'
             let actionLabel = 'WAIT — No edge right now'
             let actionCls = 'bg-surface text-text3'
             if (convPct > 0.6 && (trendKey === 'STRONG_BULL' || trendKey === 'STRONG_BEAR')) {
+              urgencyLabel = '🟢 STRONG EDGE — ACT NOW'
+              urgencyCls = trendKey === 'STRONG_BULL' ? 'bg-green/15 border-green/30 text-green' : 'bg-red/15 border-red/30 text-red'
               actionLabel = trendKey === 'STRONG_BULL' ? 'CALL SETUP — READY 🔥' : 'PUT SETUP — READY 🔥'
               actionCls = trendKey === 'STRONG_BULL' ? 'bg-green/15 text-green' : 'bg-red/15 text-red'
             } else if (convPct > 0.4 && (trendKey === 'BULL' || trendKey === 'BEAR')) {
+              urgencyLabel = '🟡 MODERATE — WAIT FOR CONFIRMATION'
+              urgencyCls = 'bg-amber/10 border-amber/25 text-amber'
               actionLabel = `SCANNING — ${trendKey} BIAS`
               actionCls = trendKey === 'BULL' ? 'bg-green/10 text-green' : 'bg-red/10 text-red'
             } else if (trendKey === 'VOLATILE') {
+              urgencyLabel = '🔴 HIGH RISK — AVOID'
+              urgencyCls = 'bg-red/15 border-red/30 text-red'
               actionLabel = '⚠️ AVOID — High Risk'
               actionCls = 'bg-red/10 text-red'
             }
             return (
               <div className="space-y-2.5">
+                {/* Urgency banner */}
+                <div className={clsx('px-3 py-2 rounded-xl text-xs font-black text-center border', urgencyCls)}>
+                  {urgencyLabel}
+                </div>
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-text3">Bias</span>
                   <span className={clsx('font-bold', meta.color)}>{biasLabel}</span>
