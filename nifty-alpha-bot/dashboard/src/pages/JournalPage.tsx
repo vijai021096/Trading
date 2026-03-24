@@ -271,18 +271,32 @@ export function JournalPage() {
   const [apiStrategy, setApiStrategy] = useState<string>('BOTH')
   const [startDate, setStartDate] = useState('2024-01-01')
   const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [source, setSource] = useState<'live' | 'backtest'>('live')
 
   const loadJournal = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const r = await axios.post<BacktestResponse>('/api/backtest/run', {
-        strategy: apiStrategy,
-        start_date: startDate,
-        end_date: endDate,
-      })
-      const list = Array.isArray(r.data?.trades) ? r.data.trades! : []
-      setTrades(list)
+      if (source === 'live') {
+        const r = await axios.get<{ trades: Record<string, unknown>[] }>('/api/trades?limit=500')
+        const raw = Array.isArray(r.data?.trades) ? r.data.trades : []
+        // Normalize live trade fields to match JournalTrade shape
+        const list: JournalTrade[] = raw.map((t) => ({
+          ...(t as JournalTrade),
+          trade_date: (t.trade_date as string) || String(t.entry_time || t.ts || '').slice(0, 10),
+          entry_ts: (t.entry_ts as string) || (t.entry_time as string) || (t.ts as string) || '',
+          signal: (t.signal as string) || (t.direction as string) || '',
+        }))
+        setTrades(list)
+      } else {
+        const r = await axios.post<BacktestResponse>('/api/backtest/run', {
+          strategy: apiStrategy,
+          start_date: startDate,
+          end_date: endDate,
+        })
+        const list = Array.isArray(r.data?.trades) ? r.data.trades! : []
+        setTrades(list)
+      }
       setExpanded(null)
     } catch (e: unknown) {
       const err = e as { response?: { data?: { detail?: string } }; message?: string }
@@ -290,7 +304,7 @@ export function JournalPage() {
     } finally {
       setLoading(false)
     }
-  }, [apiStrategy, startDate, endDate])
+  }, [source, apiStrategy, startDate, endDate])
 
   const strategyOptions = useMemo(() => {
     const fromData = new Set<string>()
@@ -364,11 +378,33 @@ export function JournalPage() {
         animate={{ opacity: 1, y: 0 }}
         className="glass-card rounded-2xl p-5 neon-border"
       >
-        <div className="flex items-center gap-2 mb-4">
-          <Layers size={13} className="text-accent" />
-          <span className="text-[11px] font-bold tracking-[0.15em] uppercase text-text3">Load from backtest</span>
+        <div className="flex items-center justify-between gap-2 mb-4">
+          <div className="flex items-center gap-2">
+            <Layers size={13} className="text-accent" />
+            <span className="text-[11px] font-bold tracking-[0.15em] uppercase text-text3">
+              {source === 'live' ? 'Live trades' : 'Load from backtest'}
+            </span>
+          </div>
+          {/* Source toggle */}
+          <div className="flex items-center gap-1 bg-bg rounded-xl p-1 border border-line/20">
+            {(['live', 'backtest'] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setSource(s)}
+                className={clsx(
+                  'px-3 py-1 rounded-lg text-[11px] font-bold transition-all',
+                  source === s
+                    ? 'bg-accent text-white shadow'
+                    : 'text-text3 hover:text-text1',
+                )}
+              >
+                {s === 'live' ? 'Live' : 'Backtest'}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
+        {source === 'backtest' && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end mb-3">
           <div>
             <label className="block text-[10px] font-bold text-text3 uppercase tracking-wider mb-1.5">API strategy</label>
             <select
@@ -401,24 +437,25 @@ export function JournalPage() {
               className="w-full bg-surface border border-line/30 rounded-xl px-3 py-2.5 text-[12px] text-text1 font-mono focus:border-accent/40 focus:outline-none"
             />
           </div>
-          <div className="lg:col-span-2 flex justify-stretch">
-            <motion.button
-              type="button"
-              onClick={loadJournal}
-              disabled={loading}
-              whileHover={{ scale: loading ? 1 : 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              className={clsx(
-                'flex flex-1 items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-[12px] font-bold border transition-all',
-                loading
-                  ? 'bg-accent/10 text-accent-l border-accent/20 cursor-wait'
-                  : 'bg-accent text-white border-accent hover:shadow-lg hover:shadow-accent/20',
-              )}
-            >
-              {loading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-              {loading ? 'Loading…' : 'Load Journal'}
-            </motion.button>
-          </div>
+        </div>
+        )}
+        <div className="flex">
+          <motion.button
+            type="button"
+            onClick={loadJournal}
+            disabled={loading}
+            whileHover={{ scale: loading ? 1 : 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            className={clsx(
+              'flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-[12px] font-bold border transition-all',
+              loading
+                ? 'bg-accent/10 text-accent-l border-accent/20 cursor-wait'
+                : 'bg-accent text-white border-accent hover:shadow-lg hover:shadow-accent/20',
+            )}
+          >
+            {loading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            {loading ? 'Loading…' : source === 'live' ? 'Load Live Trades' : 'Load Journal'}
+          </motion.button>
         </div>
       </motion.div>
 
@@ -441,8 +478,9 @@ export function JournalPage() {
           <Sparkles size={22} className="text-accent mx-auto mb-3 opacity-80" />
           <p className="text-text1 font-semibold text-[14px]">No trades loaded yet</p>
           <p className="text-text3 text-[11px] mt-1 max-w-md mx-auto">
-            Pick a date range and strategy, then press <span className="text-text2 font-semibold">Load Journal</span> to
-            fetch simulated trades from the backtest engine.
+            {source === 'live'
+              ? 'Press Load Live Trades to review your actual executed trades.'
+              : 'Pick a date range and strategy, then press Load Journal to fetch simulated backtest trades.'}
           </p>
         </div>
       )}

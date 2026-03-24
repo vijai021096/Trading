@@ -543,9 +543,21 @@ def _trade_date(t: dict) -> str:
     return ""
 
 
+def _normalize_trade(t: dict) -> dict:
+    """Add trade_date and entry_ts fields the dashboard expects, derived from existing fields."""
+    out = dict(t)
+    # trade_date: YYYY-MM-DD
+    if not out.get("trade_date"):
+        out["trade_date"] = _trade_date(t)
+    # entry_ts: ISO timestamp string for entry time
+    if not out.get("entry_ts"):
+        out["entry_ts"] = t.get("entry_time") or t.get("ts") or ""
+    return out
+
+
 def get_trades_from_events() -> List[dict]:
     events = read_all_events()
-    return [e for e in events if e.get("event") == "TRADE_CLOSED"]
+    return [_normalize_trade(e) for e in events if e.get("event") == "TRADE_CLOSED"]
 
 
 def daily_pnl_summary() -> dict:
