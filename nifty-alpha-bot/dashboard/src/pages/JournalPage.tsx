@@ -279,13 +279,12 @@ export function JournalPage() {
     try {
       if (source === 'live') {
         const r = await axios.get<{ trades: Record<string, unknown>[] }>('/api/trades?limit=500')
-        const raw = Array.isArray(r.data?.trades) ? r.data.trades : []
+        const raw: JournalTrade[] = Array.isArray(r.data?.trades) ? (r.data.trades as unknown as JournalTrade[]) : []
         // Normalize live trade fields to match JournalTrade shape
         const list: JournalTrade[] = raw.map((t) => ({
-          ...(t as JournalTrade),
-          trade_date: (t.trade_date as string) || String(t.entry_time || t.ts || '').slice(0, 10),
-          entry_ts: (t.entry_ts as string) || (t.entry_time as string) || (t.ts as string) || '',
-          signal: (t.signal as string) || (t.direction as string) || '',
+          ...t,
+          trade_date: t.trade_date || String((t as unknown as Record<string,unknown>).entry_time || (t as unknown as Record<string,unknown>).ts || '').slice(0, 10),
+          entry_ts: t.entry_ts || (t as unknown as Record<string,unknown>).entry_time as string || (t as unknown as Record<string,unknown>).ts as string || '',
         }))
         setTrades(list)
       } else {
