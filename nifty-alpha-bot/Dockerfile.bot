@@ -14,6 +14,7 @@ RUN playwright install --with-deps chromium 2>/dev/null || true
 COPY shared/ shared/
 COPY kite_broker/ kite_broker/
 COPY bot/ bot/
+COPY backtest/ backtest/
 
 RUN mkdir -p /app/state /app/logs
 
