@@ -430,7 +430,7 @@ async def heartbeat_loop():
 
         except Exception:
             pass
-        await asyncio.sleep(10)
+        await asyncio.sleep(60)  # Heartbeat every 60s (down from 10s)
 
 
 def _get_latest_event(event_type: str) -> Optional[dict]:

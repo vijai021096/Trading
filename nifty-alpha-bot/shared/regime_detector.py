@@ -119,6 +119,71 @@ class RegimeResult:
     strategy_priority: List[str]
     sl_target: Dict[str, Tuple[float, float]]
     detail: str
+    strong_trend_override: bool = False  # VOLATILE but strong trend detected — trend strategies allowed
+
+
+def detect_strong_trend_in_volatile(
+    candles: List[Dict[str, Any]],
+) -> bool:
+    """
+    Returns True when market shows strong trending characteristics even in VOLATILE regime.
+
+    Criteria (ALL must be true):
+      - EMA8 > EMA21 > EMA50 (bullish) OR EMA8 < EMA21 < EMA50 (bearish)
+      - Price above VWAP proxy (bull) or below VWAP proxy (bear)
+      - At least 2 of first 3 candles directional (match EMA stack direction)
+      - No deep pullback through EMA21 in last 8 candles
+    """
+    if len(candles) < 55:
+        return False
+
+    closes = [float(c["close"]) for c in candles]
+
+    ema8_vals = _ema(closes, 8)
+    ema21_vals = _ema(closes, 21)
+    ema50_vals = _ema(closes, 50)
+
+    if len(ema50_vals) < 50:
+        return False
+
+    ema8 = ema8_vals[-1]
+    ema21 = ema21_vals[-1]
+    ema50 = ema50_vals[-1]
+    current_close = closes[-1]
+
+    # 1. Triple EMA stack
+    bullish_stack = ema8 > ema21 > ema50
+    bearish_stack = ema8 < ema21 < ema50
+    if not (bullish_stack or bearish_stack):
+        return False
+
+    # 2. Price vs VWAP (simple 20-period mean as proxy when volume unavailable)
+    vwap_proxy = sum(closes[-20:]) / 20
+    if bullish_stack and current_close <= vwap_proxy:
+        return False
+    if bearish_stack and current_close >= vwap_proxy:
+        return False
+
+    # 3. First 3 candles directional (2 of 3 must match EMA stack)
+    if len(candles) >= 3:
+        first3 = candles[:3]
+        if bullish_stack:
+            directional = sum(1 for c in first3 if float(c["close"]) > float(c["open"])) >= 2
+        else:
+            directional = sum(1 for c in first3 if float(c["close"]) < float(c["open"])) >= 2
+        if not directional:
+            return False
+
+    # 4. No deep pullback through EMA21 in last 8 candles
+    recent = candles[-8:]
+    if bullish_stack:
+        deep_pullback = any(float(c["low"]) < ema21 * 0.998 for c in recent)
+    else:
+        deep_pullback = any(float(c["high"]) > ema21 * 1.002 for c in recent)
+    if deep_pullback:
+        return False
+
+    return True
 
 
 def detect_regime(
@@ -154,20 +219,29 @@ def detect_regime(
 
     atr_ratio = atr_current / atr_avg if atr_avg > 0 else 1.0
 
+    strong_trend_override = False
     if vix > cfg.vix_max or atr_ratio > cfg.atr_volatile_multiplier:
         regime = "VOLATILE"
+        # Check if this volatile day is actually a strong trend day
+        strong_trend_override = detect_strong_trend_in_volatile(candles)
+        if strong_trend_override:
+            # Allow trend strategies despite volatility
+            priority = ["EMA_PULLBACK", "MOMENTUM_BREAKOUT", "ORB", "VWAP_RECLAIM"]
+        else:
+            priority = STRATEGY_PRIORITY["VOLATILE"]
     elif adx >= cfg.adx_trending_threshold:
         regime = "TRENDING"
+        priority = STRATEGY_PRIORITY[regime]
     else:
         regime = "RANGING"
-
-    priority = STRATEGY_PRIORITY[regime]
+        priority = STRATEGY_PRIORITY[regime]
 
     detail = (
         f"ADX_proxy={adx:.3f} (thresh={cfg.adx_trending_threshold}), "
         f"ATR={atr_current:.1f}, ATR_ratio={atr_ratio:.2f} (volatile>{cfg.atr_volatile_multiplier}), "
         f"VIX={vix:.1f} (max={cfg.vix_max}), RSI={rsi:.1f}, "
         f"EMA5={ema_f:.1f} vs EMA13={ema_s:.1f}"
+        + (" [STRONG_TREND_OVERRIDE]" if strong_trend_override else "")
     )
 
     return RegimeResult(
@@ -183,4 +257,5 @@ def detect_regime(
         strategy_priority=priority,
         sl_target=SL_TARGET_MAP,
         detail=detail,
+        strong_trend_override=strong_trend_override,
     )

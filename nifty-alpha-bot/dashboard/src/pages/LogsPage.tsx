@@ -72,6 +72,7 @@ export function LogsPage() {
   const [expanded, setExpanded] = useState<number | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [logTab, setLogTab] = useState<LogTab>('all')
+  const [showHeartbeats, setShowHeartbeats] = useState(false)
 
   const fetchLogs = async () => {
     try {
@@ -101,6 +102,8 @@ export function LogsPage() {
 
   const filtered = useMemo(() => {
     let items = logs
+    // Hide heartbeats by default (very noisy — now every 60s but still clutters the log)
+    if (!showHeartbeats && filter === 'ALL') items = items.filter(l => l.event !== 'HEARTBEAT')
     if (filter !== 'ALL') items = items.filter(l => l.event === filter)
     if (logTab !== 'all') items = items.filter(l => matchesTab(l, logTab))
     if (search.trim()) {
@@ -108,7 +111,7 @@ export function LogsPage() {
       items = items.filter(l => JSON.stringify(l).toLowerCase().includes(q))
     }
     return items.reverse()
-  }, [logs, filter, logTab, search])
+  }, [logs, filter, logTab, search, showHeartbeats])
 
   const scanCount = useMemo(() => {
     const orb = logs.filter(l => l.event === 'ORB_SCAN').length
@@ -140,6 +143,12 @@ export function LogsPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={() => setShowHeartbeats(!showHeartbeats)}
+            title="Heartbeats are health-check pings every 60s — hide them to reduce noise"
+            className={clsx('flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-semibold border transition-all',
+              showHeartbeats ? 'bg-green/8 border-green/20 text-green' : 'bg-surface border-line/20 text-text3')}>
+            <Radio size={10} /> {showHeartbeats ? 'Heartbeats: ON' : 'Heartbeats: OFF'}
+          </button>
           <button onClick={() => setAutoRefresh(!autoRefresh)}
             className={clsx('flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-semibold border transition-all',
               autoRefresh ? 'bg-green/8 border-green/20 text-green' : 'bg-surface border-line/20 text-text3')}>
@@ -302,6 +311,8 @@ export function LogsPage() {
               const isRiskBlocked = log.event === 'RISK_BLOCKED'
               const isKiteAuth = log.event === 'KITE_AUTH'
               const isSystem = log.event === 'SYSTEM_READY'
+              const isStrongTrendOverride = log.event === 'STRONG_TREND_OVERRIDE'
+              const isMissedMove = log.event === 'MISSED_MOVE'
               const passed = log.all_passed
               const filters = log.filters || {}
               const filterEntries = Object.entries(filters) as [string, boolean | FilterVal][]
@@ -496,6 +507,18 @@ export function LogsPage() {
                           </span>
                         )}
 
+                        {isStrongTrendOverride && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-green/10 text-green">
+                            VOLATILE + Strong trend — enabling trend strategies
+                          </span>
+                        )}
+
+                        {isMissedMove && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber/10 text-amber">
+                            {log.move_pts?.toFixed(0)}pt move in 30min — skipping late entry
+                          </span>
+                        )}
+
                         {isError && (
                           <span className="text-[10px] text-red truncate max-w-[300px]">{log.error}</span>
                         )}
@@ -520,29 +543,66 @@ export function LogsPage() {
                         </div>
                       )}
 
-                      {/* Scan cycle summary */}
+                      {/* Scan cycle summary — what each strategy found */}
                       {isScanCycle && !isExp && log.scans?.length > 0 && (
-                        <div className="text-[10px] text-text3 mt-1 flex items-center gap-1.5 flex-wrap">
-                          {(log.scans as Array<{strategy: string; passed: boolean; confidence: number}>).map((s: {strategy: string; passed: boolean; confidence: number}, si: number) => (
-                            <span key={si} className={clsx('px-1 py-0.5 rounded text-[8px] font-bold',
-                              s.passed ? 'bg-green/10 text-green' : 'bg-surface text-text3')}>
-                              {s.strategy.replace(/_/g, ' ')} {s.passed ? '✓' : '✗'} ({Math.round(s.confidence)})
-                            </span>
-                          ))}
+                        <div className="text-[10px] mt-1 space-y-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {(log.scans as Array<{strategy: string; passed: boolean; confidence: number; waiting_for?: string[]}>).map((s, si) => (
+                              <span key={si} className={clsx('px-1.5 py-0.5 rounded text-[8px] font-bold',
+                                s.passed ? 'bg-green/10 text-green' : 'bg-surface text-text3')}>
+                                {s.strategy.replace(/_/g, ' ')} {s.passed ? '✓' : '✗'} {Math.round(s.confidence)}
+                              </span>
+                            ))}
+                          </div>
+                          {/* Show what conditions are missing for each strategy */}
+                          {(log.scans as Array<{strategy: string; passed: boolean; waiting_for?: string[]}>)
+                            .filter(s => !s.passed && s.waiting_for?.length)
+                            .slice(0, 2)
+                            .map((s, si) => (
+                              <div key={si} className="text-[9px] text-text3 flex items-center gap-1">
+                                <span className="text-amber font-semibold">{s.strategy.replace(/_/g, ' ')}:</span>
+                                <span>waiting for {s.waiting_for?.slice(0, 3).map(w => w.replace(/_/g, ' ')).join(', ')}</span>
+                              </div>
+                            ))}
                         </div>
                       )}
 
-                      {/* Scan detail line */}
+                      {/* Scan detail line — show what bot is waiting for */}
                       {isScan && !isExp && (
-                        <div className="text-[10px] text-text3 mt-1 flex items-center gap-2 flex-wrap">
-                          {!passed && filterEntries.length > 0 && (
-                            <span>
-                              Failed: {filterEntries
+                        <div className="text-[10px] mt-1 flex items-center gap-2 flex-wrap">
+                          {passed ? (
+                            <span className="text-green font-semibold">All conditions met — signal ready</span>
+                          ) : filterEntries.length > 0 ? (
+                            <>
+                              <span className="text-amber font-semibold">Waiting for:</span>
+                              {filterEntries
                                 .filter(([, v]) => !isFilterPassed(v))
-                                .slice(0, 3)
-                                .map(([k]) => k.replace(/_/g, ' '))
-                                .join(', ')}
-                            </span>
+                                .slice(0, 4)
+                                .map(([k, v]) => {
+                                  const detail = (v !== null && typeof v === 'object') ? (v as FilterVal) : null
+                                  return (
+                                    <span key={k} className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-red/8 text-red/70">
+                                      {k.replace(/_/g, ' ')}
+                                      {detail?.value !== undefined && (
+                                        <span className="ml-1 font-mono text-text3">
+                                          {typeof detail.value === 'number' ? detail.value.toFixed(1) : String(detail.value).slice(0, 10)}
+                                        </span>
+                                      )}
+                                    </span>
+                                  )
+                                })}
+                              {filterEntries.filter(([, v]) => !isFilterPassed(v)).length > 4 && (
+                                <span className="text-text3">+{filterEntries.filter(([, v]) => !isFilterPassed(v)).length - 4} more</span>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-text3">No signal detected</span>
+                          )}
+                          {log.early_session && (
+                            <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-amber/10 text-amber">FAST MODE</span>
+                          )}
+                          {log.strong_trend_override && (
+                            <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-green/10 text-green">TREND OVERRIDE</span>
                           )}
                         </div>
                       )}
@@ -584,27 +644,69 @@ export function LogsPage() {
                   <AnimatePresence>
                     {isExp && (
                       <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                        exit={{ height: 0, opacity: 0 }} className="overflow-hidden"
+                        onClick={e => e.stopPropagation()}>
                         <div className="mt-3 pt-3 border-t border-line/15">
 
                           {/* Scan cycle expanded detail */}
-                          {isScanCycle && log.candidates?.length > 0 && (
-                            <div className="mb-3">
-                              <div className="text-[10px] font-bold text-text3 uppercase tracking-wider mb-2">Signal Candidates (ranked by confidence)</div>
-                              <div className="space-y-1.5">
-                                {(log.candidates as Array<{strategy: string; signal: string; confidence: number}>).map((c: {strategy: string; signal: string; confidence: number}, ci: number) => (
-                                  <div key={ci} className={clsx('flex items-center justify-between px-3 py-2 rounded-lg border',
-                                    ci === 0 ? 'bg-green/5 border-green/20' : 'bg-surface/30 border-line/15')}>
-                                    <div className="flex items-center gap-2">
-                                      <span className={clsx('text-[10px] font-bold', ci === 0 ? 'text-green' : 'text-text3')}>{ci + 1}</span>
-                                      <span className="text-[11px] font-bold text-text1">{c.strategy.replace(/_/g, ' ')}</span>
-                                      <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold', c.signal === 'CALL' ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>{c.signal}</span>
-                                      {ci === 0 && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-green/10 text-green">SELECTED</span>}
-                                    </div>
-                                    <span className={clsx('text-sm font-bold font-mono', c.confidence >= 70 ? 'text-green' : c.confidence >= 50 ? 'text-amber' : 'text-text3')}>{Math.round(c.confidence)}</span>
+                          {isScanCycle && (
+                            <div className="mb-3 space-y-3">
+                              {/* Strategy scan results — what passed, what didn't */}
+                              {log.scans?.length > 0 && (
+                                <div>
+                                  <div className="text-[10px] font-bold text-text3 uppercase tracking-wider mb-2">
+                                    Strategies Scanned — Bot is waiting for:
                                   </div>
-                                ))}
-                              </div>
+                                  <div className="space-y-1.5">
+                                    {(log.scans as Array<{strategy: string; passed: boolean; confidence: number; signal?: string; waiting_for?: string[]}>).map((s, si) => (
+                                      <div key={si} className={clsx('px-3 py-2 rounded-lg border text-[10px]',
+                                        s.passed ? 'bg-green/5 border-green/20' : 'bg-surface/30 border-line/15')}>
+                                        <div className="flex items-center justify-between">
+                                          <div className="flex items-center gap-2">
+                                            {s.passed ? <CheckCircle2 size={10} className="text-green" /> : <XCircle size={10} className="text-text3" />}
+                                            <span className="font-bold text-text1">{s.strategy.replace(/_/g, ' ')}</span>
+                                            {s.signal && (
+                                              <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold', s.signal === 'CALL' ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>{s.signal}</span>
+                                            )}
+                                          </div>
+                                          <span className={clsx('font-bold font-mono', s.confidence >= 70 ? 'text-green' : s.confidence >= 50 ? 'text-amber' : 'text-text3')}>
+                                            {Math.round(s.confidence)}
+                                          </span>
+                                        </div>
+                                        {!s.passed && s.waiting_for && s.waiting_for.length > 0 && (
+                                          <div className="mt-1.5 flex items-center gap-1 flex-wrap">
+                                            <span className="text-amber font-semibold">Missing:</span>
+                                            {s.waiting_for.map((w: string) => (
+                                              <span key={w} className="px-1 py-0.5 rounded text-[8px] bg-amber/8 text-amber">{w.replace(/_/g, ' ')}</span>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Signal candidates if any fired */}
+                              {log.candidates?.length > 0 && (
+                                <div>
+                                  <div className="text-[10px] font-bold text-text3 uppercase tracking-wider mb-2">Signal Candidates (ranked by confidence)</div>
+                                  <div className="space-y-1.5">
+                                    {(log.candidates as Array<{strategy: string; signal: string; confidence: number}>).map((c, ci) => (
+                                      <div key={ci} className={clsx('flex items-center justify-between px-3 py-2 rounded-lg border',
+                                        ci === 0 ? 'bg-green/5 border-green/20' : 'bg-surface/30 border-line/15')}>
+                                        <div className="flex items-center gap-2">
+                                          <span className={clsx('text-[10px] font-bold', ci === 0 ? 'text-green' : 'text-text3')}>{ci + 1}</span>
+                                          <span className="text-[11px] font-bold text-text1">{c.strategy.replace(/_/g, ' ')}</span>
+                                          <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold', c.signal === 'CALL' ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>{c.signal}</span>
+                                          {ci === 0 && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-green/10 text-green">SELECTED</span>}
+                                        </div>
+                                        <span className={clsx('text-sm font-bold font-mono', c.confidence >= 70 ? 'text-green' : c.confidence >= 50 ? 'text-amber' : 'text-text3')}>{Math.round(c.confidence)}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           )}
 

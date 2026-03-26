@@ -145,6 +145,19 @@ class BacktestConfig:
     ema_pullback_dead_zone_start: str = "11:00"
     ema_pullback_dead_zone_end: str = "11:30"
 
+    # Early session fast mode (9:15–10:00) — relaxed filters for strong early moves
+    enable_early_session_mode: bool = True
+    early_session_end: str = "10:00"
+    early_session_body_ratio: float = 0.30      # relaxed from ~0.40
+    early_session_rsi_bull_min: float = 38.0    # relaxed from 45
+    early_session_rsi_bear_max: float = 62.0    # relaxed from 55
+    early_session_volume_ratio: float = 0.9     # relaxed from 1.0
+
+    # Missed move filter — skip entries if Nifty already moved too far
+    enable_missed_move_filter: bool = True
+    missed_move_pts: float = 175.0              # skip if >175pt move in last 30min
+    missed_move_lookback_bars: int = 6          # 6 bars × 5min = 30min
+
 
 def _quality_check(
     candles: List[Dict],
@@ -254,6 +267,7 @@ def run_backtest(
     conflict_time = dtime(*map(int, cfg.regime_trend_conflict_after.split(":")))
     ema_dead_start = dtime(*map(int, cfg.ema_pullback_dead_zone_start.split(":")))
     ema_dead_end = dtime(*map(int, cfg.ema_pullback_dead_zone_end.split(":")))
+    early_session_end = dtime(*map(int, cfg.early_session_end.split(":")))
 
     all_candles_list = nifty_df.to_dict("records")
 
@@ -407,6 +421,17 @@ def run_backtest(
                 elif allowed_direction != daily_bias_direction:
                     allowed_direction = daily_bias_direction   # daily wins over intraday conflict
 
+            # ── FIX 5: Missed move filter — skip if market moved too far already ──
+            if cfg.enable_missed_move_filter and i >= cfg.missed_move_lookback_bars:
+                start_close = float(candles[i - cfg.missed_move_lookback_bars]["close"])
+                current_close = float(candle["close"])
+                move_pts = abs(current_close - start_close)
+                if move_pts >= cfg.missed_move_pts:
+                    continue  # Missed the move — late entry risk
+
+            # ── FIX 3: Early session flag (9:15-10:00) ──
+            is_early_session = cfg.enable_early_session_mode and c_time < early_session_end
+
             # When trend is unknown (early session), only run ORB-family — no MB/EMA_PB
             strategy_priority = trend_result.strategy_priority if trend_result else [
                 "ORB", "RELAXED_ORB"
@@ -493,6 +518,11 @@ def run_backtest(
             # ── RELAXED ORB ────────────────────────────────────
             if "RELAXED_ORB" in strategy_priority:
                 orb_window = orb_end <= c_time <= min(dtime(*map(int, cfg.entry_window_close.split(":"))), regime_window_end)
+                # FIX 3/4: Early session uses relaxed filters (FAST MODE)
+                _body = cfg.early_session_body_ratio if is_early_session else 0.35
+                _vol = cfg.early_session_volume_ratio if is_early_session else 0.8
+                _rsi_bull = cfg.early_session_rsi_bull_min if is_early_session else cfg.rsi_bull_min
+                _rsi_bear = cfg.early_session_rsi_bear_max if is_early_session else cfg.rsi_bear_max
                 result = evaluate_orb_signal(
                     candles[:i + 1], candle, vix,
                     orb_start=orb_start, orb_end=orb_end,
@@ -500,13 +530,13 @@ def run_backtest(
                     min_orb_range_points=cfg.min_orb_range_points,
                     max_orb_range_points=cfg.relaxed_orb_max_range_points,
                     breakout_buffer_pct=cfg.breakout_buffer_pct,
-                    min_breakout_body_ratio=0.35,
-                    min_volume_surge_ratio=0.8,
+                    min_breakout_body_ratio=_body,
+                    min_volume_surge_ratio=_vol,
                     ema_fast=cfg.ema_fast, ema_slow=cfg.ema_slow,
                     rsi_period=cfg.rsi_period, atr_period=cfg.atr_period,
                     require_vwap_confirmation=cfg.require_vwap_confirmation,
                     vwap_buffer_points=cfg.vwap_buffer_points,
-                    rsi_bull_min=cfg.rsi_bull_min, rsi_bear_max=cfg.rsi_bear_max,
+                    rsi_bull_min=_rsi_bull, rsi_bear_max=_rsi_bear,
                     rsi_overbought_skip=cfg.rsi_overbought_skip,
                     rsi_oversold_skip=cfg.rsi_oversold_skip,
                     vix_max=cfg.vix_max,
@@ -542,11 +572,15 @@ def run_backtest(
                 ema_window = (pb_start <= c_time <= min(pb_end, regime_window_end)
                               and not (ema_dead_start <= c_time < ema_dead_end)
                               and i >= 20)
+                # FIX 3/4: Early session uses relaxed EMA pullback proximity (wider catch zone)
+                _pb_prox = cfg.ema_pullback_proximity_pct * 1.5 if is_early_session else cfg.ema_pullback_proximity_pct
+                _pb_body = max(0.28, 0.38 - 0.10) if is_early_session else 0.38
                 result = evaluate_ema_pullback_signal(
                     candles[:i + 1], i, vix,
                     ema_fast=cfg.ema_fast, ema_slow=cfg.ema_slow,
                     rsi_period=cfg.rsi_period, atr_period=cfg.atr_period,
-                    pullback_proximity_pct=cfg.ema_pullback_proximity_pct,
+                    pullback_proximity_pct=_pb_prox,
+                    min_body_ratio=_pb_body,
                     lookback_candles=cfg.ema_pullback_lookback_candles,
                     vix_max=cfg.vix_max,
                 ) if ema_window else {"all_passed": False, "signal": None}
