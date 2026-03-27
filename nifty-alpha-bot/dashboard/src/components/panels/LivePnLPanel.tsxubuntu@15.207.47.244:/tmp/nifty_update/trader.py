@@ -793,41 +793,18 @@ class KiteORBTrader:
         # ── Late window A+ filter (after 10:30) ──────────────────────
         is_late = now.time() >= self._t(self.cfg.late_window_start)
         if is_late:
-            # VIX must be calm — exception: very strong trend day with A+ score ≥ 75
+            # VIX must be calm
             if effective_vix > self.cfg.late_window_vix_max:
-                conviction = self._current_trend.conviction if self._current_trend else 0.0
-                # Directional move check: price must have moved ≥ 0.8% from open in leg direction
-                intraday_move_ok = False
-                if candles and len(candles) >= 2:
-                    open_px = candles[0].get("open", 0)
-                    curr_px = candles[-1].get("close", 0)
-                    if open_px and open_px > 0:
-                        raw_move = (curr_px - open_px) / open_px
-                        dir_move = raw_move if leg["direction"] == "CALL" else -raw_move
-                        intraday_move_ok = dir_move >= 0.008
-                if (is_strong_trend and conviction >= 0.8
-                        and best_conf >= 75 and intraday_move_ok):
-                    logger.info(
-                        f"LATE_VIX_OVERRIDE: VIX {effective_vix:.1f} > {self.cfg.late_window_vix_max} "
-                        f"BUT strong trend conviction={conviction:.2f}, conf={best_conf:.0f}≥75, "
-                        f"directional move≥0.8% — allowing entry"
-                    )
-                    _log_event("LATE_VIX_OVERRIDE", {
-                        "vix": round(effective_vix, 1), "conviction": round(conviction, 2),
-                        "confidence": round(best_conf, 1), "strategy": leg["strategy"],
-                        "direction": leg["direction"],
-                    })
-                else:
-                    logger.info(
-                        f"LATE_WINDOW SKIP: VIX {effective_vix:.1f} > {self.cfg.late_window_vix_max} "
-                        f"(conviction={conviction:.2f}, conf={best_conf:.0f}, move_ok={intraday_move_ok})"
-                    )
-                    self._skip_reasons_today.append({
-                        "strategy": leg["strategy"], "direction": leg.get("direction", ""),
-                        "reason": f"Late window — VIX {effective_vix:.1f} > {self.cfg.late_window_vix_max}",
-                        "conf": round(best_conf, 1),
-                    })
-                    return
+                logger.info(
+                    f"LATE_WINDOW SKIP: VIX {effective_vix:.1f} > {self.cfg.late_window_vix_max} "
+                    f"(A+ filter — only trade in calm markets after {self.cfg.late_window_start})"
+                )
+                self._skip_reasons_today.append({
+                    "strategy": leg["strategy"], "direction": leg.get("direction", ""),
+                    "reason": f"Late window — VIX {effective_vix:.1f} > {self.cfg.late_window_vix_max}",
+                    "conf": round(best_conf, 1),
+                })
+                return
             # Strategy must be A+ tier
             allowed = [s.strip() for s in self.cfg.late_window_strategies.split(",")]
             if leg["strategy"] not in allowed:
@@ -925,29 +902,6 @@ class KiteORBTrader:
         self._current_regime = regime
         trend = self._detect_trend(candles, effective_vix)
 
-        # ── FIX 3: Early session detection (9:15–10:00 = aggressive mode) ──
-        is_early_session = current_time < self._t("10:00")
-
-        # ── FIX 5: Missed move detection — skip if Nifty moved >150pts in 30min ──
-        if len(candles) >= 7:
-            price_30min_ago = float(candles[-7]["close"])
-            price_now = float(candles[-1]["close"])
-            move_pts = abs(price_now - price_30min_ago)
-            if move_pts >= 150.0:
-                logger.info(
-                    f"MISSED_MOVE: {move_pts:.0f}pts in 30min exceeds 150pt threshold "
-                    f"— skipping new entries (prevent late chasing)"
-                )
-                _log_event("MISSED_MOVE", {
-                    "move_pts": round(move_pts, 1),
-                    "price_30min_ago": round(price_30min_ago, 1),
-                    "price_now": round(price_now, 1),
-                    "threshold_pts": 150.0,
-                    "regime": regime.regime,
-                    "trend": trend.state.value,
-                })
-                return
-
         # Strategy list: start from TREND priority, intersect with daily regime whitelist
         strategy_list = trend.strategy_priority
         risk_multiplier = trend.risk_multiplier
@@ -959,29 +913,15 @@ class KiteORBTrader:
         else:
             regime_direction = None
 
-        # ── FIX 1: Intraday regime overrides ──
+        # Intraday regime overrides (existing logic)
         if regime.regime == "VOLATILE":
-            if regime.strong_trend_override:
-                # Strong trend day detected inside VOLATILE — allow trend strategies
-                logger.info(
-                    "STRONG_TREND_OVERRIDE: VOLATILE regime + strong trend detected "
-                    "(EMA stack + above VWAP + no pullback) — allowing EMA_PULLBACK & MOMENTUM_BREAKOUT"
-                )
-                _log_event("STRONG_TREND_OVERRIDE", {
-                    "regime": regime.regime,
-                    "detail": regime.detail,
-                    "strategy_override": ["EMA_PULLBACK", "MOMENTUM_BREAKOUT", "ORB", "VWAP_RECLAIM"],
-                })
-                # Moderate risk reduction (high ATR = bigger moves, but direction is clear)
-                risk_multiplier = min(risk_multiplier, 0.80)
-            else:
-                strategy_list = [s for s in strategy_list if s != "MOMENTUM_BREAKOUT"]
-                risk_multiplier = min(risk_multiplier, 0.60)
+            strategy_list = [s for s in strategy_list if s != "MOMENTUM_BREAKOUT"]
+            risk_multiplier = min(risk_multiplier, 0.60)
 
         if trend.state == TrendState.NEUTRAL:
             strategy_list = [s for s in strategy_list if s not in ("ORB", "MOMENTUM_BREAKOUT")]
 
-        # 10:30 trend-conflict check (skip in early session — price hasn't set direction yet)
+        # 10:30 trend-conflict check
         conflict_time = self._t("10:30")
         if (self._daily_regime
                 and current_time >= conflict_time
@@ -1002,26 +942,6 @@ class KiteORBTrader:
         scan_results: list = []
         idx = len(candles) - 1
 
-        # FIX 3/4: Early session FAST MODE — relaxed filter params
-        if is_early_session:
-            _orb_body = max(0.28, self.cfg.min_breakout_body_ratio - 0.15)
-            _orb_vol = max(0.90, self.cfg.min_volume_surge_ratio - 0.30)
-            _rsi_bull_min = max(35.0, self.cfg.rsi_bull_min - 10.0)
-            _rsi_bear_max = min(65.0, self.cfg.rsi_bear_max + 10.0)
-            _pb_prox = self.cfg.ema_pullback_proximity_pct * 1.5
-            _pb_body = max(0.28, 0.38 - 0.10)
-            logger.debug(
-                f"EARLY_SESSION_MODE: relaxed filters active "
-                f"(body≥{_orb_body:.0%}, vol≥{_orb_vol:.1f}x, RSI {_rsi_bull_min:.0f}-{_rsi_bear_max:.0f})"
-            )
-        else:
-            _orb_body = self.cfg.min_breakout_body_ratio
-            _orb_vol = self.cfg.min_volume_surge_ratio
-            _rsi_bull_min = self.cfg.rsi_bull_min
-            _rsi_bear_max = self.cfg.rsi_bear_max
-            _pb_prox = self.cfg.ema_pullback_proximity_pct
-            _pb_body = 0.38
-
         def _fmt_filters(filters):
             return {
                 k: {"passed": v.get("passed"), "value": v.get("value"), "detail": v.get("detail", "")}
@@ -1030,16 +950,11 @@ class KiteORBTrader:
 
         def _eval_strategy(name, result, event_type):
             filters = result.get("filters", {})
-            failed_filters = [k for k, v in filters.items() if not (v.get("passed") if isinstance(v, dict) else v)]
-            waiting_for = failed_filters[:3] if failed_filters else []
             _log_event(event_type, {
                 "strategy": name, "regime": regime.regime,
                 "trend": trend.state.value, "conviction": trend.conviction,
                 "signal": result.get("signal"), "all_passed": result["all_passed"],
                 "filters": _fmt_filters(filters),
-                "waiting_for": waiting_for,
-                "early_session": is_early_session,
-                "strong_trend_override": regime.strong_trend_override,
             })
             confidence = compute_signal_confidence(
                 name, result.get("signal", ""), regime.regime, trend, filters, effective_vix
@@ -1047,7 +962,6 @@ class KiteORBTrader:
             scan_results.append({
                 "strategy": name, "signal": result.get("signal"),
                 "passed": result["all_passed"], "confidence": confidence,
-                "waiting_for": waiting_for,
             })
             if result["all_passed"] and result["signal"]:
                 sl_pct, target_pct = SL_TARGET_BY_STRATEGY.get(name, (0.28, 0.60))
@@ -1057,13 +971,8 @@ class KiteORBTrader:
                     "atr": result.get("atr", 0), "filters": filters,
                 })
             else:
-                failed = [f"{k}={v.get('value','') if isinstance(v, dict) else ''}" for k, v in filters.items() if not (v.get("passed") if isinstance(v, dict) else v)]
-                logger.info(
-                    f"{name} SKIP: {'waiting for ' + ', '.join(f[:4]) if failed else 'no signal'} "
-                    f"(conf={confidence:.0f}, early={is_early_session})"
-                )
-
-        orb_enabled = strat_state.get("orb_enabled", True)
+                failed = [f"{k}={v.get('value','')}" for k, v in filters.items() if not v.get("passed")]
+                logger.info(f"{name} SKIP: {', '.join(failed[:5]) if failed else 'no signal'} (conf={confidence:.0f})")
 
         # ── ORB ──
         if "ORB" in strategy_list and orb_enabled and not self._orb_signal_used and orb_end <= current_time <= entry_close:
@@ -1073,13 +982,13 @@ class KiteORBTrader:
                 min_orb_range_points=self.cfg.min_orb_range_points,
                 max_orb_range_points=self.cfg.max_orb_range_points,
                 breakout_buffer_pct=self.cfg.breakout_buffer_pct,
-                min_breakout_body_ratio=_orb_body,
-                min_volume_surge_ratio=_orb_vol,
+                min_breakout_body_ratio=self.cfg.min_breakout_body_ratio,
+                min_volume_surge_ratio=self.cfg.min_volume_surge_ratio,
                 ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
                 rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
                 require_vwap_confirmation=self.cfg.require_vwap_confirmation,
                 vwap_buffer_points=self.cfg.vwap_buffer_points,
-                rsi_bull_min=_rsi_bull_min, rsi_bear_max=_rsi_bear_max,
+                rsi_bull_min=self.cfg.rsi_bull_min, rsi_bear_max=self.cfg.rsi_bear_max,
                 rsi_overbought_skip=self.cfg.rsi_overbought_skip,
                 rsi_oversold_skip=self.cfg.rsi_oversold_skip,
                 vix_max=self.cfg.vix_max,
@@ -1094,13 +1003,13 @@ class KiteORBTrader:
                 min_orb_range_points=self.cfg.min_orb_range_points,
                 max_orb_range_points=self.cfg.relaxed_orb_max_range_points,
                 breakout_buffer_pct=self.cfg.breakout_buffer_pct,
-                min_breakout_body_ratio=max(0.28, _orb_body - 0.05),
-                min_volume_surge_ratio=max(0.80, _orb_vol - 0.10),
+                min_breakout_body_ratio=max(0.35, self.cfg.min_breakout_body_ratio - 0.10),
+                min_volume_surge_ratio=max(1.0, self.cfg.min_volume_surge_ratio - 0.2),
                 ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
                 rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
                 require_vwap_confirmation=self.cfg.require_vwap_confirmation,
                 vwap_buffer_points=self.cfg.vwap_buffer_points,
-                rsi_bull_min=_rsi_bull_min, rsi_bear_max=_rsi_bear_max,
+                rsi_bull_min=self.cfg.rsi_bull_min, rsi_bear_max=self.cfg.rsi_bear_max,
                 rsi_overbought_skip=self.cfg.rsi_overbought_skip,
                 rsi_oversold_skip=self.cfg.rsi_oversold_skip,
                 vix_max=self.cfg.vix_max,
@@ -1131,8 +1040,8 @@ class KiteORBTrader:
             pb_result = evaluate_ema_pullback_signal(
                 candles, idx, vix,
                 ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
-                pullback_proximity_pct=_pb_prox,
-                min_body_ratio=_pb_body,
+                pullback_proximity_pct=self.cfg.ema_pullback_proximity_pct,
+                min_body_ratio=self.cfg.ema_pullback_min_body_ratio,
                 rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
                 vix_max=self.cfg.vix_max,
                 lookback_candles=self.cfg.ema_pullback_lookback_candles,
@@ -1152,16 +1061,14 @@ class KiteORBTrader:
         # ── Log full scan cycle ──
         _log_event("SCAN_CYCLE", {
             "regime": regime.regime,
-            "strong_trend_override": regime.strong_trend_override,
             "trend": trend.state.value,
             "trend_direction": trend.direction,
             "conviction": trend.conviction,
             "risk_multiplier": risk_multiplier,
             "vix": effective_vix,
-            "early_session": is_early_session,
             "strategies_evaluated": len(scan_results),
             "signals_detected": len(candidates),
-            "scans": scan_results,  # includes waiting_for per strategy
+            "scans": scan_results,
             "candidates": [
                 {"strategy": c["strategy"], "signal": c["signal"], "confidence": c["confidence"]}
                 for c in candidates

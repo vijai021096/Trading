@@ -69,7 +69,8 @@ export function LogsPage() {
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('ALL')
   const [search, setSearch] = useState('')
-  const [expanded, setExpanded] = useState<number | null>(null)
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const [rawExpanded, setRawExpanded] = useState<Set<string>>(new Set())
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [logTab, setLogTab] = useState<LogTab>('all')
   const [showHeartbeats, setShowHeartbeats] = useState(false)
@@ -300,7 +301,8 @@ export function LogsPage() {
         <div className="glass-card rounded-2xl overflow-hidden">
           <div className="divide-y divide-line/10 max-h-[calc(100vh-350px)] overflow-y-auto">
             {filtered.map((log, i) => {
-              const isExp = expanded === i
+              const logId = `${log.ts}:${log.event}`
+              const isExp = expanded === logId
               const isScan = log.event === 'ORB_SCAN' || log.event === 'RECLAIM_SCAN' || log.event === 'EMA_PULLBACK_SCAN' || log.event === 'MOMENTUM_SCAN'
               const isScanCycle = log.event === 'SCAN_CYCLE'
               const isEntry = log.event === 'ENTRY'
@@ -318,11 +320,12 @@ export function LogsPage() {
               const filterEntries = Object.entries(filters) as [string, boolean | FilterVal][]
               const isFilterPassed = (v: boolean | FilterVal): boolean => v === true || (v !== null && typeof v === 'object' && !!(v as FilterVal).passed)
               const passedCount = filterEntries.filter(([, v]) => isFilterPassed(v)).length
+              const isRawExp = rawExpanded.has(logId)
 
               return (
-                <motion.div key={i} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: Math.min(i * 0.01, 0.3) }}
+                <motion.div key={logId} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: Math.min(i * 0.01, 0.3) }}
                   className={clsx('px-5 py-3 cursor-pointer transition-colors', isExp ? 'bg-card/50' : 'hover:bg-card/30')}
-                  onClick={() => setExpanded(isExp ? null : i)}>
+                  onClick={() => setExpanded(isExp ? null : logId)}>
 
                   <div className="flex items-start gap-3">
                     {/* Event type indicator */}
@@ -757,14 +760,25 @@ export function LogsPage() {
                           )}
 
                           {/* Raw data */}
-                          <details className="group">
-                            <summary className="text-[10px] text-text3 cursor-pointer hover:text-text2 flex items-center gap-1">
-                              <Eye size={10} /> Raw data
-                            </summary>
-                            <pre className="mt-2 text-[9px] font-mono text-text3 bg-surface/50 rounded-lg p-3 overflow-x-auto max-h-[200px]">
-                              {JSON.stringify(log, null, 2)}
-                            </pre>
-                          </details>
+                          <div>
+                            <button
+                              className="text-[10px] text-text3 cursor-pointer hover:text-text2 flex items-center gap-1"
+                              onClick={e => {
+                                e.stopPropagation()
+                                setRawExpanded(prev => {
+                                  const next = new Set(prev)
+                                  if (next.has(logId)) next.delete(logId); else next.add(logId)
+                                  return next
+                                })
+                              }}>
+                              <Eye size={10} /> Raw data {isRawExp ? '▲' : '▼'}
+                            </button>
+                            {isRawExp && (
+                              <pre className="mt-2 text-[9px] font-mono text-text3 bg-surface/50 rounded-lg p-3 overflow-x-auto max-h-[200px]">
+                                {JSON.stringify(log, null, 2)}
+                              </pre>
+                            )}
+                          </div>
                         </div>
                       </motion.div>
                     )}

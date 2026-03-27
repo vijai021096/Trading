@@ -128,6 +128,17 @@ class DailyBacktestConfig:
     strong_trend_adx_thresh: float = 0.42      # ADX threshold for "strong trend"
     strong_trend_max_trades: int = 3
 
+    # ── VOLATILE + strong trend override ──
+    # Mirrors live bot: even on high-VIX (VOLATILE) days, allow 1 extra trend trade
+    # when ADX shows strong directional conviction (proxy for: conviction≥0.8,
+    # price moved>0.8%, pullback entry, A+ score≥75 conditions in trader.py)
+    enable_volatile_trend_override: bool = True
+    volatile_override_adx_min: float = 0.42        # same as strong_trend_adx_thresh
+    volatile_override_max_cap: int = 2             # allow up to 2 trades on these days (was hard 1)
+    volatile_override_extra_strategies: tuple = ("TREND_CONTINUATION", "BREAKOUT_MOMENTUM")
+    volatile_override_quality_min: float = 55.0   # stricter quality gate (proxy for A+ score≥75)
+    volatile_override_sl_mult: float = 0.85        # tighter SL (proxy for pullback entry condition)
+
     # ── Risk ──
     max_trades_per_day: int = 4
     max_consecutive_losses: int = 8
@@ -1106,6 +1117,20 @@ def run_daily_backtest(
         if regime in ("MILD_TREND", "STRONG_TREND_DOWN"):
             day_trade_cap = max(day_trade_cap, min(day_trade_cap + 1, cfg.max_trades_per_day))
 
+        # VOLATILE + strong trend override: mirror live bot late window VIX exception
+        # High VIX but strong ADX → volatile market with clear direction (crash/recovery day)
+        # Allow 1 extra trend-following trade with stricter quality + tighter SL
+        volatile_override_active = (
+            regime == "VOLATILE"
+            and cfg.enable_volatile_trend_override
+            and adx_vals[i] >= cfg.volatile_override_adx_min
+        )
+        if volatile_override_active:
+            extra = [s for s in cfg.volatile_override_extra_strategies
+                     if s in allowed and s not in set(scan_order)]
+            scan_order = scan_order + list(extra)
+            day_trade_cap = max(day_trade_cap, min(cfg.volatile_override_max_cap, cfg.max_trades_per_day))
+
         for strat_name in scan_order:
             enabled_attr = f"enable_{strat_name.lower()}"
             if hasattr(cfg, enabled_attr) and not getattr(cfg, enabled_attr):
@@ -1205,6 +1230,12 @@ def run_daily_backtest(
                 skip_reasons["low_quality"] = skip_reasons.get("low_quality", 0) + 1
                 continue
 
+            # Stricter gate for volatile override trades (proxy for A+ score ≥ 75 condition)
+            if volatile_override_active and strategy_name in cfg.volatile_override_extra_strategies:
+                if quality < cfg.volatile_override_quality_min:
+                    skip_reasons["volatile_override_quality"] = skip_reasons.get("volatile_override_quality", 0) + 1
+                    continue
+
             # Skip-after-loss filter:
             # STRONG_TREND_DOWN: fake first move → real second move — allow re-entry
             # All other regimes: require higher quality score for same-direction re-entry
@@ -1252,6 +1283,9 @@ def run_daily_backtest(
             sl = getattr(cfg, sl_key)
             tgt = getattr(cfg, tgt_key)
             sl_mult, tgt_mult = REGIME_SL_TARGET_ADJUST.get(regime, (1.0, 1.0))
+            # Volatile override extra trades: tighter SL (proxy for pullback entry condition)
+            if volatile_override_active and strategy_name in cfg.volatile_override_extra_strategies:
+                sl_mult = min(sl_mult, cfg.volatile_override_sl_mult)
             sl = sl * sl_mult
             tgt = tgt * tgt_mult
 
@@ -1407,6 +1441,7 @@ def collect_strategy_matches_for_index(
         vix, cfg,
     )
     rsi = rsi_vals[i]
+    adx_vals = series["adx_vals"]
     scan_order = _strategies_scan_order(regime, allowed)
     matches: List[Tuple[str, str, dict]] = []
     seen_strat: set = set()
@@ -1417,6 +1452,15 @@ def collect_strategy_matches_for_index(
         day_trade_cap = min(day_trade_cap, 2)
     elif vix > 17.0:
         day_trade_cap = min(day_trade_cap, 3)
+
+    # VOLATILE + strong trend override (same as run_daily_backtest)
+    if (regime == "VOLATILE"
+            and cfg.enable_volatile_trend_override
+            and adx_vals[i] >= cfg.volatile_override_adx_min):
+        extra = [s for s in cfg.volatile_override_extra_strategies
+                 if s in allowed and s not in set(scan_order)]
+        scan_order = scan_order + list(extra)
+        day_trade_cap = max(day_trade_cap, min(cfg.volatile_override_max_cap, cfg.max_trades_per_day))
 
     for strat_name in scan_order:
         enabled_attr = f"enable_{strat_name.lower()}"

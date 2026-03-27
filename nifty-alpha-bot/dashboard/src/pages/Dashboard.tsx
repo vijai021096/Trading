@@ -64,10 +64,11 @@ export function Dashboard() {
   const nowMin = new Date().getMinutes()
   const nowMins = nowHour * 60 + nowMin
   const marketPhase = nowMins < 9 * 60 + 15 ? null
-    : nowMins < 10 * 60 ? { label: 'BREAKOUT PHASE', desc: 'ORB + Gap plays', color: 'text-amber', bg: 'bg-amber/10' }
-    : nowMins < 12 * 60 ? { label: 'TREND PHASE', desc: 'EMA + Momentum plays', color: 'text-green', bg: 'bg-green/10' }
-    : nowMins < 13 * 60 + 30 ? { label: 'PULLBACK PHASE', desc: 'VWAP reclaim plays', color: 'text-accent', bg: 'bg-accent/10' }
-    : { label: 'CLOSING PHASE', desc: 'No new entries', color: 'text-text3', bg: 'bg-surface/60' }
+    : nowMins < 9 * 60 + 30 ? { label: 'ORB WINDOW', desc: 'ORB + Relaxed ORB entries', color: 'text-amber', bg: 'bg-amber/10' }
+    : nowMins < 10 * 60 ? { label: 'ORB FOLLOW-THROUGH', desc: 'ORB breakouts + EMA Pullback starts', color: 'text-amber', bg: 'bg-amber/10' }
+    : nowMins < 12 * 60 ? { label: 'MOMENTUM PHASE', desc: 'EMA Pullback + Momentum Breakout + VWAP Reclaim', color: 'text-green', bg: 'bg-green/10' }
+    : nowMins < 13 * 60 + 30 ? { label: 'VWAP PHASE', desc: 'VWAP Reclaim + EMA Pullback (late A+ only)', color: 'text-accent', bg: 'bg-accent/10' }
+    : { label: 'CLOSING PHASE', desc: 'No new entries after 13:30', color: 'text-text3', bg: 'bg-surface/60' }
 
   return (
     <div className="px-5 lg:px-8 py-6 max-w-[1640px] mx-auto space-y-5">
@@ -372,8 +373,8 @@ export function Dashboard() {
                     </div>
                     <div className="flex items-center gap-0.5 h-1.5 rounded-full overflow-hidden">
                       {[
-                        { start: 9*60+15, end: 10*60, color: 'bg-amber' },
-                        { start: 10*60, end: 12*60, color: 'bg-green' },
+                        { start: 9*60+15, end: 9*60+30, color: 'bg-amber' },
+                        { start: 9*60+30, end: 12*60, color: 'bg-green' },
                         { start: 12*60, end: 13*60+30, color: 'bg-accent' },
                         { start: 13*60+30, end: 15*60+30, color: 'bg-surface' },
                       ].map((seg, i) => {
@@ -384,23 +385,27 @@ export function Dashboard() {
                       })}
                     </div>
                     <div className="flex justify-between text-[9px] text-text3 mt-1 font-mono">
-                      <span>9:15</span><span>10:00</span><span>12:00</span><span>13:30</span><span>15:30</span>
+                      <span>9:15</span><span>9:30</span><span>12:00</span><span>13:30</span><span>15:30</span>
                     </div>
                   </div>
                 )}
                 {/* Fix 6: Strategy cards with priority */}
                 <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
-                  {[
-                    { name: 'TREND CONT.', desc: 'Trend continuation', time: '9:16–10:30', icon: TrendingUp, color: 'text-green', stratKey: 'TREND_CONTINUATION', priority: 'HIGH', wr: 67 },
-                    { name: 'REVERSAL', desc: 'Snap reversal pattern', time: '9:16–10:30', icon: Waves, color: 'text-red', stratKey: 'REVERSAL_SNAP', priority: 'HIGH', wr: 60 },
-                    { name: 'BREAKOUT', desc: 'N-candle range breakout', time: '9:16–12:00', icon: Zap, color: 'text-accent', stratKey: 'BREAKOUT_MOMENTUM', priority: 'MEDIUM', wr: 52 },
-                    { name: 'GAP FADE', desc: 'Gap open fade', time: '9:16–10:30', icon: Target, color: 'text-amber', stratKey: 'GAP_FADE', priority: 'MEDIUM', wr: 55 },
-                    { name: 'VWAP CROSS', desc: 'VWAP reclaim signal', time: '10:00–1:30', icon: Activity, color: 'text-cyan', stratKey: 'VWAP_CROSS', priority: 'MEDIUM', wr: 50 },
-                    { name: 'INSIDE BAR', desc: 'Inside bar breakout', time: '9:16–1:30', icon: Ruler, color: 'text-purple-400', stratKey: 'INSIDE_BAR_BREAK', priority: 'LOW', wr: 44 },
-                    { name: 'RANGE BOUNCE', desc: 'Support/resistance bounce', time: '9:16–1:30', icon: BarChart3, color: 'text-blue-400', stratKey: 'RANGE_BOUNCE', priority: 'LOW', wr: 42 },
-                  ].map(({ name, desc, time, icon: Icon, color, stratKey, priority, wr }) => {
-                    const isThisActive = botStatus?.last_scan?.candidates?.some(c => c.strategy === stratKey)
-                    const isRunning = marketOpen && botStatus?.state === 'RUNNING'
+                  {(isDailyEngine ? [
+                    { name: 'TREND CONT.', desc: 'EMA pullback in established trend', time: '9:16–13:00', icon: TrendingUp, color: 'text-green', stratKey: 'TREND_CONTINUATION', priority: 'HIGH' },
+                    { name: 'BREAKOUT MOM.', desc: 'N-candle range breakout + volume', time: '9:16–13:00', icon: Zap, color: 'text-accent', stratKey: 'BREAKOUT_MOMENTUM', priority: 'HIGH' },
+                    { name: 'EMA CROSS', desc: 'Fresh EMA8/21 crossover entry', time: '9:16–13:00', icon: Waves, color: 'text-green', stratKey: 'EMA_FRESH_CROSS', priority: 'HIGH' },
+                    { name: 'REVERSAL SNAP', desc: 'RSI exhaustion + reversal candle', time: '9:16–13:00', icon: Target, color: 'text-red', stratKey: 'REVERSAL_SNAP', priority: 'MEDIUM' },
+                    { name: 'GAP FADE', desc: 'Fade opening gap fills', time: '9:16–10:30', icon: BarChart3, color: 'text-amber', stratKey: 'GAP_FADE', priority: 'MEDIUM' },
+                    { name: 'RANGE BOUNCE', desc: 'Prior-day S/R bounce (ranging)', time: '9:16–13:00', icon: Activity, color: 'text-cyan', stratKey: 'RANGE_BOUNCE', priority: 'MEDIUM' },
+                  ] : [
+                    { name: 'ORB', desc: 'Opening range breakout', time: '9:15–10:00', icon: Zap, color: 'text-amber', stratKey: 'ORB', priority: 'HIGH' },
+                    { name: 'EMA PULLBACK', desc: 'Pullback to EMA21 with trend', time: '9:30–13:00', icon: TrendingUp, color: 'text-green', stratKey: 'EMA_PULLBACK', priority: 'HIGH' },
+                    { name: 'MOMENTUM', desc: 'N-candle breakout + RSI', time: '9:30–12:00', icon: Waves, color: 'text-accent', stratKey: 'MOMENTUM_BREAKOUT', priority: 'HIGH' },
+                    { name: 'VWAP RECLAIM', desc: 'VWAP reclaim + Supertrend', time: '10:00–13:30', icon: Activity, color: 'text-cyan', stratKey: 'VWAP_RECLAIM', priority: 'MEDIUM' },
+                  ]).map(({ name, desc, time, icon: Icon, color, stratKey, priority }) => {
+                    const isThisActive = botStatus?.last_scan?.candidates?.some((c: any) => c.strategy === stratKey)
+                    const isRunning = marketOpen && (botStatus?.state === 'IDLE' || botStatus?.state === 'ACTIVE')
                     const stratStatus = !isRunning
                       ? { label: '⛔ CLOSED', cls: 'bg-surface text-text3' }
                       : isThisActive
@@ -408,9 +413,7 @@ export function Dashboard() {
                       : { label: '⚡ SCANNING', cls: 'bg-accent/10 text-accent-l' }
                     const priorityBadge = priority === 'HIGH'
                       ? { label: '🔥 HIGH PROB', cls: 'bg-green/10 text-green' }
-                      : priority === 'MEDIUM'
-                      ? { label: '⚡ MEDIUM', cls: 'bg-amber/10 text-amber' }
-                      : { label: '◎ LOW', cls: 'bg-surface text-text3' }
+                      : { label: '⚡ MEDIUM', cls: 'bg-amber/10 text-amber' }
                     return (
                     <div key={name} className="bg-surface/50 rounded-xl p-3 border border-line/20 hover:border-line/40 transition-all">
                       <div className="flex items-center justify-between gap-2 mb-1.5">
@@ -423,10 +426,7 @@ export function Dashboard() {
                       <div className="text-[11px] text-text3">{desc}</div>
                       <div className="flex items-center justify-between mt-1.5">
                         <div className="text-[10px] text-text3 font-mono flex items-center gap-1 opacity-70"><Timer size={10} /> {time}</div>
-                        <div className="flex items-center gap-1">
-                          <span className={clsx('text-[9px] font-bold px-1.5 py-0.5 rounded-md', priorityBadge.cls)}>{priorityBadge.label}</span>
-                          <span className="text-[9px] text-text3 font-mono">{wr}%WR</span>
-                        </div>
+                        <span className={clsx('text-[9px] font-bold px-1.5 py-0.5 rounded-md', priorityBadge.cls)}>{priorityBadge.label}</span>
                       </div>
                     </div>
                   )})}
@@ -885,23 +885,32 @@ const REGIME_META: Record<string, { color: string; bg: string }> = {
 }
 
 const STRAT_COLORS: Record<string, string> = {
+  // Daily-adaptive engine strategy names
   TREND_CONTINUATION: 'text-green',
   BREAKOUT_MOMENTUM:  'text-accent',
+  EMA_FRESH_CROSS:    'text-green',
   REVERSAL_SNAP:      'text-red',
   GAP_FADE:           'text-amber',
   RANGE_BOUNCE:       'text-cyan',
   INSIDE_BAR_BREAK:   'text-purple-400',
   VWAP_CROSS:         'text-blue-400',
+  // Intraday engine strategy names (shown in strategy_priority from trend_detector)
+  ORB:               'text-amber',
+  RELAXED_ORB:       'text-amber',
+  EMA_PULLBACK:      'text-green',
+  MOMENTUM_BREAKOUT: 'text-accent',
+  VWAP_RECLAIM:      'text-cyan',
 }
 
 const STRAT_WINDOWS: Record<string, string> = {
-  TREND_CONTINUATION: '9:16–10:30 AM',
-  BREAKOUT_MOMENTUM:  '9:16–10:30 AM',
-  REVERSAL_SNAP:      '9:16–10:30 AM',
-  GAP_FADE:           '9:16–10:30 AM',
-  RANGE_BOUNCE:       '9:16–10:30 AM',
-  INSIDE_BAR_BREAK:   '9:16–10:30 AM',
-  VWAP_CROSS:         '9:16–10:30 AM',
+  TREND_CONTINUATION: '9:16–13:00',
+  BREAKOUT_MOMENTUM:  '9:16–13:00',
+  EMA_FRESH_CROSS:    '9:16–13:00',
+  REVERSAL_SNAP:      '9:16–13:00',
+  GAP_FADE:           '9:16–10:30',
+  RANGE_BOUNCE:       '9:16–13:00',
+  INSIDE_BAR_BREAK:   '9:16–13:00',
+  VWAP_CROSS:         '10:00–13:30',
 }
 
 function MarketIntelligence() {
