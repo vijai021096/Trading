@@ -225,12 +225,80 @@ class KiteORBTrader:
         return False, f"not overextended: intraday_move={intraday_move*100:.2f}%"
 
     def _compute_composite_score(self, confidence: float, filter_log: dict) -> float:
-        """Composite entry score = confidence * 0.5 + quality * 10 + conviction * 20.
+        """Composite entry score = confidence * 0.5 + quality * 0.5 + conviction * 20.
         Returns 0-120 range. Used to rank multiple signal candidates."""
-        from shared.quality_filter import compute_trade_quality
-        quality = compute_trade_quality(filter_log) if filter_log else 0.0
+        quality = float((filter_log or {}).get("quality_score", 0.0))
         conviction = self._current_trend.conviction if self._current_trend else 0.0
-        return confidence * 0.5 + quality * 10 + conviction * 20
+        return confidence * 0.5 + quality * 0.5 + conviction * 20
+
+    def _resolve_leg_direction(self, leg: dict, candles: list, spot: float) -> Optional[str]:
+        """Resolve direction for NEUTRAL legs using live intraday data.
+        Returns 'CALL', 'PUT', or None (skip — no clear direction).
+        """
+        setup_type = leg.get("setup_type", "BREAKOUT")
+        fl = leg.get("filter_log") or {}
+        bias = leg.get("bias", "NEUTRAL")
+        strength = leg.get("bias_strength", 0.7)
+
+        # Already has a direction (non-NEUTRAL, non-None)
+        direction = leg.get("direction")
+        if direction not in (None, "NEUTRAL"):
+            # Bias rejection for weak-biased directional legs
+            if (self._current_trend and strength < 0.75):
+                trend_dir = self._current_trend.direction
+                conviction = self._current_trend.conviction
+                if (direction == "CALL" and trend_dir == "BEAR" and conviction >= 0.75):
+                    return None  # weak bullish bias vs confirmed bear trend → skip
+                if (direction == "PUT" and trend_dir == "BULL" and conviction >= 0.75):
+                    return None  # weak bearish bias vs confirmed bull trend → skip
+            return direction
+
+        # NEUTRAL: resolve from intraday data
+        if not candles or len(candles) < 2:
+            return None
+
+        prev_close = float(fl.get("prev_close", 0) or 0)
+        if not prev_close:
+            prev_close = float((self._daily_adaptive_plan or {}).get("breakout_watch", {}).get("last_close", 0) or 0)
+
+        open_px = float(candles[0].get("open", spot))
+        gap_pct = (open_px - prev_close) / prev_close if prev_close > 0 else 0
+
+        # Current intraday momentum
+        trend_dir = self._current_trend.direction if self._current_trend else "NEUTRAL"
+        trend_conviction = self._current_trend.conviction if self._current_trend else 0.0
+
+        if setup_type == "BREAKOUT":
+            if abs(gap_pct) >= 0.002:
+                return "CALL" if gap_pct > 0 else "PUT"
+            if trend_conviction >= 0.5:
+                return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
+            return None
+
+        elif setup_type == "GAP_FADE":
+            if gap_pct >= 0.004:
+                return "PUT"   # gap up → fade = PUT
+            if gap_pct <= -0.004:
+                return "CALL"  # gap down → fade = CALL
+            return None
+
+        elif setup_type == "COMPRESSION":  # INSIDE_BAR_BREAK
+            prev_high = float(fl.get("prev_high", 0) or 0)
+            prev_low = float(fl.get("prev_low", 0) or 0)
+            margin = float(fl.get("margin", 0) or 0)
+            if prev_high and prev_low:
+                if open_px > prev_high + margin:
+                    return "CALL"
+                if open_px < prev_low - margin:
+                    return "PUT"
+            if trend_conviction >= 0.5:
+                return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
+            return None
+
+        # Default: use trend direction
+        if trend_conviction >= 0.6:
+            return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
+        return None
 
     def _in_daily_adaptive_window(self, now: datetime) -> bool:
         t = now.time()
@@ -722,8 +790,10 @@ class KiteORBTrader:
                 state=TrendState.NEUTRAL, direction="NEUTRAL", conviction=0,
                 risk_multiplier=0.6, strategy_priority=[]
             )
+            # NEUTRAL legs have direction=None; use "CALL" as placeholder for scoring
+            score_direction = l.get("direction") or "CALL"
             conf = compute_signal_confidence(
-                l["strategy"], l["direction"], stub_regime.regime, stub_trend,
+                l["strategy"], score_direction, stub_regime.regime, stub_trend,
                 dict(l.get("filter_log") or {}), effective_vix,
             )
             composite = self._compute_composite_score(conf, dict(l.get("filter_log") or {}))
@@ -756,15 +826,34 @@ class KiteORBTrader:
             return
 
         logger.info(
-            f"BEST_SIGNAL: {best_leg['strategy']} {best_leg['direction']} "
+            f"BEST_SIGNAL: {best_leg['strategy']} {best_leg.get('direction', 'NEUTRAL')} "
             f"confidence={best_conf:.0f} composite={best_composite:.1f}"
         )
 
         leg = best_leg
 
+        # ── Resolve direction for NEUTRAL/biased legs ─────────────────
+        candles = self._candle_cache or self._refresh_candles(now)
+        resolved_dir = self._resolve_leg_direction(leg, candles or [], spot)
+        if resolved_dir is None:
+            logger.info(
+                f"NEUTRAL_SKIP: {leg['strategy']} — no clear intraday direction "
+                f"(setup_type={leg.get('setup_type')}, bias={leg.get('bias')})"
+            )
+            self._skip_reasons_today.append({
+                "strategy": leg["strategy"], "direction": leg.get("direction", "NEUTRAL"),
+                "reason": f"NEUTRAL/weak-bias — no clear intraday direction (setup_type={leg.get('setup_type')})",
+                "conf": round(best_conf, 1),
+            })
+            return
+        # Override leg direction with resolved direction
+        if resolved_dir != leg.get("direction"):
+            leg = dict(leg)
+            leg["direction"] = resolved_dir
+            logger.info(f"DIRECTION_RESOLVED: {leg['strategy']} → {resolved_dir} (was {best_leg.get('direction', 'NEUTRAL')})")
+
         # ── Intraday momentum confirmation ────────────────────────────
         # Validate that recent 5m candles still confirm the signal direction.
-        candles = self._candle_cache or self._refresh_candles(now)
         momentum_ok, momentum_reason = self._confirm_intraday_momentum(leg["direction"], candles)
         if not momentum_ok:
             if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
