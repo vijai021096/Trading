@@ -47,7 +47,7 @@ BULL_REGIME_NAMES = ["STRONG_BULL", "MILD_BULL", "NO_EDGE"]
 @dataclass
 class BullBacktestConfig:
     capital: float = 100_000.0
-    lot_size: int = 75
+    lot_size: int = 65
     lots: int = 1
 
     first_month_risk_capital: float = 25_000.0

@@ -50,7 +50,7 @@ RISK_FREE_RATE = 0.065
 @dataclass
 class DailyBacktestConfig:
     capital: float = 100_000.0
-    lot_size: int = 75
+    lot_size: int = 65
     lots: int = 1
 
     # First month of backtest window: only risk this much for sizing (no scaling from full equity)
