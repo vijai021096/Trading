@@ -164,6 +164,11 @@ class DailyBacktestConfig:
     enable_strong_trend_fallback: bool = True
     strong_trend_fallback_quality_min: float = 55.0  # lower bar for anti-miss signal
 
+    # ── Combined runner: skip bull days (handled by bull engine) ──────────
+    # When True, STRONG_TREND_UP days are skipped by the bear engine so that
+    # run_combined_backtest() can route those days to bull_backtest_engine.
+    skip_strong_trend_up: bool = False  # default False for standalone bear run
+
     # ── Conviction-based day cap (mirrors live bot logic) ──
     # On strong trend days (high ADX), allow up to strong_trend_max_trades
     enable_conviction_day_cap: bool = True
@@ -1300,6 +1305,12 @@ def run_daily_backtest(
                 regime = "STRONG_TREND_UP"
                 skip_reasons["hard_override_bull"] = skip_reasons.get("hard_override_bull", 0) + 1
 
+        # ── Combined runner: yield STRONG_BULL days to bull engine ──────────
+        if cfg.skip_strong_trend_up and regime == "STRONG_TREND_UP":
+            skip_reasons["routed_to_bull_engine"] = skip_reasons.get("routed_to_bull_engine", 0) + 1
+            regime_counts[regime] = regime_counts.get(regime, 0) + 1
+            continue
+
         regime_counts[regime] = regime_counts.get(regime, 0) + 1
 
         rsi = rsi_vals[i]
@@ -1899,6 +1910,7 @@ def evaluate_live_daily_adaptive(
     capital: float = 0.0,
     peak_equity: float = 0.0,
     consecutive_losses: int = 0,
+    enable_bull_routing: bool = True,   # Route STRONG_BULL days to bull engine
 ) -> Dict[str, Any]:
     """
     Evaluate the same rules as the daily backtest on the last **completed** daily bar.
@@ -1931,6 +1943,32 @@ def evaluate_live_daily_adaptive(
         i, series, vix, cfg, allowed, planning_mode=True
     )
     signal_date = series["dates"][i]
+
+    # ── Bull routing: STRONG_TREND_UP → delegate to bull engine ──────────────
+    # When the daily regime is a strong bullish day, the bear engine's PUT-heavy
+    # strategies have very poor WR (8%). Route to the bull engine instead.
+    if enable_bull_routing and regime == "STRONG_TREND_UP":
+        try:
+            from backtest.bull_backtest_engine import evaluate_live_bull, BullBacktestConfig
+            bull_cfg = BullBacktestConfig()
+            if cfg is not None:
+                bull_cfg.capital = cfg.capital   # sync capital from bear config
+            bull_out = evaluate_live_bull(
+                nifty_daily, vix,
+                cfg=bull_cfg,
+                drop_incomplete_today=drop_incomplete_today,
+                capital=capital,
+                consecutive_losses=consecutive_losses,
+            )
+            # Annotate that this came from the bull engine
+            bull_out["routed_from_bear_engine"] = True
+            bull_out["daily_regime_override"] = "STRONG_TREND_UP"
+            return bull_out
+        except Exception as _e:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                f"Bull routing failed (STRONG_TREND_UP), falling back to bear engine: {_e}"
+            )
 
     if anchor_ym is None:
         anchor_ym = (signal_date.year, signal_date.month)

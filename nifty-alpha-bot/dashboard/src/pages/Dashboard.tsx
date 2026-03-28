@@ -66,6 +66,18 @@ export function Dashboard() {
   const tradingEngine = botStatus?.trading_engine ?? 'daily_adaptive'
   const isDailyEngine = String(tradingEngine).toLowerCase() === 'daily_adaptive'
 
+  // Active engine state: prefer explicit field from bot, fall back to regime-derived
+  const liveRegime: string = (botStatus as any)?.daily_regime ?? (botStatus as any)?.regime ?? ''
+  const explicitEngine: string = (botStatus as any)?.active_engine ?? ''
+  const activeEngine: 'BULL' | 'BEAR' | 'NEUTRAL' =
+    explicitEngine === 'BULL' || liveRegime.includes('BULL') || liveRegime === 'STRONG_TREND_UP' ? 'BULL'
+    : explicitEngine === 'BEAR' || liveRegime.includes('BEAR') || liveRegime === 'STRONG_TREND_DOWN' ? 'BEAR'
+    : 'NEUTRAL'
+  const engineLabel = activeEngine === 'BULL' ? 'Bull Engine' : activeEngine === 'BEAR' ? 'Bear Engine' : 'Neutral'
+  const engineColor = activeEngine === 'BULL' ? 'bg-green/12 text-green border-green/30'
+    : activeEngine === 'BEAR' ? 'bg-red/12 text-red border-red/30'
+    : 'bg-surface text-text3 border-line/25'
+
   const maxPnl = Math.max(...todayTrades.map(t => t.net_pnl), 0)
   const minPnl = Math.min(...todayTrades.map(t => t.net_pnl), 0)
 
@@ -111,6 +123,13 @@ export function Dashboard() {
             isDailyEngine ? 'bg-cyan/10 text-cyan border-cyan/25' : 'bg-surface text-text3 border-line/25',
           )}>
             {isDailyEngine ? 'Daily adaptive' : 'Intraday'}
+          </span>
+          {/* Active engine: BEAR (PUT) or BULL (CALL) or NEUTRAL */}
+          <span className={clsx(
+            'text-[10px] font-black px-2.5 py-0.5 rounded-lg tracking-wide border',
+            engineColor,
+          )}>
+            {engineLabel}
           </span>
           {thinking && (
             <span className="text-xs text-text3 hidden lg:block truncate max-w-[340px]">{thinking}</span>

@@ -352,8 +352,14 @@ class KiteORBTrader:
 
             # Classify daily regime once per day
             vix = self._get_vix()
-            self._daily_regime = classify_regime_live(self.client, today, vix)
-            self._daily_regime_classified = True
+            try:
+                self._daily_regime = classify_regime_live(self.client, today, vix)
+                self._daily_regime_classified = True
+            except Exception as _e:
+                logger.warning(f"classify_regime_live failed: {_e} — using SKIP_VOLATILE fallback")
+                from shared.regime_classifier import REGIME_DEFS
+                self._daily_regime = REGIME_DEFS.get("SKIP_VOLATILE")
+                self._daily_regime_classified = True
 
             if self.cfg.trading_engine.strip().lower() == "daily_adaptive" and load_anchor_ym() is None:
                 save_anchor_ym(today.year, today.month)
@@ -1892,6 +1898,13 @@ class KiteORBTrader:
                         "trend_state_live": self._current_trend.state.value if self._current_trend else "NEUTRAL",
                         "trend_conviction_live": round(self._current_trend.conviction, 3) if self._current_trend else 0.0,
                         "impulse_grade_live": (self._current_impulse.grade if self._current_impulse else "NONE"),
+                        # Daily regime for engine routing badge in UI
+                        "daily_regime": self._daily_regime.name if self._daily_regime else None,
+                        "active_engine": (
+                            "BULL" if (self._daily_regime and ("BULL" in self._daily_regime.name or "UP" in self._daily_regime.name))
+                            else "BEAR" if (self._daily_regime and ("BEAR" in self._daily_regime.name or "DOWN" in self._daily_regime.name))
+                            else "NEUTRAL"
+                        ),
                     }
                     logger.info(
                         f"HEARTBEAT [{mode}] "
