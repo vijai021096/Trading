@@ -469,6 +469,68 @@ export function Dashboard() {
                           </div>
                         )
                       })()}
+
+                      {/* ── WAITING FOR ── */}
+                      {(() => {
+                        const conviction = marketState?.trend_conviction ?? 0
+                        const impulse = marketState?.trend_impulse_grade ?? 'NONE'
+                        const trendDir = marketState?.trend_direction ?? 'NEUTRAL'
+                        const trendSt = marketState?.trend_state ?? 'NEUTRAL'
+                        const scan = (botStatus as any)?.last_scan
+                        const bestConf = scan?.scans?.length ? Math.max(...(scan.scans as any[]).map((s: any) => s.confidence)) : 0
+                        const impulseOk = ['STRONG', 'EXTREME'].includes(impulse)
+                        const convOk = conviction >= 0.4
+                        const confOk = bestConf >= 65
+                        if (impulseOk && convOk && confOk) return null  // everything passes — don't show
+
+                        const items: Array<{met: boolean, text: string}> = []
+                        if (!impulseOk) {
+                          if (trendDir === 'PUT' || trendSt.includes('BEAR'))
+                            items.push({ met: false, text: 'Bearish move >0.7% in 15 min OR 3 lower highs + VWAP rejection' })
+                          else if (trendDir === 'CALL' || trendSt.includes('BULL'))
+                            items.push({ met: false, text: 'Bullish move >0.7% in 15 min OR EMA pullback + expansion' })
+                          else
+                            items.push({ met: false, text: 'Directional impulse: move >0.7% from open' })
+                        }
+                        if (!convOk) items.push({ met: false, text: `Conviction > 40%  (currently ${(conviction * 100).toFixed(0)}%)` })
+                        if (!confOk) items.push({ met: false, text: `Strategy confidence > 65  (best: ${bestConf > 0 ? bestConf.toFixed(0) : '—'})` })
+
+                        return (
+                          <div className="bg-amber/5 rounded-xl p-2.5 border border-amber/15">
+                            <div className="text-[8px] font-bold text-amber uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                              <Clock size={8} /> Waiting for
+                            </div>
+                            <div className="space-y-0.5">
+                              {items.map((w, i) => (
+                                <div key={i} className="flex items-start gap-1.5 text-[9px] text-text3 leading-[14px]">
+                                  <span className="text-amber mt-px shrink-0">•</span>
+                                  <span>{w.text}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      })()}
+
+                      {/* ── NEXT EXPECTED TRADE ── */}
+                      {(() => {
+                        const trendDir = marketState?.trend_direction ?? 'NEUTRAL'
+                        if (trendDir === 'NEUTRAL') return null
+                        const priority: string[] = marketState?.strategy_priority ?? []
+                        const top = (priority[0] ?? 'TREND_CONTINUATION').replace(/_/g, ' ')
+                        const isCall = trendDir === 'CALL'
+                        return (
+                          <div className={clsx('rounded-xl px-2.5 py-2 border flex items-center justify-between',
+                            isCall ? 'bg-green/8 border-green/20' : 'bg-red/8 border-red/20')}>
+                            <span className="text-[8px] font-bold text-text3 uppercase tracking-widest">Next expected</span>
+                            <span className={clsx('text-[10px] font-black flex items-center gap-1',
+                              isCall ? 'text-green' : 'text-red')}>
+                              <ChevronRight size={10} />
+                              {top} → {trendDir}
+                            </span>
+                          </div>
+                        )
+                      })()}
                     </div>
                   )}
                     </div>
@@ -887,6 +949,136 @@ export function Dashboard() {
 
         {/* Right 1/3 */}
         <div className="space-y-5">
+
+          {/* ──────── LIVE DECISION STATE CARD ──────── */}
+          {marketOpen && !isActive && (() => {
+            const trendSt   = marketState?.trend_state ?? 'NEUTRAL'
+            const trendDir  = marketState?.trend_direction ?? 'NEUTRAL'
+            const conviction = marketState?.trend_conviction ?? 0
+            const impulse   = marketState?.trend_impulse_grade ?? 'NONE'
+            const regime    = marketState?.regime ?? ''
+            const scan      = (botStatus as any)?.last_scan
+            const bestConf  = scan?.scans?.length ? Math.max(...(scan.scans as any[]).map((s: any) => s.confidence)) : 0
+            const impulseOk = ['STRONG', 'EXTREME'].includes(impulse)
+            const convOk    = conviction >= 0.4
+            const confOk    = bestConf >= 65
+
+            const stateColor = trendDir === 'PUT' ? 'text-red' : trendDir === 'CALL' ? 'text-green' : 'text-text3'
+            const stateBorder = trendDir === 'PUT' ? 'border-red/20 bg-red/8' : trendDir === 'CALL' ? 'border-green/20 bg-green/8' : 'border-line/20 bg-surface/40'
+
+            const blockers = [
+              { label: 'Impulse',     current: impulse,                           need: 'STRONG+', ok: impulseOk },
+              { label: 'Conviction',  current: `${(conviction*100).toFixed(0)}%`, need: '>40%',   ok: convOk   },
+              { label: 'Confidence',  current: bestConf > 0 ? bestConf.toFixed(0) : '—', need: '>65', ok: confOk },
+            ]
+
+            const waiting: string[] = []
+            if (!impulseOk) {
+              if (trendDir === 'PUT' || trendSt.includes('BEAR')) {
+                waiting.push('Bearish move >0.7% from open')
+                waiting.push('3 lower highs + VWAP rejection')
+              } else if (trendDir === 'CALL' || trendSt.includes('BULL')) {
+                waiting.push('Bullish move >0.7% from open')
+                waiting.push('EMA pullback + momentum expansion')
+              } else {
+                waiting.push('Momentum expansion or ORB breakout')
+              }
+            }
+            if (!convOk)  waiting.push(`Conviction spike  (${(conviction*100).toFixed(0)}% → 40%+)`)
+            if (!confOk)  waiting.push(`Strategy edge > 65  (now ${bestConf > 0 ? bestConf.toFixed(0) : '—'})`)
+
+            const priority: string[] = marketState?.strategy_priority ?? []
+            const topStrat = (priority[0] ?? (trendDir === 'PUT' ? 'TREND_CONTINUATION' : 'BREAKOUT_MOMENTUM')).replace(/_/g, ' ')
+
+            return (
+              <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+                className="glass-card rounded-2xl p-5 border border-cyan/25 neon-border">
+                <div className="flex items-center gap-2 mb-4">
+                  <Brain size={15} className="text-cyan" />
+                  <span className="text-sm font-bold uppercase tracking-widest text-cyan">Live Decision State</span>
+                </div>
+
+                {/* Market State */}
+                <div className={clsx('rounded-xl px-3 py-2 border mb-3 flex items-center justify-between', stateBorder)}>
+                  <div>
+                    <div className="text-[9px] font-bold text-text3 uppercase tracking-widest">Market State</div>
+                    <div className={clsx('text-sm font-black mt-0.5', stateColor)}>{trendSt.replace(/_/g, ' ')}</div>
+                  </div>
+                  <div className="flex flex-col items-end gap-1">
+                    {trendDir !== 'NEUTRAL' && (
+                      <span className={clsx('text-[9px] font-bold px-2 py-0.5 rounded-lg',
+                        trendDir === 'PUT' ? 'bg-red/15 text-red' : 'bg-green/15 text-green')}>
+                        {trendDir}
+                      </span>
+                    )}
+                    {regime && <span className="text-[9px] text-text3 font-mono">{regime.replace(/_/g, ' ')}</span>}
+                  </div>
+                </div>
+
+                {/* Blockers */}
+                <div className="mb-3">
+                  <div className="text-[9px] font-bold text-text3 uppercase tracking-widest mb-2 flex items-center gap-1">
+                    <AlertCircle size={9} className="text-red/60" /> Blockers
+                  </div>
+                  <div className="space-y-1.5">
+                    {blockers.map(b => (
+                      <div key={b.label} className={clsx('flex items-center justify-between rounded-lg px-2.5 py-1.5',
+                        b.ok ? 'bg-green/5 border border-green/10' : 'bg-red/5 border border-red/10')}>
+                        <div className="flex items-center gap-1.5">
+                          <span className={clsx('text-[10px] font-black w-3', b.ok ? 'text-green' : 'text-red')}>
+                            {b.ok ? '✓' : '✗'}
+                          </span>
+                          <span className="text-[10px] text-text2 font-medium">{b.label}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-[10px]">
+                          <span className={clsx('font-bold font-mono', b.ok ? 'text-green' : 'text-red')}>{b.current}</span>
+                          {!b.ok && <span className="text-text3/50">need {b.need}</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Waiting For */}
+                {waiting.length > 0 && (
+                  <div className="bg-amber/5 rounded-xl p-2.5 border border-amber/15 mb-3">
+                    <div className="text-[9px] font-bold text-amber uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                      <Clock size={8} /> Waiting for
+                    </div>
+                    <div className="space-y-1">
+                      {waiting.slice(0, 3).map((w, i) => (
+                        <div key={i} className="flex items-start gap-1.5 text-[9px] text-text3 leading-[14px]">
+                          <span className="text-amber shrink-0 mt-px">•</span>
+                          <span>{w}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Next Expected Trade */}
+                {trendDir !== 'NEUTRAL' ? (
+                  <div className={clsx('rounded-xl px-3 py-2.5 border',
+                    trendDir === 'PUT' ? 'bg-red/8 border-red/20' : 'bg-green/8 border-green/20')}>
+                    <div className="text-[9px] font-bold text-text3 uppercase tracking-widest mb-1">Next Expected Trade</div>
+                    <div className={clsx('text-sm font-black flex items-center gap-1.5',
+                      trendDir === 'PUT' ? 'text-red' : 'text-green')}>
+                      <ChevronRight size={14} />
+                      {topStrat}
+                      <span className={clsx('text-[10px] font-bold px-1.5 py-0.5 rounded-lg',
+                        trendDir === 'PUT' ? 'bg-red/15 text-red' : 'bg-green/15 text-green')}>
+                        {trendDir}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl px-3 py-2.5 border border-line/20 bg-surface/40 text-center">
+                    <span className="text-[10px] text-text3">Watching for breakout or trend signal</span>
+                  </div>
+                )}
+              </motion.div>
+            )
+          })()}
 
           {/* Market Intelligence */}
           <MarketIntelligence />
