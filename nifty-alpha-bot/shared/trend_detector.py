@@ -103,18 +103,23 @@ def detect_trend(
     vix: float = 15.0,
     structure_lookback: int = 5,
     impulse: Optional["ImpulseResult"] = None,
+    move_from_open_pct: float = 0.0,
 ) -> TrendResult:
     """
     Detect intraday bullish/bearish trend from recent 5-min candles.
 
     Args:
-        candles:            All intraday 5-min candles so far (oldest first)
-        vix:                Current India VIX value
-        structure_lookback: How many recent candles to analyse for HH/LL structure
-        impulse:            Optional pre-computed ImpulseResult from detect_impulse().
-                            When provided and directions agree, bonus votes are added
-                            to the score — allowing early confirmation before the slow
-                            5-indicator path has 14 candles.
+        candles:              All intraday 5-min candles so far (oldest first)
+        vix:                  Current India VIX value
+        structure_lookback:   How many recent candles to analyse for HH/LL structure
+        impulse:              Optional pre-computed ImpulseResult from detect_impulse().
+                              When provided and directions agree, bonus votes are added
+                              to the score — allowing early confirmation before the slow
+                              5-indicator path has 14 candles.
+        move_from_open_pct:   Live % move from today's open (e.g. -0.85 means -0.85%).
+                              When <= -0.70% or >= +0.70%, activates hard trend override:
+                              state forced to STRONG_BEAR/STRONG_BULL and conviction
+                              raised to ≥0.75 regardless of slow-path indicator score.
     """
     # ── Fast path: impulse-only detection (before slow indicators have data) ─
     # If we have fewer than 14 candles but a qualifying impulse exists, use it
@@ -141,6 +146,21 @@ def detect_trend(
                 strategy_priority=STRATEGY_PRIORITY_BY_TREND[state],
                 impulse_grade=impulse.grade,
                 detail=f"EARLY via impulse ({impulse.grade}) — {impulse.detail}",
+            )
+        # Hard override even in early fast-path: strong 15-min move overrides NEUTRAL default
+        if move_from_open_pct <= -0.70:
+            return TrendResult(
+                state=TrendState.STRONG_BEAR, direction="PUT", conviction=0.75,
+                risk_multiplier=TREND_RISK_MULTIPLIER[TrendState.STRONG_BEAR],
+                strategy_priority=STRATEGY_PRIORITY_BY_TREND[TrendState.STRONG_BEAR],
+                detail=f"[HARD_OVERRIDE move={move_from_open_pct:+.2f}%] early candles — forced STRONG_BEAR",
+            )
+        if move_from_open_pct >= 0.70:
+            return TrendResult(
+                state=TrendState.STRONG_BULL, direction="CALL", conviction=0.75,
+                risk_multiplier=TREND_RISK_MULTIPLIER[TrendState.STRONG_BULL],
+                strategy_priority=STRATEGY_PRIORITY_BY_TREND[TrendState.STRONG_BULL],
+                detail=f"[HARD_OVERRIDE move={move_from_open_pct:+.2f}%] early candles — forced STRONG_BULL",
             )
         return TrendResult(
             state=TrendState.NEUTRAL,
@@ -233,7 +253,7 @@ def detect_trend(
         last_c = last3[-1]
         vwap_rejection = float(last_c["high"]) >= vwap * 0.9995 and float(last_c["close"]) < vwap
         if consecutive_lower_highs and vwap_rejection:
-            scores["bear_pattern"] = -1
+            scores["bear_pattern"] = -2   # strengthened: was -1 (structure + institutional)
 
     # ── Impulse bonus votes ───────────────────────────────────────
     # Add impulse bonus only when impulse direction agrees with slow-path lean.
@@ -292,6 +312,25 @@ def detect_trend(
         state = TrendState.NEUTRAL
         direction = "NEUTRAL"
 
+    # ── Hard trend override: 15-min move gate ────────────────────────────────
+    # If price moved ≥0.7% from the session open, the market has declared direction.
+    # Override the slow-path state to STRONG_BEAR/STRONG_BULL and floor conviction
+    # at 0.75 — prevents NEUTRAL on genuine sell-off / gap-and-go days.
+    # move_from_open_pct is expressed as a plain percentage (e.g. -0.85 = -0.85%).
+    _hard_override = False
+    if move_from_open_pct <= -0.70:            # bearish override
+        if state != TrendState.STRONG_BEAR:
+            state     = TrendState.STRONG_BEAR
+            direction = "PUT"
+            _hard_override = True
+        conviction = max(conviction, 0.75)
+    elif move_from_open_pct >= 0.70:           # bullish override
+        if state != TrendState.STRONG_BULL:
+            state     = TrendState.STRONG_BULL
+            direction = "CALL"
+            _hard_override = True
+        conviction = max(conviction, 0.75)
+
     # Risk multiplier — start from trend-state base.
     # VIX caps apply in all states, but are less aggressive for confirmed trends.
     risk_mult = TREND_RISK_MULTIPLIER[state]
@@ -312,6 +351,8 @@ def detect_trend(
         f"base_score={slow_total} bonus={impulse_bonus:+d} → total={total}",
         f"conviction={conviction:.2f}",
     ]
+    if _hard_override:
+        parts.insert(0, f"[HARD_OVERRIDE move={move_from_open_pct:+.2f}%]")
     if ema9 and ema21:
         parts.append(f"EMA9={ema9:.0f} EMA21={ema21:.0f}")
     if vwap:

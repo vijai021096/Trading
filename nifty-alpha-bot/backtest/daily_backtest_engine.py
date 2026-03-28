@@ -151,12 +151,18 @@ class DailyBacktestConfig:
     enable_skip_after_loss: bool = True
     skip_after_loss_min_quality: float = 62.0  # Optimised: 62 (was 60 — slight tightening)
 
-    # ── Re-entry on same valid setup after SL ──
-    # If a trade hits SL but the same signal is still valid: allow one re-entry per day
-    # Models markets that shake out then resume the real move
-    # Enabled for STRONG_TREND_DOWN (WR=100%) and MILD_TREND (WR=54%) — high-quality bar prevents noise
+    # ── Re-entry on same valid setup after SL (Change 3 — tightened) ──
+    # Max 1 re-entry per day; STRONG_TREND_DOWN only (removed MILD_TREND — too loose);
+    # quality raised to 65 (was 62) to prevent revenge-trade cascades.
     enable_reentry_after_sl: bool = True
-    reentry_quality_min: float = 62.0  # Stricter quality required for re-entry (above normal 55 gate)
+    reentry_quality_min: float = 65.0  # raised: 62 → 65
+    max_reentries_per_day: int = 1     # hard cap: 1 re-entry maximum per day
+
+    # ── Anti-miss fallback (Change 2) ──────────────────────────────────
+    # If STRONG_TREND_DOWN regime fires but no primary strategy matched,
+    # inject one TREND_CONTINUATION PUT as a fallback to avoid missing the move.
+    enable_strong_trend_fallback: bool = True
+    strong_trend_fallback_quality_min: float = 55.0  # lower bar for anti-miss signal
 
     # ── Conviction-based day cap (mirrors live bot logic) ──
     # On strong trend days (high ADX), allow up to strong_trend_max_trades
@@ -1281,6 +1287,19 @@ def run_daily_backtest(
             adx_vals, atr_vals, atr_sma, bb_width, rsi_vals,
             vix, cfg,
         )
+
+        # ── Change 1: Hard trend override ──────────────────────────────────
+        # Daily bar: if intraday move (open→close) ≥ 0.7%, the day declared a trend.
+        # Override NEUTRAL/MILD/VOLATILE to the appropriate STRONG_TREND regime.
+        if opens[i] > 0:
+            _day_move_pct = (closes[i] - opens[i]) / opens[i]
+            if _day_move_pct <= -0.007 and regime not in ("STRONG_TREND_DOWN",):
+                regime = "STRONG_TREND_DOWN"
+                skip_reasons["hard_override_bear"] = skip_reasons.get("hard_override_bear", 0) + 1
+            elif _day_move_pct >= 0.007 and regime not in ("STRONG_TREND_UP",):
+                regime = "STRONG_TREND_UP"
+                skip_reasons["hard_override_bull"] = skip_reasons.get("hard_override_bull", 0) + 1
+
         regime_counts[regime] = regime_counts.get(regime, 0) + 1
 
         rsi = rsi_vals[i]
@@ -1409,6 +1428,22 @@ def run_daily_backtest(
             elif ema_f < ema_s and rsi_fb <= 50:
                 matches.append(("PUT", "FALLBACK_EMA_CROSS", {"ema_cross": "bearish", "rsi": round(rsi_fb, 1)}))
 
+        # ── Change 2: Anti-miss fallback ───────────────────────────────────────
+        # If STRONG_TREND_DOWN and no primary strategy matched, inject one
+        # TREND_CONTINUATION PUT as a catch-all to avoid missing the move entirely.
+        if not matches and cfg.enable_strong_trend_fallback and regime == "STRONG_TREND_DOWN":
+            fallback_quality = _compute_backtest_quality_score(
+                "PUT", "TREND_CONTINUATION",
+                {"regime": {"value": regime}, "fallback": True},
+                rsi_vals[i], adx_vals[i], vix, regime,
+            )
+            if fallback_quality >= cfg.strong_trend_fallback_quality_min:
+                matches.append(("PUT", "TREND_CONTINUATION", {
+                    "regime": {"value": regime}, "fallback_anti_miss": True,
+                    "quality_score": fallback_quality,
+                }))
+                skip_reasons["fallback_anti_miss"] = skip_reasons.get("fallback_anti_miss", 0) + 1
+
         if not matches:
             skip_reasons["no_signal"] = skip_reasons.get("no_signal", 0) + 1
             continue
@@ -1416,6 +1451,7 @@ def run_daily_backtest(
         in_first_month = (trade_date.year, trade_date.month) == start_ym
         daily_realized_pnl = 0.0          # reset for each new day (daily loss cap)
         lost_directions_today: set = set()  # reset for each new day (direction correlation block)
+        reentries_today: int = 0           # Change 3: re-entry counter per day
 
         for leg_idx, (signal, strategy_name, filter_log) in enumerate(matches):
             filter_log = dict(filter_log)
@@ -1564,20 +1600,21 @@ def run_daily_backtest(
                 lost_directions_today.add(signal)  # block same direction for rest of day
             last_exit_direction = signal
 
-            # ── Re-entry after SL: same setup still valid → allow one more leg ──
-            # STRONG_TREND_DOWN (WR=100%) and MILD_TREND (WR=54%) — shakeout then real move
-            # STRONG_TREND_UP excluded (WR=8% — re-entry makes losses worse)
-            reentry_regime_ok = is_strong_bear or regime == "MILD_TREND"
+            # ── Re-entry after SL (Change 3 — tightened) ─────────────────────
+            # STRONG_TREND_DOWN only (MILD_TREND removed); quality raised to 65;
+            # max 1 re-entry per day; only after first leg (leg_idx==0).
+            reentry_regime_ok = is_strong_bear   # MILD_TREND no longer qualifies
             if (cfg.enable_reentry_after_sl
                     and trade["exit_reason"] == "SL_HIT"
                     and reentry_regime_ok
-                    and leg_idx == 0  # only re-enter after the first leg's SL
+                    and leg_idx == 0                              # first-leg SL only
+                    and reentries_today < cfg.max_reentries_per_day  # hard cap
                     and len(matches) < cfg.max_trades_per_day
-                    and quality >= cfg.reentry_quality_min):  # stricter quality for re-entry
-                # Re-add the same signal as a re-entry leg (with same filter_log, different tag)
+                    and quality >= cfg.reentry_quality_min):      # raised to 65
                 reentry_fl = dict(filter_log)
                 reentry_fl["reentry"] = True
                 matches.append((signal, strategy_name, reentry_fl))
+                reentries_today += 1
 
             if verbose:
                 sign = "+" if net >= 0 else ""

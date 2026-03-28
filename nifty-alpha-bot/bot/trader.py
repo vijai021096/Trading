@@ -116,6 +116,8 @@ class KiteORBTrader:
         self._daily_adaptive_plan: Optional[Dict[str, Any]] = None
         self._late_trend_rescanned: bool = False   # guard: only one late-trend re-scan per day
         self._last_entry_confidence: float = 0.0   # track confidence of last entry (for re-entry gate)
+        self._reentries_today: int = 0             # Change 3: max 1 re-entry per day
+        self._fallback_entry_triggered: bool = False  # Change 2: anti-miss fallback (once per day)
 
         # Restore SL-M order ID from persisted state (survives restarts)
         self._active_slm_order_id: Optional[str] = self.sm.position.slm_order_id or None
@@ -343,6 +345,8 @@ class KiteORBTrader:
             self._last_exit_reason = ""
             self._last_trade_pnl = 0.0
             self._last_trade_strategy = ""
+            self._reentries_today = 0
+            self._fallback_entry_triggered = False
             self._current_expiry = self.client.get_nearest_expiry("NIFTY")
             logger.info(f"Day rolled: {today} | Expiry: {self._current_expiry}")
 
@@ -424,7 +428,14 @@ class KiteORBTrader:
                     "detail": self._current_impulse.detail,
                 })
 
-        trend = detect_trend(candles, vix, impulse=self._current_impulse)
+        # Compute live move from session open for hard trend override
+        _move_from_open = 0.0
+        if candles and len(candles) >= 2:
+            _open = float(candles[0].get("open", 0) or 0)
+            if _open > 0:
+                _move_from_open = (float(candles[-1]["close"]) - _open) / _open * 100
+
+        trend = detect_trend(candles, vix, impulse=self._current_impulse, move_from_open_pct=_move_from_open)
 
         if not self._trend_logged_today:
             self._trend_logged_today = True
@@ -703,20 +714,37 @@ class KiteORBTrader:
         self._last_trade_strategy = pos.strategy or ""
         _log_event("TRADE_CLOSED", trade_record)
 
-        # ── Re-entry after SL: inject a re-entry leg into the plan ──
-        # Only in STRONG_TREND_DOWN or MILD_TREND (high WR regimes where shakeouts are common)
-        # Direction block ALREADY added above — but we lift it for re-entry if quality is high
+        # ── Re-entry after SL (Change 3 — tightened) ────────────────────────────
+        # Rules: max 1 re-entry per day | regime must be STRONG_TREND_DOWN only |
+        #        conviction >= 0.70 | trend must be STRONG_BEAR | price made new low
         if (exit_reason == "SL_HIT"
                 and self._daily_adaptive_plan is not None
                 and self._last_entry_confidence >= 62.0
+                and self._reentries_today < 1          # hard cap: 1 re-entry max
                 and net < 0):
             plan_regime = self._daily_adaptive_plan.get("regime", "")
-            reentry_regime_ok = plan_regime in ("STRONG_TREND_DOWN", "MILD_TREND")
+            # Only STRONG_TREND_DOWN: WR=100% on re-entry (MILD_TREND removed — too loose)
+            reentry_regime_ok = plan_regime == "STRONG_TREND_DOWN"
+            # Conviction gate: trend must still be STRONG_BEAR with high conviction
+            _trend_ok = (
+                self._current_trend is not None
+                and self._current_trend.state == TrendState.STRONG_BEAR
+                and self._current_trend.conviction >= 0.70
+            )
+            # Price confirmation: current price should be at or below SL exit (new low confirms)
+            _candles = self._candle_cache or []
+            _price_new_low = (
+                len(_candles) >= 1
+                and float(_candles[-1]["close"]) <= pos.current_sl * 1.005  # within 0.5% of SL
+            ) if pos.direction == "PUT" else (
+                len(_candles) >= 1
+                and float(_candles[-1]["close"]) >= pos.current_sl * 0.995
+            )
             legs: list = list(self._daily_adaptive_plan.get("executable_legs") or [])
             day_cap = int(self._daily_adaptive_plan.get("day_trade_cap") or self.cfg.max_trades_per_day)
             trades_so_far = int(self.risk.status().get("trades_today", 0))
-            # Only re-enter if: regime ok, capacity left, no existing next leg
-            if reentry_regime_ok and trades_so_far < day_cap and trades_so_far >= len(legs):
+            if (reentry_regime_ok and _trend_ok and _price_new_low
+                    and trades_so_far < day_cap and trades_so_far >= len(legs)):
                 reentry_leg: Dict[str, Any] = {
                     "strategy": pos.strategy or "",
                     "direction": pos.direction,
@@ -726,12 +754,17 @@ class KiteORBTrader:
                     "filter_log": {"reentry": True, "after_sl": True, "regime": plan_regime},
                 }
                 self._daily_adaptive_plan["executable_legs"] = legs + [reentry_leg]
-                # Lift direction block ONLY for this re-entry (remove from blocked set temporarily)
                 self._lost_directions_today.discard(pos.direction)
+                self._reentries_today += 1
                 logger.info(
                     f"REENTRY_INJECTED: {pos.strategy} {pos.direction} after SL "
-                    f"(regime={plan_regime}, conf={self._last_entry_confidence:.0f}) — "
-                    f"direction block lifted for re-entry"
+                    f"(regime={plan_regime}, conviction={self._current_trend.conviction:.2f}, "
+                    f"conf={self._last_entry_confidence:.0f}) — direction block lifted"
+                )
+            elif exit_reason == "SL_HIT" and net < 0 and not reentry_regime_ok:
+                logger.info(
+                    f"REENTRY_BLOCKED: regime={plan_regime} not STRONG_TREND_DOWN "
+                    f"or trend_ok={_trend_ok} or new_low={_price_new_low} — no re-entry"
                 )
 
         # Stop trading for the day if profit >= 2R
@@ -920,18 +953,48 @@ class KiteORBTrader:
             self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR")
         )
         min_conf = 65.0 if is_strong_trend else self.cfg.min_confidence_score
+
         if best_conf < min_conf:
-            if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
+            # ── Change 2: Fallback anti-miss entry ───────────────────────────────
+            # Strong trend confirmed + no trade taken yet + approaching 11am → lower bar once
+            _curr_mins = now.hour * 60 + now.minute
+            _trades_today = int(self.risk.status().get("trades_today", 0))
+            _fallback_ok = (
+                not self._fallback_entry_triggered
+                and _trades_today == 0
+                and _curr_mins >= 10 * 60 + 30  # 10:30am — gave morning enough time
+                and _curr_mins < 11 * 60         # before 11am deadline
+                and is_strong_trend
+                and best_conf >= 55.0            # absolute floor — no junk trades
+            )
+            if _fallback_ok:
+                self._fallback_entry_triggered = True
                 logger.info(
-                    f"A+_FILTER SKIP: best confidence {best_conf:.0f} < {min_conf:.0f} "
-                    f"(composite={best_composite:.1f})"
+                    f"FALLBACK_ENTRY: no trade by {now.strftime('%H:%M')}, "
+                    f"strong trend ({self._current_trend.state.value} "    # type: ignore[union-attr]
+                    f"conviction={self._current_trend.conviction:.2f}), "  # type: ignore[union-attr]
+                    f"conf={best_conf:.0f} ≥ 55 → lowering threshold for one entry"
                 )
-            self._skip_reasons_today.append({
-                "strategy": best_leg["strategy"], "direction": best_leg.get("direction", ""),
-                "reason": f"Confidence {best_conf:.0f} < {min_conf:.0f} threshold",
-                "conf": round(best_conf, 1),
-            })
-            return
+                _log_event("FALLBACK_ENTRY", {
+                    "time": now.strftime("%H:%M"),
+                    "trend": self._current_trend.state.value,  # type: ignore[union-attr]
+                    "conviction": self._current_trend.conviction,  # type: ignore[union-attr]
+                    "best_conf": round(best_conf, 1),
+                    "strategy": best_leg["strategy"],
+                })
+                # Allow through with relaxed threshold (conf >= 55 already checked above)
+            else:
+                if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
+                    logger.info(
+                        f"A+_FILTER SKIP: best confidence {best_conf:.0f} < {min_conf:.0f} "
+                        f"(composite={best_composite:.1f})"
+                    )
+                self._skip_reasons_today.append({
+                    "strategy": best_leg["strategy"], "direction": best_leg.get("direction", ""),
+                    "reason": f"Confidence {best_conf:.0f} < {min_conf:.0f} threshold",
+                    "conf": round(best_conf, 1),
+                })
+                return
 
         logger.info(
             f"BEST_SIGNAL: {best_leg['strategy']} {best_leg.get('direction', 'NEUTRAL')} "
