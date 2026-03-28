@@ -271,7 +271,7 @@ def _test_risk_manager() -> Tuple[bool, str]:
     """Risk manager must compute valid lot counts and not crash."""
     from bot.risk_manager import RiskManager
     rm = RiskManager(
-        capital=25_000.0,
+        capital=100_000.0,
         max_daily_loss_pct=0.25,
         max_trades_per_day=4,
         max_daily_loss_hard=7_000.0,

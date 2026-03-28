@@ -54,7 +54,7 @@ class DailyBacktestConfig:
     lots: int = 1
 
     # First month of backtest window: only risk this much for sizing (no scaling from full equity)
-    first_month_risk_capital: float = 25_000.0
+    first_month_risk_capital: float = 50_000.0
     first_month_max_lots: int = 1
 
     # Drawdown control vs peak equity (portfolio-level); no trading halt (need trades to recover)

@@ -38,8 +38,8 @@ class Settings(BaseSettings):
     # At 25k with min 1 lot, actual risk per trade ~₹2,500-3,500.
     # Daily limit must allow at least 2 trades before stopping.
     capital: float = 100000.0
-    max_daily_loss_pct: float = 0.03           # 3% daily hard stop (scales with capital)
-    max_daily_loss_hard: float = 5000.0        # ₹5,000 absolute floor (early-capital safety)
+    max_daily_loss_pct: float = 0.04           # 4% daily hard stop = ₹4,000 at 1L (covers 2 SL hits)
+    max_daily_loss_hard: float = 8000.0        # ₹8,000 absolute floor (covers ~2.5 SL hits at 1L)
     max_trades_per_day: int = 4
     max_open_positions: int = 1
     lot_size: int = 65
