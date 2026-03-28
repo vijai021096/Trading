@@ -65,6 +65,7 @@ export function useWebSocket() {
             regime_adx: bs.regime_adx,
             regime_vix: bs.regime_vix,
             regime_rsi: bs.regime_rsi,
+            trend_impulse_grade: bs.trend_impulse_grade,
           })
         }
       }

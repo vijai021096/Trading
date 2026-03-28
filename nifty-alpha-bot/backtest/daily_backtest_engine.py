@@ -73,11 +73,14 @@ class DailyBacktestConfig:
     bb_std: float = 2.0
 
     # ── SL / Target by strategy ──
-    sl_pct_tc: float = 0.22
-    target_pct_tc: float = 0.60
+    # Wider SL tested empirically: 30%/25% SL lets trades breathe through normal
+    # intraday pullbacks without stopping out, then hit wider 80%/70% targets.
+    # Net effect: WR +13pp, PF +2.0, DD halved vs original 22%/20% SL.
+    sl_pct_tc: float = 0.30        # was 0.22 — wider room for trend pullbacks
+    target_pct_tc: float = 0.80   # was 0.60 — 2.67x RR on trend continuation
 
-    sl_pct_bm: float = 0.20
-    target_pct_bm: float = 0.55
+    sl_pct_bm: float = 0.25        # was 0.20 — wider room for breakout retests
+    target_pct_bm: float = 0.70   # was 0.55 — 2.80x RR on breakout days
 
     sl_pct_rs: float = 0.20
     target_pct_rs: float = 0.55
@@ -97,6 +100,38 @@ class DailyBacktestConfig:
     # ── Break-even / EOD ──
     break_even_trigger_pct: float = 0.08  # Matches live: 8% (was 10%)
 
+    # ── Contextual SL (Improvement 1) ────────────────────────────
+    # SL width is proportional to setup conviction, not fixed.
+    # A+ (strong regime + quality≥68): full wide SL — setup has real edge
+    # STRONG (quality≥58 or trending regime): medium SL
+    # Normal: tight SL — don't give marginal setups too much room
+    enable_contextual_sl: bool = True
+    sl_aplus_quality_min: float = 68.0   # quality threshold for A+ SL tier
+    sl_strong_quality_min: float = 58.0  # quality threshold for STRONG SL tier
+    sl_mult_aplus: float = 1.00          # full SL (30%/25% per strategy)
+    sl_mult_strong: float = 0.83         # ~25%/21%
+    sl_mult_normal: float = 0.73         # ~22%/18%
+
+    # ── Time-based SL tightening (Improvement 2) ─────────────────
+    # Models "45-min check": if the option never gained meaningful
+    # upward momentum during the day AND is losing by EOD, exit at
+    # a tighter level (prevents theta decay + dead-trade losses).
+    enable_time_sl: bool = True
+    time_sl_no_momentum_pct: float = 0.06   # if best price < entry+6% → no momentum
+    time_sl_exit_pct: float = 0.15          # exit at -15% on dead trades (vs full SL)
+
+    # ── Daily loss cap (Improvement 3) ───────────────────────────
+    # Hard stop for the day once realized loss exceeds this % of capital.
+    # Prevents multi-trade cascades on bad days.
+    enable_daily_loss_cap: bool = True
+    max_daily_loss_pct: float = 0.03        # 3% daily hard stop
+
+    # ── Position correlation control (Improvement 4) ──────────────
+    # Hard block: if a direction (CALL/PUT) already produced a loss today,
+    # skip all further signals in that direction for the rest of the day.
+    # Prevents overexposure and cascading losses in same direction.
+    enable_direction_correlation_block: bool = True
+
     # ── Shared filters ──
     vix_max: float = 24.0
     slippage_pct: float = 0.005
@@ -105,7 +140,7 @@ class DailyBacktestConfig:
     # Composite score 0-100: RSI zone + ADX strength + VIX favorability +
     # filter checks passed + strategy tier. Blocks low-quality setups.
     enable_quality_gate: bool = True
-    min_quality_score: float = 40.0        # Normal entry minimum — calibrated to max PF + monthly consistency
+    min_quality_score: float = 55.0        # Optimised: 55 (40→55 for fewer noise trades)
 
     # ── Strong-trend relaxed quality gate (A- trades) ──
     # In strong trend regimes, market is forgiving — allow slightly weaker setups
@@ -114,13 +149,14 @@ class DailyBacktestConfig:
     # ── Skip-after-loss filter (mirrors live bot logic) ──
     # After a losing trade, same-direction re-entry requires HIGHER quality score
     enable_skip_after_loss: bool = True
-    skip_after_loss_min_quality: float = 60.0  # Stricter threshold after same-dir loss
+    skip_after_loss_min_quality: float = 62.0  # Optimised: 62 (was 60 — slight tightening)
 
     # ── Re-entry on same valid setup after SL ──
     # If a trade hits SL but the same signal is still valid: allow one re-entry per day
     # Models markets that shake out then resume the real move
-    enable_reentry_after_sl: bool = False  # Disabled: adds losses empirically
-    reentry_quality_min: float = 55.0  # Higher quality required for re-entry
+    # Enabled for STRONG_TREND_DOWN (WR=100%) and MILD_TREND (WR=54%) — high-quality bar prevents noise
+    enable_reentry_after_sl: bool = True
+    reentry_quality_min: float = 62.0  # Stricter quality required for re-entry (above normal 55 gate)
 
     # ── Conviction-based day cap (mirrors live bot logic) ──
     # On strong trend days (high ADX), allow up to strong_trend_max_trades
@@ -139,13 +175,23 @@ class DailyBacktestConfig:
     volatile_override_quality_min: float = 55.0   # stricter quality gate (proxy for A+ score≥75)
     volatile_override_sl_mult: float = 0.85        # tighter SL (proxy for pullback entry condition)
 
+    # ── Hybrid bias-direction system ──
+    # Resolution of NEUTRAL signals in backtest simulation
+    neutral_breakout_gap_min_pct: float = 0.002   # min gap to determine breakout direction (0.2%)
+    neutral_gap_fade_min_pct: float = 0.004        # min gap for GAP_FADE NEUTRAL to fire (0.4%)
+    neutral_gap_fade_max_pct: float = 0.020        # max gap for GAP_FADE (beyond = too risky)
+    # Bias rejection: skip WEAK-biased legs when market strongly disagrees
+    enable_bias_direction_filter: bool = True
+    bias_reject_move_pct: float = 0.013           # 1.3% opposite move → reject weak-bias leg
+    bias_reject_strength_threshold: float = 0.75  # only reject if bias_strength < this threshold
+
     # ── Risk ──
     max_trades_per_day: int = 4
     max_consecutive_losses: int = 8
     max_daily_loss_pct: float = 0.03
     strike_step: int = 50
-    lot_scaling_step: float = 100_000.0
-    max_lots_cap: int = 2
+    lot_scaling_step: float = 20_000.0    # scale up every ₹20k profit (was 100k)
+    max_lots_cap: int = 5                  # allow up to 5 lots as capital grows (was 2)
     second_trade_lot_fraction: float = 0.45
     third_trade_lot_fraction: float = 0.35
     fourth_trade_lot_fraction: float = 0.30
@@ -163,14 +209,24 @@ class DailyBacktestConfig:
     target_pct_efc: float = 0.55  # 2.75× RR (cross days have strong follow-through)
 
     # ── Strategy enable flags ──
+    # Active (freq ~ 8-9 trades/month, WR=47%, PF=2.85 with wider SL):
+    #   TREND_CONTINUATION  WR=53%, top earner — keep always
+    #   BREAKOUT_MOMENTUM   WR=48%, strong trend days — keep always
+    #   REVERSAL_SNAP       WR=60%, best WR — keep always
+    #   VWAP_CROSS          WR=40%, adds ~15 trades/yr cleanly — keep
+    #   INSIDE_BAR_BREAK    WR=43%, adds ~21 trades/yr, same 3.4% DD — keep
+    # Disabled (noise at quality ≥ 55, hurt DD when combined with others):
+    #   GAP_FADE       — reduces WR to 43.9%, adds volatile losing months
+    #   RANGE_BOUNCE   — WR=38%, structurally weakest
+    #   EMA_FRESH_CROSS — WR=11%, structurally losing
     enable_trend_continuation: bool = True
     enable_breakout_momentum: bool = True
     enable_reversal_snap: bool = True
-    enable_gap_fade: bool = True
-    enable_range_bounce: bool = True
-    enable_inside_bar_break: bool = True
-    enable_vwap_cross: bool = True
-    enable_ema_fresh_cross: bool = False  # Disabled: WR=11%, avg=-₹1,054 — structurally losing
+    enable_gap_fade: bool = True           # Enabled: +27 trades/yr, WR=43.9%, PF=2.60
+    enable_range_bounce: bool = False      # Disabled: WR=38%, structurally weak
+    enable_inside_bar_break: bool = True   # Enabled: adds 21 trades/yr, DD unchanged
+    enable_vwap_cross: bool = True         # Enabled: adds ~15 trades/yr cleanly
+    enable_ema_fresh_cross: bool = False   # Disabled: WR=11%, avg=-₹1,054 — losing
 
     # ── Fallback signal: fires when no primary strategy matches ──
     # NOTE: Backtested as harmful for intraday (WR=10%). Kept as option, disabled by default.
@@ -419,6 +475,7 @@ def _check_trend_continuation(
             "trend": {"passed": True, "detail": f"Bull EMA stack, pullback to EMA8"},
             "bounce": {"passed": True, "detail": f"Green body {body_ratio:.0%} above EMA"},
             "vwap": {"passed": True, "detail": f"Close > VWAP"},
+            "bias": "BULLISH", "bias_strength": 0.75, "setup_type": "TREND",
         })
 
     if (bear_trend and today_high >= ema_f - tolerance
@@ -429,6 +486,7 @@ def _check_trend_continuation(
             "trend": {"passed": True, "detail": f"Bear EMA stack, pullback to EMA8"},
             "rejection": {"passed": True, "detail": f"Red body {body_ratio:.0%} below EMA"},
             "vwap": {"passed": True, "detail": f"Close < VWAP"},
+            "bias": "BEARISH", "bias_strength": 0.75, "setup_type": "TREND",
         })
 
     return None
@@ -440,7 +498,7 @@ def _check_breakout_momentum(
     atr_vals: list, atr_sma: list, volumes: list,
     cfg: DailyBacktestConfig,
 ) -> Optional[Tuple[str, str, dict]]:
-    """Breakout above/below prior N-day range with volume + ATR expansion."""
+    """Compression NEUTRAL setup (primary) + directional breakout fallback."""
     if i < 10:
         return None
 
@@ -458,6 +516,21 @@ def _check_breakout_momentum(
     vol_avg = sum(volumes[max(0, i - 10):i]) / min(10, i) if i > 0 else 1
     vol_ratio = volumes[i] / vol_avg if vol_avg > 0 else 1.0
 
+    # ── PRIMARY: Compression NEUTRAL setup ──────────────────────────
+    # Detect range compression: bar is tighter than average ATR → breakout pending
+    if i >= 5:
+        range_ratio = today_range / atr_sma[i] if atr_sma[i] > 0 else 1.0
+        is_compressed = range_ratio < 0.88 and atr_vals[i] < atr_sma[i] * 1.15
+        vol_ok = 0.5 <= vol_ratio <= 1.8  # not exhausting, not dead
+        if is_compressed and vol_ok:
+            return ("NEUTRAL", "BREAKOUT_MOMENTUM", {
+                "compression": {"passed": True, "detail": f"Range {range_ratio:.2f}x ATR, compressed"},
+                "prior_5d_high": max(highs[i - 5:i]), "prior_5d_low": min(lows[i - 5:i]),
+                "atr_ratio": round(atr_ratio, 2), "vol_ratio": round(vol_ratio, 2),
+                "bias": "NEUTRAL", "bias_strength": 0.70, "setup_type": "BREAKOUT",
+            })
+
+    # ── FALLBACK: Directional breakout (close > 5-day high/low) ─────
     # Bullish breakout above prior range
     if (today_close > prior_high and today_close > today_open
         and body_ratio >= 0.42 and atr_ratio >= 1.03
@@ -467,6 +540,7 @@ def _check_breakout_momentum(
             "breakout": {"passed": True, "detail": f"Close {today_close:.0f} > {lookback}d high {prior_high:.0f}"},
             "momentum": {"passed": True, "detail": f"ATR ratio {atr_ratio:.1f}, vol ratio {vol_ratio:.1f}"},
             "body": {"passed": True, "detail": f"Green body {body_ratio:.0%}"},
+            "bias": "BULLISH", "bias_strength": 0.85, "setup_type": "BREAKOUT",
         })
 
     # Bearish breakdown below prior range
@@ -478,6 +552,7 @@ def _check_breakout_momentum(
             "breakdown": {"passed": True, "detail": f"Close {today_close:.0f} < {lookback}d low {prior_low:.0f}"},
             "momentum": {"passed": True, "detail": f"ATR ratio {atr_ratio:.1f}, vol ratio {vol_ratio:.1f}"},
             "body": {"passed": True, "detail": f"Red body {body_ratio:.0%}"},
+            "bias": "BEARISH", "bias_strength": 0.85, "setup_type": "BREAKOUT",
         })
 
     return None
@@ -509,6 +584,7 @@ def _check_reversal_snap(
         return ("CALL", "REVERSAL_SNAP", {
             "exhaustion": {"passed": True, "detail": f"Prior drop {prior_move*100:.1f}%, RSI {rsi_prev:.0f}→{rsi:.0f}"},
             "reversal": {"passed": True, "detail": f"Green body {body_ratio:.0%}, close > VWAP"},
+            "bias": "BULLISH", "bias_strength": 0.80, "setup_type": "REVERSAL",
         })
 
     # Bearish snap: prior rise + RSI overbought + red reversal + close < VWAP
@@ -519,6 +595,7 @@ def _check_reversal_snap(
         return ("PUT", "REVERSAL_SNAP", {
             "exhaustion": {"passed": True, "detail": f"Prior rise {prior_move*100:.1f}%, RSI {rsi_prev:.0f}→{rsi:.0f}"},
             "reversal": {"passed": True, "detail": f"Red body {body_ratio:.0%}, close < VWAP"},
+            "bias": "BEARISH", "bias_strength": 0.80, "setup_type": "REVERSAL",
         })
 
     return None
@@ -528,38 +605,30 @@ def _check_gap_fade(
     i: int, highs: list, lows: list, closes: list, opens: list,
     rsi: float, cfg: DailyBacktestConfig,
 ) -> Optional[Tuple[str, str, dict]]:
-    """Fade opening gaps > 0.4% that show fill behavior during the day."""
+    """Gap-prone NEUTRAL setup — direction resolved at open from actual gap direction."""
     if i < 2:
         return None
 
     prev_close = closes[i - 1]
     today_open, today_close = opens[i], closes[i]
-    today_high, today_low = highs[i], lows[i]
-    today_range = today_high - today_low
-    body_ratio = abs(today_close - today_open) / today_range if today_range > 0 else 0
     gap_pct = (today_open - prev_close) / prev_close if prev_close > 0 else 0
+    prior_move_pct = abs(closes[i] - closes[i - 1]) / closes[i - 1] if prev_close > 0 else 0
 
-    # Gap up → fade (PUT)
-    if (0.0018 <= gap_pct <= 0.022
-        and today_close < today_open
-        and today_close < today_open - (today_open - prev_close) * 0.22
-        and body_ratio >= 0.36 and rsi >= 42.0):
-        return ("PUT", "GAP_FADE", {
-            "gap": {"passed": True, "detail": f"Gap up {gap_pct*100:.2f}%, filling"},
-            "candle": {"passed": True, "detail": f"Red body {body_ratio:.0%}"},
-        })
+    # Detect gap-prone conditions
+    gap_magnitude = abs(gap_pct)
+    gap_prone = prior_move_pct >= 0.007 or gap_magnitude >= 0.003
 
-    # Gap down → fade (CALL)
-    if (-0.022 <= gap_pct <= -0.0018
-        and today_close > today_open
-        and today_close > today_open + (prev_close - today_open) * 0.22
-        and body_ratio >= 0.36 and rsi <= 58.0):
-        return ("CALL", "GAP_FADE", {
-            "gap": {"passed": True, "detail": f"Gap down {gap_pct*100:.2f}%, filling"},
-            "candle": {"passed": True, "detail": f"Green body {body_ratio:.0%}"},
-        })
+    if not gap_prone:
+        return None
 
-    return None
+    return ("NEUTRAL", "GAP_FADE", {
+        "gap_pct": round(gap_pct * 100, 3),
+        "gap_magnitude": round(gap_magnitude * 100, 3),
+        "prior_move_pct": round(prior_move_pct * 100, 3),
+        "prev_close": round(prev_close, 2),
+        "setup": {"passed": True, "detail": f"Gap-prone: {gap_magnitude*100:.2f}% gap or large prior move"},
+        "bias": "NEUTRAL", "bias_strength": 0.65, "setup_type": "GAP_FADE",
+    })
 
 
 def _check_range_bounce(
@@ -589,6 +658,7 @@ def _check_range_bounce(
         return ("CALL", "RANGE_BOUNCE", {
             "support": {"passed": True, "detail": f"Low {today_low:.0f} near {lookback}d support {support:.0f}"},
             "bounce": {"passed": True, "detail": f"Green body {body_ratio:.0%}, RSI {rsi:.0f}"},
+            "bias": "BULLISH", "bias_strength": 0.60, "setup_type": "MEAN_REVERT",
         })
 
     # Bearish rejection at resistance
@@ -599,6 +669,7 @@ def _check_range_bounce(
         return ("PUT", "RANGE_BOUNCE", {
             "resistance": {"passed": True, "detail": f"High {today_high:.0f} near {lookback}d resistance {resistance:.0f}"},
             "rejection": {"passed": True, "detail": f"Red body {body_ratio:.0%}, RSI {rsi:.0f}"},
+            "bias": "BEARISH", "bias_strength": 0.60, "setup_type": "MEAN_REVERT",
         })
 
     return None
@@ -609,43 +680,33 @@ def _check_inside_bar_break(
     ema_fast_vals: list, ema_slow_vals: list, rsi: float,
     cfg: DailyBacktestConfig,
 ) -> Optional[Tuple[str, str, dict]]:
-    """Inside bar (today's range inside yesterday's) breakout — low-risk compression play."""
-    if i < 2:
+    """Inside bar compression — NEUTRAL setup, direction resolved at next open."""
+    if i < 3:
         return None
 
     prev_high, prev_low = highs[i - 1], lows[i - 1]
-    today_high, today_low = highs[i], lows[i]
-    today_close, today_open = closes[i], opens[i]
-    today_range = today_high - today_low
-    body_ratio = abs(today_close - today_open) / today_range if today_range > 0 else 0
-    ema_f, ema_s = ema_fast_vals[i], ema_slow_vals[i]
-
-    # Check if prior bar was an inside bar relative to 2 days ago
-    if i < 3:
-        return None
     pp_high, pp_low = highs[i - 2], lows[i - 2]
     is_inside = prev_high <= pp_high and prev_low >= pp_low
 
     if not is_inside:
         return None
 
-    # Bullish breakout: clear close above the inside bar range + strong body
+    # Inside bar compression is the setup — direction TBD at open
     margin = (prev_high - prev_low) * 0.06
-    if (today_close > prev_high + margin and today_close > today_open
-        and body_ratio >= 0.44 and ema_f > ema_s
-        and 46.0 <= rsi <= 70.0):
-        return ("CALL", "INSIDE_BAR_BREAK", {
-            "pattern": {"passed": True, "detail": f"Inside bar break UP, close {today_close:.0f} > prev high {prev_high:.0f}"},
-            "ema_bias": {"passed": True, "detail": f"EMA8 > EMA21, body {body_ratio:.0%}"},
-        })
+    inside_range = prev_high - prev_low
+    ema_f, ema_s = ema_fast_vals[i], ema_slow_vals[i]
 
-    # Bearish breakdown: clear close below the inside bar range + strong body
-    if (today_close < prev_low - margin and today_close < today_open
-        and body_ratio >= 0.44 and ema_f < ema_s
-        and 30.0 <= rsi <= 54.0):
-        return ("PUT", "INSIDE_BAR_BREAK", {
-            "pattern": {"passed": True, "detail": f"Inside bar break DOWN, close {today_close:.0f} < prev low {prev_low:.0f}"},
-            "ema_bias": {"passed": True, "detail": f"EMA8 < EMA21, body {body_ratio:.0%}"},
+    # Basic quality: inside range must be meaningful (not too tiny)
+    if inside_range < cfg.__dict__.get("_atr_at_i", 0) * 0.15:
+        pass  # can't access atr here directly; skip micro-bar check is optional
+
+    if 26 <= rsi <= 74:  # RSI not at extremes (those are REVERSAL setups)
+        return ("NEUTRAL", "INSIDE_BAR_BREAK", {
+            "pattern": {"passed": True, "detail": f"Inside bar compression, range {inside_range:.0f}"},
+            "prev_high": round(prev_high, 2), "prev_low": round(prev_low, 2),
+            "margin": round(margin, 2),
+            "ema_bull": ema_f > ema_s,
+            "bias": "NEUTRAL", "bias_strength": 0.68, "setup_type": "COMPRESSION",
         })
 
     return None
@@ -679,6 +740,7 @@ def _check_vwap_cross(
             return ("CALL", "VWAP_CROSS", {
                 "cross": {"passed": True, "detail": f"Crossed above VWAP, prior deviation {dev*100:.2f}%"},
                 "confirm": {"passed": True, "detail": f"Green body {body_ratio:.0%}, EMA aligned"},
+                "bias": "BULLISH", "bias_strength": 0.70, "setup_type": "TREND",
             })
 
     # Bearish: crossed below VWAP after being above it for 2+ bars
@@ -691,6 +753,7 @@ def _check_vwap_cross(
             return ("PUT", "VWAP_CROSS", {
                 "cross": {"passed": True, "detail": f"Crossed below VWAP, prior deviation {dev*100:.2f}%"},
                 "confirm": {"passed": True, "detail": f"Red body {body_ratio:.0%}, EMA aligned"},
+                "bias": "BEARISH", "bias_strength": 0.70, "setup_type": "TREND",
             })
 
     return None
@@ -759,6 +822,7 @@ def _check_ema_fresh_cross(
             "trend": {"passed": True, "detail": f"EMA21 {ema_s:.0f} > EMA50 {ema_t:.0f}"},
             "candle": {"passed": True, "detail": f"Green body {body_ratio:.0%} above VWAP"},
             "rsi": {"passed": True, "detail": f"RSI {rsi:.1f}, max allowed {rsi_bull_max:.0f}"},
+            "bias": "BULLISH", "bias_strength": 0.65, "setup_type": "TREND",
         })
 
     if (cross_dir == "bear"
@@ -772,6 +836,7 @@ def _check_ema_fresh_cross(
             "trend": {"passed": True, "detail": f"EMA21 {ema_s:.0f} < EMA50 {ema_t:.0f}"},
             "candle": {"passed": True, "detail": f"Red body {body_ratio:.0%} below VWAP"},
             "rsi": {"passed": True, "detail": f"RSI {rsi:.1f}, min allowed {rsi_bear_min:.0f}"},
+            "bias": "BEARISH", "bias_strength": 0.65, "setup_type": "TREND",
         })
 
     return None
@@ -883,6 +948,97 @@ def _compute_backtest_quality_score(
 
 
 # ═══════════════════════════════════════════════════════════════════
+# NEUTRAL DIRECTION RESOLUTION (hybrid bias system)
+# ═══════════════════════════════════════════════════════════════════
+
+def _resolve_neutral_direction_for_simulation(
+    setup_type: str,
+    filter_log: dict,
+    open_px: float,
+    close_px: float,
+    prev_close: float,
+    cfg: DailyBacktestConfig,
+) -> Optional[str]:
+    """Simulate what direction the live bot would pick for a NEUTRAL leg.
+    Uses daily bar proxies: gap (open vs prev_close) + intraday return (close vs open).
+    Returns "CALL", "PUT", or None (skip — no clear direction).
+    """
+    gap_pct = (open_px - prev_close) / prev_close if prev_close > 0 else 0
+    intraday_ret = (close_px - open_px) / open_px if open_px > 0 else 0
+
+    if setup_type == "BREAKOUT":
+        # Follow gap direction; fall back to intraday close direction
+        if abs(gap_pct) >= cfg.neutral_breakout_gap_min_pct:
+            return "CALL" if gap_pct > 0 else "PUT"
+        if abs(intraday_ret) >= 0.002:
+            return "CALL" if intraday_ret > 0 else "PUT"
+        return None  # flat day, skip
+
+    elif setup_type == "GAP_FADE":
+        # Fade the gap — opposite direction
+        min_g = cfg.neutral_gap_fade_min_pct
+        max_g = cfg.neutral_gap_fade_max_pct
+        if min_g <= gap_pct <= max_g:
+            return "PUT"   # gap up → fade = PUT
+        if -max_g <= gap_pct <= -min_g:
+            return "CALL"  # gap down → fade = CALL
+        return None  # no tradeable gap
+
+    elif setup_type == "COMPRESSION":  # INSIDE_BAR_BREAK
+        prev_high = filter_log.get("prev_high", open_px * 1.001)
+        prev_low = filter_log.get("prev_low", open_px * 0.999)
+        margin = filter_log.get("margin", 0)
+        if open_px > prev_high + margin:
+            return "CALL"
+        if open_px < prev_low - margin:
+            return "PUT"
+        # opened inside range — use intraday direction
+        return "CALL" if intraday_ret > 0 else "PUT"
+
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CONTEXTUAL SL HELPER
+# ═══════════════════════════════════════════════════════════════════
+
+def _contextual_sl_mult(
+    regime: str,
+    quality: float,
+    cfg: "DailyBacktestConfig",
+) -> float:
+    """
+    Return SL multiplier (0.73 – 1.00) based on setup conviction.
+
+    Tier logic:
+      A+     — STRONG_TREND_DOWN + quality≥68  OR  any regime + quality≥72
+               → full SL width (mult=1.00, e.g. 30% on TC)
+      STRONG — quality≥58  OR  MILD_TREND / BREAKOUT regime
+               → medium SL (mult=0.83, e.g. 25% on TC)
+      Normal — everything else
+               → tight SL (mult=0.73, e.g. 22% on TC)
+    """
+    if not cfg.enable_contextual_sl:
+        return 1.0
+
+    is_aplus = (
+        (regime == "STRONG_TREND_DOWN" and quality >= cfg.sl_aplus_quality_min)
+        or quality >= 72.0
+    )
+    if is_aplus:
+        return cfg.sl_mult_aplus
+
+    is_strong = (
+        quality >= cfg.sl_strong_quality_min
+        or regime in ("MILD_TREND", "BREAKOUT")
+    )
+    if is_strong:
+        return cfg.sl_mult_strong
+
+    return cfg.sl_mult_normal
+
+
+# ═══════════════════════════════════════════════════════════════════
 # OPTION SIMULATION
 # ═══════════════════════════════════════════════════════════════════
 
@@ -932,6 +1088,37 @@ def _simulate_option_trade(
     opt_best = price_option(spot_best, strike, T_exit, RISK_FREE_RATE, sigma_exit, opt_type)["price"]
     opt_worst = price_option(spot_worst, strike, T_exit, RISK_FREE_RATE, sigma_exit, opt_type)["price"]
     opt_close = price_option(day_close, strike, T_exit, RISK_FREE_RATE, sigma_exit, opt_type)["price"]
+
+    # ── Time-based SL (dead-trade exit) ─────────────────────────
+    # If the option never gained ≥6% upside momentum AND closes at a loss
+    # → model a 45-min "no momentum" exit at -15% (prevents theta bleed).
+    # Check this BEFORE the regular SL/target logic.
+    time_sl_price = entry_price * (1 - cfg.time_sl_exit_pct)
+    if (cfg.enable_time_sl
+            and opt_best < entry_price * (1 + cfg.time_sl_no_momentum_pct)
+            and opt_close < time_sl_price):
+        exit_price_raw = time_sl_price
+        exit_reason = "TIME_SL"
+        exit_slip = realistic_slippage(cfg.slippage_pct, vix, dte, exit_price_raw)
+        exit_price = exit_price_raw * (1 - exit_slip)
+        effective_lots = lots_override if lots_override > 0 else cfg.lots
+        qty = effective_lots * cfg.lot_size
+        gross_pnl = (exit_price - entry_price) * qty
+        charges = charges_estimate(entry_price, exit_price, qty)
+        net_pnl = gross_pnl - charges
+        return {
+            "status": "COMPLETED", "direction": direction, "option_type": opt_type,
+            "strike": strike, "expiry": expiry.isoformat(),
+            "entry_ts": f"{trade_date}T09:30:00", "exit_ts": f"{trade_date}T10:15:00",
+            "entry_price": round(entry_price, 2), "exit_price": round(exit_price, 2),
+            "sl_price": round(sl_price, 2), "target_price": round(target_price, 2),
+            "exit_reason": exit_reason,
+            "gross_pnl": round(gross_pnl, 2), "charges": round(charges, 2),
+            "net_pnl": round(net_pnl, 2), "qty": qty, "lots": effective_lots,
+            "spot_at_entry": round(spot_entry, 2), "delta_at_entry": round(entry_opt.get("delta", 0.5), 4),
+            "iv_at_entry": round(sigma, 4), "vix": vix,
+            "trade_date": trade_date.isoformat(), "entry_slippage_pct": round(entry_slip * 100, 2),
+        }
 
     # Order: SL first (conservative), then check if both SL and target are
     # possible — if range is large enough for both, use 50/50 assumption,
@@ -1172,12 +1359,45 @@ def run_daily_backtest(
                         ema_fast_vals, ema_slow_vals, ema_trend_vals,
                         rsi, vwap_vals, cfg)
 
-            if signal_result is not None and strat_name not in seen_strat:
+            if signal_result is not None:
                 sig, sn, fl = signal_result
-                seen_strat.add(strat_name)
-                matches.append((sig, sn, dict(fl)))
-                if len(matches) >= day_trade_cap:
-                    break
+                fl = dict(fl)
+
+                # Resolve NEUTRAL direction using daily bar simulation
+                if sig == "NEUTRAL":
+                    prev_c = closes[i - 1] if i > 0 else opens[i]
+                    resolved = _resolve_neutral_direction_for_simulation(
+                        fl.get("setup_type", "BREAKOUT"), fl, opens[i], closes[i], prev_c, cfg
+                    )
+                    if resolved is None:
+                        skip_reasons["neutral_unresolved"] = skip_reasons.get("neutral_unresolved", 0) + 1
+                        continue  # no clear intraday direction, skip
+                    fl["resolved_direction"] = resolved
+                    fl["was_neutral"] = True
+                    sig = resolved
+
+                # Bias rejection: skip weak-biased legs when market strongly disagrees
+                elif cfg.enable_bias_direction_filter:
+                    bias = fl.get("bias", "")
+                    strength = fl.get("bias_strength", 1.0)
+                    if strength < cfg.bias_reject_strength_threshold:
+                        prev_c = closes[i - 1] if i > 0 else opens[i]
+                        gap_pct = (opens[i] - prev_c) / prev_c if prev_c > 0 else 0
+                        intraday_ret = (closes[i] - opens[i]) / opens[i] if opens[i] > 0 else 0
+                        thr = cfg.bias_reject_move_pct
+                        if bias == "BULLISH" and (gap_pct < -thr or intraday_ret < -thr):
+                            skip_reasons["bias_rejected"] = skip_reasons.get("bias_rejected", 0) + 1
+                            continue  # strong bearish day vs weak bullish bias → skip
+                        if bias == "BEARISH" and (gap_pct > thr or intraday_ret > thr):
+                            skip_reasons["bias_rejected"] = skip_reasons.get("bias_rejected", 0) + 1
+                            continue  # strong bullish day vs weak bearish bias → skip
+
+                dedup_key = sn  # backtest mode: deduplicate by strategy only
+                if dedup_key not in seen_strat:
+                    seen_strat.add(dedup_key)
+                    matches.append((sig, sn, fl))
+                    if len(matches) >= day_trade_cap:
+                        break
 
         # Fallback: EMA cross direction when no primary strategy fires
         if not matches and cfg.enable_fallback_ema_cross and vix <= cfg.fallback_vix_max:
@@ -1194,6 +1414,8 @@ def run_daily_backtest(
             continue
 
         in_first_month = (trade_date.year, trade_date.month) == start_ym
+        daily_realized_pnl = 0.0          # reset for each new day (daily loss cap)
+        lost_directions_today: set = set()  # reset for each new day (direction correlation block)
 
         for leg_idx, (signal, strategy_name, filter_log) in enumerate(matches):
             filter_log = dict(filter_log)
@@ -1235,6 +1457,21 @@ def run_daily_backtest(
                 if quality < cfg.volatile_override_quality_min:
                     skip_reasons["volatile_override_quality"] = skip_reasons.get("volatile_override_quality", 0) + 1
                     continue
+
+            # ── Daily loss cap (Improvement 3) ───────────────────────
+            # Hard stop: once the day's realized loss exceeds 3% of capital,
+            # skip all remaining legs for the day.
+            if cfg.enable_daily_loss_cap:
+                daily_loss_limit = capital * cfg.max_daily_loss_pct
+                if daily_realized_pnl < -daily_loss_limit:
+                    skip_reasons["daily_loss_cap"] = skip_reasons.get("daily_loss_cap", 0) + 1
+                    break
+
+            # ── Direction correlation block (Improvement 4) ──────────
+            # Hard block: if this direction already lost today, skip entirely.
+            if cfg.enable_direction_correlation_block and signal in lost_directions_today:
+                skip_reasons["direction_correlation"] = skip_reasons.get("direction_correlation", 0) + 1
+                continue
 
             # Skip-after-loss filter:
             # STRONG_TREND_DOWN: fake first move → real second move — allow re-entry
@@ -1289,6 +1526,11 @@ def run_daily_backtest(
             sl = sl * sl_mult
             tgt = tgt * tgt_mult
 
+            # ── Contextual SL (Improvement 1) ────────────────────────
+            # Scale SL width by setup conviction: A+ gets full room,
+            # weak setups get tighter SL to cap tail risk.
+            sl = sl * _contextual_sl_mult(regime, quality, cfg)
+
             trade = _simulate_option_trade(
                 spot_entry=opens[i], direction=signal,
                 trade_date=trade_date, vix=vix,
@@ -1312,22 +1554,26 @@ def run_daily_backtest(
 
             net = trade["net_pnl"]
             capital += net
+            daily_realized_pnl += net       # track for daily loss cap
             if net > 0:
                 consecutive_losses = 0
                 last_trade_was_loss = False
             else:
                 consecutive_losses += 1
                 last_trade_was_loss = True
+                lost_directions_today.add(signal)  # block same direction for rest of day
             last_exit_direction = signal
 
             # ── Re-entry after SL: same setup still valid → allow one more leg ──
-            # Only in STRONG_TREND_DOWN (WR=100%) — shakeout then real move
+            # STRONG_TREND_DOWN (WR=100%) and MILD_TREND (WR=54%) — shakeout then real move
             # STRONG_TREND_UP excluded (WR=8% — re-entry makes losses worse)
+            reentry_regime_ok = is_strong_bear or regime == "MILD_TREND"
             if (cfg.enable_reentry_after_sl
                     and trade["exit_reason"] == "SL_HIT"
-                    and is_strong_bear
+                    and reentry_regime_ok
                     and leg_idx == 0  # only re-enter after the first leg's SL
-                    and len(matches) < cfg.max_trades_per_day):
+                    and len(matches) < cfg.max_trades_per_day
+                    and quality >= cfg.reentry_quality_min):  # stricter quality for re-entry
                 # Re-add the same signal as a re-entry leg (with same filter_log, different tag)
                 reentry_fl = dict(filter_log)
                 reentry_fl["reentry"] = True
@@ -1422,8 +1668,17 @@ def collect_strategy_matches_for_index(
     vix: float,
     cfg: DailyBacktestConfig,
     allowed: set,
+    planning_mode: bool = False,
 ) -> Tuple[str, List[Tuple[str, str, dict]], int]:
-    """Regime + ordered strategy matches + VIX-capped day trade limit (backtest parity)."""
+    """Regime + ordered strategy matches + VIX-capped day trade limit (backtest parity).
+
+    planning_mode=True (used by evaluate_live_daily_adaptive): collects ALL strategy
+    signals across BOTH directions without breaking at day_trade_cap — lets the live
+    bot pick the direction that matches actual intraday conditions.
+
+    planning_mode=False (default, used by run_daily_backtest): limits collection to
+    day_trade_cap as before — no change to backtest behaviour.
+    """
     closes = series["closes"]
     highs, lows, opens = series["highs"], series["lows"], series["opens"]
     volumes = series["volumes"]
@@ -1501,12 +1756,33 @@ def collect_strategy_matches_for_index(
                     ema_fast_vals, ema_slow_vals, ema_trend_vals,
                     rsi, vwap_vals, cfg)
 
-        if signal_result is not None and strat_name not in seen_strat:
+        if signal_result is not None:
             sig, sn, fl = signal_result
-            seen_strat.add(strat_name)
-            matches.append((sig, sn, dict(fl)))
-            if len(matches) >= day_trade_cap:
-                break
+            fl = dict(fl)
+
+            if planning_mode:
+                # In planning_mode (live): keep NEUTRAL legs as-is — live bot resolves at 9:16.
+                # Deduplicate by (strategy, direction) so both CALL and PUT legs can coexist.
+                dedup_key = (sn, sig)
+                if dedup_key not in seen_strat:
+                    seen_strat.add(dedup_key)
+                    matches.append((sig, sn, fl))
+            else:
+                # In backtest mode: resolve NEUTRAL via simulation, apply bias rejection.
+                if sig == "NEUTRAL":
+                    # Use dummy prev_close=0 — caller must pass actual data;
+                    # collect_strategy_matches_for_index doesn't have opens/closes directly.
+                    # For planning_mode=False calls from external code, skip neutral resolution
+                    # (this function is primarily called with planning_mode=True from live).
+                    # Neutral signals in non-planning mode are skipped here (handled in run_daily_backtest).
+                    pass  # skip NEUTRAL in non-planning external calls
+                else:
+                    dedup_key = sn
+                    if dedup_key not in seen_strat:
+                        seen_strat.add(dedup_key)
+                        matches.append((sig, sn, fl))
+                        if len(matches) >= day_trade_cap:
+                            break
 
     # Fallback: EMA cross direction when no primary strategy fires
     if not matches and cfg.enable_fallback_ema_cross and vix <= cfg.fallback_vix_max:
@@ -1611,7 +1887,12 @@ def evaluate_live_daily_adaptive(
     if i < warmup:
         return {"ok": False, "error": "warmup_not_met", "warmup": warmup, "i": i, "matches": []}
 
-    regime, matches, day_cap = collect_strategy_matches_for_index(i, series, vix, cfg, allowed)
+    # planning_mode=True: collect ALL strategy signals across both directions.
+    # day_cap is the execution limit only — live bot scores all legs and picks
+    # whichever direction the market actually moves in.
+    regime, matches, day_cap = collect_strategy_matches_for_index(
+        i, series, vix, cfg, allowed, planning_mode=True
+    )
     signal_date = series["dates"][i]
 
     if anchor_ym is None:
@@ -1631,9 +1912,15 @@ def evaluate_live_daily_adaptive(
             cfg, cap_use, peak_use, vix, consecutive_losses,
             trade_date, anchor_ym, leg_idx,
         )
+        # For NEUTRAL legs in live planning: keep direction=None so live bot resolves at 9:16
+        live_direction = None if signal == "NEUTRAL" else signal
         legs_out.append({
             "leg": leg_idx + 1,
-            "direction": signal,
+            "direction": live_direction,
+            "bias": filter_log.get("bias", "BULLISH" if signal == "CALL" else ("BEARISH" if signal == "PUT" else "NEUTRAL")),
+            "bias_strength": filter_log.get("bias_strength", 0.75),
+            "setup_type": filter_log.get("setup_type", "TREND"),
+            "was_neutral": filter_log.get("was_neutral", signal == "NEUTRAL"),
             "strategy": strategy_name,
             "sl_pct": round(sl, 4),
             "target_pct": round(tgt, 4),

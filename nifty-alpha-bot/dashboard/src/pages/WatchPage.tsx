@@ -376,17 +376,17 @@ export function WatchPage() {
                 VWAP_CROSS:         'VWAP reclaim signal',
               }
               return (
-              <li key={s + i} className="flex items-center gap-3">
-                <span className="w-7 h-7 rounded-lg bg-cyan/10 border border-cyan/20 font-mono font-bold text-cyan flex items-center justify-center text-xs shrink-0">
-                  {i + 1}
-                </span>
-                <div>
-                  <div className="text-sm font-semibold text-text1">{s.replace(/_/g, ' ')}</div>
-                  {desc[s] && <div className="text-[10px] text-text3">{desc[s]}</div>}
-                </div>
-              </li>
-            )})}
-          </ol>
+                <li key={s + i} className="flex items-center gap-3">
+                  <span className="w-7 h-7 rounded-lg bg-cyan/10 border border-cyan/20 font-mono font-bold text-cyan flex items-center justify-center text-xs shrink-0">
+                    {i + 1}
+                  </span>
+                  <div>
+                    <div className="text-sm font-semibold text-text1">{s.replace(/_/g, ' ')}</div>
+                    {desc[s] && <div className="text-[10px] text-text3">{desc[s]}</div>}
+                  </div>
+                </li>
+              )
+            })}
             {!(data?.scan_order_sample?.length) && (
               <li className="text-text3 text-sm">—</li>
             )}

@@ -37,16 +37,23 @@ class Settings(BaseSettings):
     # ── Capital & Risk ────────────────────────────────────────────
     # At 25k with min 1 lot, actual risk per trade ~₹2,500-3,500.
     # Daily limit must allow at least 2 trades before stopping.
-    capital: float = 25000.0
-    max_daily_loss_pct: float = 0.25           # 25% = ₹6,250 (allows 2 full SL hits)
-    max_daily_loss_hard: float = 2000.0       # ₹7,000 absolute hard stop
+    capital: float = 100000.0
+    max_daily_loss_pct: float = 0.03           # 3% daily hard stop (scales with capital)
+    max_daily_loss_hard: float = 5000.0        # ₹5,000 absolute floor (early-capital safety)
     max_trades_per_day: int = 4
     max_open_positions: int = 1
     lot_size: int = 65
-    live_max_lots: int = 1
-    max_lots: int = 1
-    thursday_max_lots: int = 1
+    live_max_lots: int = 3                     # Live cap (safety — raise to 5 only in paper)
+    max_lots: int = 5                          # Paper/backtest cap
+    thursday_max_lots: int = 2                 # Expiry day cap
     paper_mode: bool = False
+
+    # ── Conviction / Impulse-based sizing ─────────────────────────
+    # A+ = EXTREME impulse + STRONG_BEAR/BULL → deep OTM + max lots
+    aplus_risk_pct: float = 0.05               # 5% risk for A+ setups (3-4 lots at ₹1L)
+    aplus_otm_steps: int = 2                   # Steps OTM for A+ (100 pts for Nifty 50-step)
+    strong_otm_steps: int = 1                  # 1-OTM for STRONG trend (not A+)
+    normal_otm_steps: int = 0                  # ATM for normal signals
 
     # ── Engine: intraday (5m ORB/VWAP/…) vs daily_adaptive (same as daily backtest) ──
     trading_engine: str = "daily_adaptive"
@@ -142,7 +149,7 @@ class Settings(BaseSettings):
     break_even_trigger_pct: float = 0.08
 
     # ── Signal quality thresholds ─────────────────────────────────────
-    min_confidence_score: float = 70.0      # min confidence to take any trade
+    min_confidence_score: float = 65.0      # min confidence to take any trade (was 70 — lowered for more frequency)
     min_quality_score: float = 4.0          # min quality score (0-5 scale)
     structure_exit_min_profit_pct: float = 0.05  # only exit on structure break if 5%+ in profit
 

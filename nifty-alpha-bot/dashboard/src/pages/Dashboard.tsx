@@ -18,6 +18,27 @@ export function Dashboard() {
   const isActive = position.state === 'ACTIVE'
   const [expandedTradeId, setExpandedTradeId] = useState<string | null>(null)
   const [tooltipTradeId, setTooltipTradeId] = useState<string | null>(null)
+  const [oppHistory, setOppHistory] = useState<Array<{mins: number, score: number, impulse: string}>>([])
+
+  useEffect(() => {
+    const scan = (botStatus as any)?.last_scan
+    if (!scan) return
+    const allConfs = [
+      ...(scan.candidates?.map((c: any) => c.confidence) ?? []),
+      ...(scan.scans?.map((s: any) => s.confidence) ?? []),
+    ]
+    if (!allConfs.length) return
+    const score = Math.max(...allConfs)
+    const impulse = marketState?.trend_impulse_grade ?? 'NONE'
+    const now = new Date()
+    const mins = now.getHours() * 60 + now.getMinutes() - (9 * 60 + 15)
+    if (mins < 0 || mins > 375) return
+    setOppHistory(prev => {
+      const last = prev[prev.length - 1]
+      if (last && Math.abs(last.mins - mins) < 4) return prev
+      return [...prev.slice(-48), { mins, score, impulse }]
+    })
+  }, [(botStatus as any)?.last_scan, marketState?.trend_impulse_grade]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const todayTrades = useMemo(() =>
     trades.filter(t => t.trade_date === new Date().toISOString().slice(0, 10)), [trades])
@@ -339,18 +360,115 @@ export function Dashboard() {
                           {lastTradeStrategy && <span className="text-text3 font-mono text-[10px]">{lastTradeStrategy.replace(/_/g, ' ')}</span>}
                         </div>
                       )}
-                  {/* IMPROVEMENT 7: Why no trades panel */}
-                  {marketOpen && todayTrades.length === 0 && botStatus?.state === 'RUNNING' && (
-                    <div className="mt-3 bg-surface/60 border border-line/25 rounded-xl p-3">
-                      <div className="text-xs font-bold text-text3 mb-2">No trades taken yet today</div>
-                      <div className="space-y-1.5 text-[11px] text-text3">
-                        <div>Market regime: <span className="text-text2 font-semibold">{marketState?.trend_state ?? 'Unknown'}</span> (waiting for trend)</div>
-                        {marketState?.regime_vix != null && (
-                          <div>VIX: <span className="text-text2 font-semibold">{marketState.regime_vix.toFixed(1)}</span> — no directional edge yet</div>
-                        )}
-                        <div>Signals scanned: <span className="text-text2 font-semibold">{botStatus.last_scan?.signals_detected ?? 0} setups found</span></div>
-                        <div className="text-green font-semibold mt-1">✔ This is correct bot behavior</div>
+                  {/* WHY NO TRADE panel — always visible when market open + no active position */}
+                  {marketOpen && (
+                    <div className="mt-3 space-y-2">
+                      {/* 3-factor decision grid */}
+                      <div className="text-[9px] font-bold text-text3 uppercase tracking-widest flex items-center gap-1.5 mb-1">
+                        <AlertCircle size={9} className="text-amber" />
+                        No Trade — Decision Factors
                       </div>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {[
+                          {
+                            label: 'Impulse',
+                            value: marketState?.trend_impulse_grade ?? 'NONE',
+                            ok: !['NONE', 'WEAK'].includes(marketState?.trend_impulse_grade ?? 'NONE'),
+                            need: 'MOD+',
+                          },
+                          {
+                            label: 'Conviction',
+                            value: `${Math.round((marketState?.trend_conviction ?? 0) * 100)}%`,
+                            ok: (marketState?.trend_conviction ?? 0) >= 0.4,
+                            need: '>40%',
+                          },
+                          {
+                            label: 'Best Conf',
+                            value: (() => {
+                              const scan = (botStatus as any)?.last_scan
+                              if (!scan?.scans?.length) return '—'
+                              const best = Math.max(...(scan.scans as any[]).map((s: any) => s.confidence))
+                              return best.toFixed(0)
+                            })(),
+                            ok: (() => {
+                              const scan = (botStatus as any)?.last_scan
+                              return (scan?.signals_detected ?? 0) > 0
+                            })(),
+                            need: '>55',
+                          },
+                        ].map(({ label, value, ok, need }) => (
+                          <div key={label} className={clsx(
+                            'rounded-xl p-2 border text-center',
+                            ok ? 'bg-green/5 border-green/20' : 'bg-red/5 border-red/15'
+                          )}>
+                            <div className="text-[8px] font-bold text-text3 uppercase tracking-wider">{label}</div>
+                            <div className={clsx('text-[10px] font-black mt-0.5 font-mono', ok ? 'text-green' : 'text-red')}>
+                              {ok ? '✓' : '✗'} {value}
+                            </div>
+                            <div className="text-[8px] text-text3 mt-0.5">need {need}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Last scan strategy table */}
+                      {(() => {
+                        const scan = (botStatus as any)?.last_scan
+                        const scans: any[] = scan?.scans ?? []
+                        if (!scans.length) return null
+                        const QT = 55
+                        return (
+                          <div className="bg-surface/40 rounded-xl border border-line/15 overflow-hidden">
+                            <div className="px-2.5 py-1.5 flex items-center justify-between border-b border-line/10">
+                              <span className="text-[8px] font-bold uppercase text-text3 tracking-wider">
+                                Last Scan · {scans.length} strategies
+                              </span>
+                              <span className={clsx('text-[8px] font-bold', scan.signals_detected > 0 ? 'text-green' : 'text-text3')}>
+                                {scan.signals_detected} passed quality
+                              </span>
+                            </div>
+                            {scans.slice(0, 6).map((s: any, i: number) => {
+                              const conf = s.confidence as number
+                              const reason = !s.passed
+                                ? conf < QT ? `${conf.toFixed(0)}<${QT}` : 'filtered'
+                                : null
+                              return (
+                                <div key={i} className="flex items-center justify-between px-2.5 py-1.5 border-b border-line/5 last:border-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className={clsx('w-1 h-1 rounded-full shrink-0', s.passed ? 'bg-green' : 'bg-red/40')} />
+                                    <span className="text-[9px] text-text2">{s.strategy.replace(/_/g, ' ')}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5">
+                                    {reason && <span className="text-[8px] text-text3/70">{reason}</span>}
+                                    <span className={clsx('text-[9px] font-bold font-mono w-5 text-right',
+                                      conf >= 65 ? 'text-green' : conf >= 50 ? 'text-amber' : 'text-text3/50'
+                                    )}>{conf.toFixed(0)}</span>
+                                    <span className={clsx('text-[8px] px-1 rounded font-bold',
+                                      s.passed ? 'bg-green/10 text-green' : 'bg-surface text-text3/40'
+                                    )}>{s.passed ? '✓' : '✗'}</span>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )
+                      })()}
+
+                      {/* Today's skip pills */}
+                      {(() => {
+                        const skips = (botStatus as any)?.skip_reasons as Array<{strategy: string, reason: string, conf?: number}> | undefined
+                        if (!skips?.length) return null
+                        const unique = skips.filter((s, i, a) => a.findIndex(x => x.strategy === s.strategy && x.reason === s.reason) === i).slice(0, 4)
+                        return (
+                          <div className="flex flex-wrap gap-1">
+                            <span className="text-[8px] font-bold text-amber uppercase self-center">Blocked:</span>
+                            {unique.map((s, i) => (
+                              <span key={i} className="text-[8px] px-1.5 py-0.5 bg-amber/8 border border-amber/15 rounded text-amber">
+                                {s.strategy?.replace(/_/g, ' ').split(' ').slice(0, 2).join(' ')} — {s.reason?.replace(/_/g, ' ').toLowerCase()}
+                              </span>
+                            ))}
+                          </div>
+                        )
+                      })()}
                     </div>
                   )}
                     </div>
@@ -389,15 +507,69 @@ export function Dashboard() {
                     </div>
                   </div>
                 )}
+                {/* Opportunity strength meter */}
+                <div className="mt-3">
+                  <div className="text-[9px] font-bold text-text3 uppercase tracking-widest flex items-center gap-1 mb-1.5">
+                    <Activity size={9} className="text-accent" />
+                    Opportunity Strength — Today's Session
+                  </div>
+                  <div className="relative h-6 bg-surface/60 rounded-lg overflow-hidden border border-line/15">
+                    {/* Phase background bands */}
+                    {[
+                      { start: 0, end: 15/375, color: 'rgba(245,158,11,0.08)' },
+                      { start: 15/375, end: 165/375, color: 'rgba(34,197,94,0.06)' },
+                      { start: 165/375, end: 255/375, color: 'rgba(99,102,241,0.06)' },
+                      { start: 255/375, end: 1, color: 'rgba(75,85,182,0.03)' },
+                    ].map((b, i) => (
+                      <div key={i} className="absolute top-0 bottom-0" style={{
+                        left: `${b.start * 100}%`,
+                        width: `${(b.end - b.start) * 100}%`,
+                        background: b.color,
+                      }} />
+                    ))}
+                    {/* Opportunity dots */}
+                    {oppHistory.map((pt, i) => {
+                      const x = (pt.mins / 375) * 100
+                      const color = pt.score >= 65 ? '#22c55e' : pt.score >= 45 ? '#f59e0b' : '#374151'
+                      const r = pt.score >= 65 ? 4 : pt.score >= 45 ? 3 : 2
+                      return (
+                        <div key={i} className="absolute rounded-full"
+                          style={{ left: `${x}%`, width: `${r * 2}px`, height: `${r * 2}px`,
+                            backgroundColor: color, top: '50%', transform: 'translate(-50%, -50%)', opacity: 0.85 }} />
+                      )
+                    })}
+                    {/* Current time cursor */}
+                    {marketOpen && (
+                      <div className="absolute top-0 bottom-0 w-px bg-accent/70"
+                        style={{ left: `${Math.min(100, Math.max(0, (nowMins - (9*60+15)) / 375 * 100))}%` }} />
+                    )}
+                    {/* No data message */}
+                    {oppHistory.length === 0 && (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <span className="text-[8px] text-text3/50">Populates as bot scans — check back after 9:15</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex justify-between text-[8px] text-text3/60 mt-0.5 font-mono px-0.5">
+                    <span>9:15</span><span>10:00</span><span>11:45</span><span>1:30</span><span>3:30</span>
+                  </div>
+                  <div className="flex items-center gap-3 mt-1 text-[8px] text-text3">
+                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green inline-block" /> Strong (65+)</span>
+                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-amber inline-block" /> Medium (45+)</span>
+                    <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-surface border border-line/30 inline-block" /> Weak</span>
+                    {oppHistory.length > 0 && <span className="ml-auto text-text3/60">{oppHistory.length} data points</span>}
+                  </div>
+                </div>
+
                 {/* Fix 6: Strategy cards with priority */}
                 <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
                   {(isDailyEngine ? [
                     { name: 'TREND CONT.', desc: 'EMA pullback in established trend', time: '9:16–13:00', icon: TrendingUp, color: 'text-green', stratKey: 'TREND_CONTINUATION', priority: 'HIGH' },
                     { name: 'BREAKOUT MOM.', desc: 'N-candle range breakout + volume', time: '9:16–13:00', icon: Zap, color: 'text-accent', stratKey: 'BREAKOUT_MOMENTUM', priority: 'HIGH' },
-                    { name: 'EMA CROSS', desc: 'Fresh EMA8/21 crossover entry', time: '9:16–13:00', icon: Waves, color: 'text-green', stratKey: 'EMA_FRESH_CROSS', priority: 'HIGH' },
-                    { name: 'REVERSAL SNAP', desc: 'RSI exhaustion + reversal candle', time: '9:16–13:00', icon: Target, color: 'text-red', stratKey: 'REVERSAL_SNAP', priority: 'MEDIUM' },
-                    { name: 'GAP FADE', desc: 'Fade opening gap fills', time: '9:16–10:30', icon: BarChart3, color: 'text-amber', stratKey: 'GAP_FADE', priority: 'MEDIUM' },
-                    { name: 'RANGE BOUNCE', desc: 'Prior-day S/R bounce (ranging)', time: '9:16–13:00', icon: Activity, color: 'text-cyan', stratKey: 'RANGE_BOUNCE', priority: 'MEDIUM' },
+                    { name: 'REVERSAL SNAP', desc: 'RSI exhaustion + reversal candle', time: '9:16–13:00', icon: Target, color: 'text-red', stratKey: 'REVERSAL_SNAP', priority: 'HIGH' },
+                    { name: 'GAP FADE', desc: 'Fade opening gap fills (enabled)', time: '9:16–10:30', icon: BarChart3, color: 'text-amber', stratKey: 'GAP_FADE', priority: 'MEDIUM' },
+                    { name: 'INSIDE BAR BRK', desc: 'Inside bar compression breakout', time: '9:16–13:00', icon: Layers, color: 'text-cyan', stratKey: 'INSIDE_BAR_BREAK', priority: 'MEDIUM' },
+                    { name: 'VWAP CROSS', desc: 'VWAP cross with prior deviation', time: '9:16–13:30', icon: Activity, color: 'text-accent', stratKey: 'VWAP_CROSS', priority: 'MEDIUM' },
                   ] : [
                     { name: 'ORB', desc: 'Opening range breakout', time: '9:15–10:00', icon: Zap, color: 'text-amber', stratKey: 'ORB', priority: 'HIGH' },
                     { name: 'EMA PULLBACK', desc: 'Pullback to EMA21 with trend', time: '9:30–13:00', icon: TrendingUp, color: 'text-green', stratKey: 'EMA_PULLBACK', priority: 'HIGH' },
@@ -926,6 +1098,8 @@ function MarketIntelligence() {
   const priority = ms?.strategy_priority ?? []
   const scores = ms?.trend_scores ?? {}
   const scan = botStatus?.last_scan
+  const impulseGrade = ms?.trend_impulse_grade ?? 'NONE'
+  const isEarlyDetection = impulseGrade === 'EXTREME' || impulseGrade === 'STRONG'
 
   return (
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }}
@@ -938,6 +1112,31 @@ function MarketIntelligence() {
         {ms?.regime_vix != null && <span className="text-[10px] text-text3 font-mono">VIX {ms.regime_vix.toFixed(1)}</span>}
       </div>
 
+      {/* Early Impulse Detection Alert */}
+      {isEarlyDetection && (
+        <motion.div
+          initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
+          className={clsx(
+            'rounded-xl px-3 py-2 border mb-3 flex items-center justify-between',
+            impulseGrade === 'EXTREME'
+              ? (trendKey.includes('BEAR') ? 'bg-red/15 border-red/40 text-red' : 'bg-green/15 border-green/40 text-green')
+              : (trendKey.includes('BEAR') ? 'bg-red/8 border-red/20 text-red' : 'bg-green/8 border-green/20 text-green')
+          )}>
+          <div className="flex items-center gap-2">
+            <Zap size={12} className="shrink-0" />
+            <span className="text-[11px] font-black uppercase tracking-wide">
+              {impulseGrade === 'EXTREME' ? 'Early Detection — EXTREME impulse (9:35)' : 'Early Detection — STRONG impulse'}
+            </span>
+          </div>
+          <span className={clsx(
+            'text-[10px] font-bold px-2 py-0.5 rounded-full',
+            impulseGrade === 'EXTREME' ? 'bg-current/20' : 'bg-current/10'
+          )}>
+            {impulseGrade}
+          </span>
+        </motion.div>
+      )}
+
       {/* Trend State Banner */}
       <div className={clsx('rounded-xl p-3.5 border mb-4 flex items-center justify-between', meta.bg, meta.border)}>
         <div className="flex items-center gap-2.5">
@@ -945,7 +1144,19 @@ function MarketIntelligence() {
             <TrendIcon size={16} className={meta.color} />
           </div>
           <div>
-            <div className={clsx('text-base font-black', meta.color)}>{meta.label}</div>
+            <div className="flex items-center gap-2">
+              <div className={clsx('text-base font-black', meta.color)}>{meta.label}</div>
+              {impulseGrade !== 'NONE' && impulseGrade !== 'WEAK' && (
+                <span className={clsx(
+                  'text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-wide',
+                  impulseGrade === 'EXTREME'
+                    ? 'bg-current/20 ' + meta.color
+                    : 'bg-current/10 ' + meta.color
+                )}>
+                  {impulseGrade}
+                </span>
+              )}
+            </div>
             <div className="text-[11px] text-text3 mt-0.5 max-w-[160px] leading-tight">{meta.desc}</div>
           </div>
         </div>
@@ -1091,31 +1302,51 @@ function MarketIntelligence() {
           </div>
           {(() => {
             const convPct = (ms.trend_conviction ?? 0)
-            const trendKey = ms.trend_state ?? 'NEUTRAL'
-            const biasLabel = trendKey.replace(/_/g, ' ')
+            const curTrendKey = ms.trend_state ?? 'NEUTRAL'
+            const curImpulse = ms.trend_impulse_grade ?? 'NONE'
+            const biasLabel = curTrendKey.replace(/_/g, ' ')
             const confLevel = convPct >= 0.7 ? 'HIGH' : convPct >= 0.4 ? 'MODERATE' : 'LOW'
             const confPct = Math.round(convPct * 100)
-            // Fix 3: Urgency level
-            let urgencyLabel = '🔴 NO EDGE — STAY OUT'
+            const isBear = curTrendKey === 'STRONG_BEAR' || curTrendKey === 'BEAR'
+            const isBull = curTrendKey === 'STRONG_BULL' || curTrendKey === 'BULL'
+            const isStrong = curTrendKey === 'STRONG_BEAR' || curTrendKey === 'STRONG_BULL'
+            const hasExtremeImpulse = curImpulse === 'EXTREME'
+            const hasStrongImpulse = curImpulse === 'STRONG' || curImpulse === 'EXTREME'
+
+            let urgencyLabel = '⬛ NO EDGE — STAY OUT'
             let urgencyCls = 'bg-surface border-line/30 text-text3'
             let actionLabel = 'WAIT — No edge right now'
             let actionCls = 'bg-surface text-text3'
-            if (convPct > 0.6 && (trendKey === 'STRONG_BULL' || trendKey === 'STRONG_BEAR')) {
+
+            if (hasExtremeImpulse && isStrong) {
+              // Highest grade: extreme impulse + confirmed strong trend
+              urgencyLabel = isBear ? '🔴 A+ PUT SETUP — ENTER NOW' : '🟢 A+ CALL SETUP — ENTER NOW'
+              urgencyCls = isBear ? 'bg-red/20 border-red/50 text-red' : 'bg-green/20 border-green/50 text-green'
+              actionLabel = isBear ? '⚡ STRONG BEAR IMPULSE — PUT' : '⚡ STRONG BULL IMPULSE — CALL'
+              actionCls = isBear ? 'bg-red/15 text-red' : 'bg-green/15 text-green'
+            } else if (convPct > 0.6 && isStrong) {
               urgencyLabel = '🟢 STRONG EDGE — ACT NOW'
-              urgencyCls = trendKey === 'STRONG_BULL' ? 'bg-green/15 border-green/30 text-green' : 'bg-red/15 border-red/30 text-red'
-              actionLabel = trendKey === 'STRONG_BULL' ? 'CALL SETUP — READY 🔥' : 'PUT SETUP — READY 🔥'
-              actionCls = trendKey === 'STRONG_BULL' ? 'bg-green/15 text-green' : 'bg-red/15 text-red'
-            } else if (convPct > 0.4 && (trendKey === 'BULL' || trendKey === 'BEAR')) {
+              urgencyCls = isBull ? 'bg-green/15 border-green/30 text-green' : 'bg-red/15 border-red/30 text-red'
+              actionLabel = isBull ? 'CALL SETUP — READY 🔥' : 'PUT SETUP — READY 🔥'
+              actionCls = isBull ? 'bg-green/15 text-green' : 'bg-red/15 text-red'
+            } else if (hasStrongImpulse && (isBear || isBull)) {
+              // Strong impulse with moderate trend — act with caution
+              urgencyLabel = isBear ? '🟡 IMPULSE BEAR — VALIDATE & ENTER' : '🟡 IMPULSE BULL — VALIDATE & ENTER'
+              urgencyCls = 'bg-amber/10 border-amber/25 text-amber'
+              actionLabel = isBear ? `EARLY BEAR SIGNAL — PUT BIAS` : `EARLY BULL SIGNAL — CALL BIAS`
+              actionCls = isBear ? 'bg-red/10 text-red' : 'bg-green/10 text-green'
+            } else if (convPct > 0.4 && (isBull || isBear)) {
               urgencyLabel = '🟡 MODERATE — WAIT FOR CONFIRMATION'
               urgencyCls = 'bg-amber/10 border-amber/25 text-amber'
-              actionLabel = `SCANNING — ${trendKey} BIAS`
-              actionCls = trendKey === 'BULL' ? 'bg-green/10 text-green' : 'bg-red/10 text-red'
-            } else if (trendKey === 'VOLATILE') {
+              actionLabel = `SCANNING — ${curTrendKey} BIAS`
+              actionCls = isBull ? 'bg-green/10 text-green' : 'bg-red/10 text-red'
+            } else if (curTrendKey === 'VOLATILE') {
               urgencyLabel = '🔴 HIGH RISK — AVOID'
               urgencyCls = 'bg-red/15 border-red/30 text-red'
               actionLabel = '⚠️ AVOID — High Risk'
               actionCls = 'bg-red/10 text-red'
             }
+
             return (
               <div className="space-y-2.5">
                 {/* Urgency banner */}
@@ -1132,6 +1363,18 @@ function MarketIntelligence() {
                     {confLevel} ({confPct}%)
                   </span>
                 </div>
+                {curImpulse !== 'NONE' && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-text3">Impulse</span>
+                    <span className={clsx('font-bold font-mono',
+                      curImpulse === 'EXTREME' ? (isBear ? 'text-red' : 'text-green')
+                      : curImpulse === 'STRONG' ? 'text-amber'
+                      : 'text-text3'
+                    )}>
+                      {curImpulse}
+                    </span>
+                  </div>
+                )}
                 <div className={clsx('px-3 py-2 rounded-xl text-xs font-bold text-center border', actionCls, 'border-current/20')}>
                   {actionLabel}
                 </div>

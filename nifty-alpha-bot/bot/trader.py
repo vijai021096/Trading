@@ -34,6 +34,7 @@ from shared.trend_detector import (
     detect_trend, TrendResult, TrendState, STRATEGY_PRIORITY_BY_TREND,
     SL_TARGET_BY_STRATEGY, TIER_PARAMS, assign_tier, compute_signal_confidence,
 )
+from shared.impulse_detector import detect_impulse, ImpulseResult, ImpulseGrade
 from shared.quality_filter import compute_trade_quality
 from shared.black_scholes import charges_estimate
 from shared.regime_classifier import (
@@ -94,6 +95,7 @@ class KiteORBTrader:
         self._heartbeat_count = 0
         self._current_regime: Optional[RegimeResult] = None
         self._current_trend: Optional[TrendResult] = None
+        self._current_impulse: Optional[ImpulseResult] = None
         self._daily_regime: Optional[DailyRegime] = None
         self._regime_logged_today = False
         self._trend_logged_today = False
@@ -101,6 +103,7 @@ class KiteORBTrader:
         self._day_stopped_profit = False
         self._last_trade_was_loss: bool = False
         self._last_exit_direction: Optional[str] = None
+        self._lost_directions_today: set = set()
         self._last_exit_reason: str = ""
         self._last_trade_pnl: float = 0.0
         self._last_trade_strategy: str = ""
@@ -111,6 +114,8 @@ class KiteORBTrader:
         self._ema_pullback_signal_used = False
         self._reclaim_signal_used = False
         self._daily_adaptive_plan: Optional[Dict[str, Any]] = None
+        self._late_trend_rescanned: bool = False   # guard: only one late-trend re-scan per day
+        self._last_entry_confidence: float = 0.0   # track confidence of last entry (for re-entry gate)
 
         # Restore SL-M order ID from persisted state (survives restarts)
         self._active_slm_order_id: Optional[str] = self.sm.position.slm_order_id or None
@@ -323,14 +328,18 @@ class KiteORBTrader:
             self._day_stopped_profit = False
             self._current_trend = None
             self._current_regime = None
+            self._current_impulse = None
             self._daily_regime = None
             self._active_slm_order_id = None
             self._daily_adaptive_plan = None
+            self._late_trend_rescanned = False
+            self._last_entry_confidence = 0.0
             self._orb_signal_used = False
             self._momentum_signal_used = False
             self._ema_pullback_signal_used = False
             self._reclaim_signal_used = False
             self._skip_reasons_today = []
+            self._lost_directions_today = set()
             self._last_exit_reason = ""
             self._last_trade_pnl = 0.0
             self._last_trade_strategy = ""
@@ -398,14 +407,31 @@ class KiteORBTrader:
         return regime
 
     def _detect_trend(self, candles: List[Dict], vix: float) -> TrendResult:
-        trend = detect_trend(candles, vix)
+        # ── Impulse detection (runs once per session after 4th candle) ──
+        # Cached so we don't re-evaluate on every loop tick.
+        if self._current_impulse is None and len(candles) >= 4:
+            self._current_impulse = detect_impulse(candles)
+            if self._current_impulse.grade != ImpulseGrade.NONE:
+                logger.info(
+                    f"IMPULSE: {self._current_impulse.grade} [{self._current_impulse.direction}] "
+                    f"bonus=+{self._current_impulse.bonus_votes} | {self._current_impulse.detail}"
+                )
+                _log_event("IMPULSE_DETECTED", {
+                    "grade": self._current_impulse.grade,
+                    "direction": self._current_impulse.direction,
+                    "bonus_votes": self._current_impulse.bonus_votes,
+                    "rules": self._current_impulse.rules,
+                    "detail": self._current_impulse.detail,
+                })
+
+        trend = detect_trend(candles, vix, impulse=self._current_impulse)
 
         if not self._trend_logged_today:
             self._trend_logged_today = True
             logger.info(
                 f"TREND: {trend.state.value} [{trend.direction}] | "
-                f"conviction={trend.conviction:.2f} risk_mult={trend.risk_multiplier:.2f} | "
-                f"{trend.detail}"
+                f"conviction={trend.conviction:.2f} risk_mult={trend.risk_multiplier:.2f} "
+                f"impulse={trend.impulse_grade} | {trend.detail}"
             )
             _log_event("TREND_DETECTED", {
                 "state": trend.state.value,
@@ -414,13 +440,14 @@ class KiteORBTrader:
                 "risk_multiplier": trend.risk_multiplier,
                 "strategy_priority": trend.strategy_priority,
                 "scores": trend.scores,
+                "impulse_grade": trend.impulse_grade,
             })
         elif (self._current_trend is not None and
               self._current_trend.state != trend.state):
             # Log state change intraday
             logger.info(
                 f"TREND SHIFT: {self._current_trend.state.value} → {trend.state.value} "
-                f"| conviction={trend.conviction:.2f} | {trend.detail}"
+                f"| conviction={trend.conviction:.2f} impulse={trend.impulse_grade} | {trend.detail}"
             )
             _log_event("TREND_SHIFTED", {
                 "from": self._current_trend.state.value,
@@ -428,6 +455,7 @@ class KiteORBTrader:
                 "conviction": trend.conviction,
                 "risk_multiplier": trend.risk_multiplier,
                 "scores": trend.scores,
+                "impulse_grade": trend.impulse_grade,
             })
 
         self._current_trend = trend
@@ -473,6 +501,34 @@ class KiteORBTrader:
             exit_reason = "TARGET_HIT"
         elif not self.cfg.use_slm_exit and current_price <= pos.current_sl:
             exit_reason = "SL_HIT"
+
+        # ── Time-based SL tightening (live bot) ──────────────────────
+        # After 45 mins with no meaningful momentum, tighten SL to -15%.
+        # Prevents theta decay from slowly bleeding the trade to full SL.
+        if not exit_reason and pos.entry_time is not None:
+            trade_age_min = (now - pos.entry_time).total_seconds() / 60
+            gain_now = (current_price - pos.entry_price) / pos.entry_price if pos.entry_price > 0 else 0
+            time_sl_threshold = pos.entry_price * (1 - 0.15)   # -15% time SL
+            if (trade_age_min >= 45
+                    and gain_now < 0.06          # no meaningful upward momentum
+                    and current_price < time_sl_threshold
+                    and pos.current_sl < time_sl_threshold):
+                # Tighten SL-M to -15% if it hasn't been tightened already
+                if self._active_slm_order_id and self.cfg.use_slm_exit:
+                    ok = self.client.modify_slm_order(self._active_slm_order_id, time_sl_threshold)
+                    if ok:
+                        pos.current_sl = time_sl_threshold
+                        logger.info(
+                            f"TIME_SL: trade_age={trade_age_min:.0f}min, no momentum (gain={gain_now*100:.1f}%) "
+                            f"→ SL tightened to ₹{time_sl_threshold:.2f} (-15%)"
+                        )
+                        _log_event("TIME_SL_TIGHTENED", {
+                            "trade_age_min": round(trade_age_min, 1),
+                            "gain_pct": round(gain_now * 100, 2),
+                            "new_sl": round(time_sl_threshold, 2),
+                        })
+                elif not self.cfg.use_slm_exit:
+                    exit_reason = "TIME_SL"    # software SL mode — exit immediately
 
         # Structure-based exit: exit early on trend reversal candles if already in profit
         if not exit_reason and len(candles) >= 2:
@@ -637,13 +693,46 @@ class KiteORBTrader:
 
         net = trade_record["net_pnl"]
         self.risk.record_trade(net)
-        # Track last trade outcome for skip-after-loss logic
+        # Track last trade outcome for skip-after-loss and direction correlation logic
         self._last_trade_was_loss = net < 0
         self._last_exit_direction = pos.direction
+        if net < 0:
+            self._lost_directions_today.add(pos.direction)  # hard-block this direction for today
         self._last_exit_reason = exit_reason
         self._last_trade_pnl = net
         self._last_trade_strategy = pos.strategy or ""
         _log_event("TRADE_CLOSED", trade_record)
+
+        # ── Re-entry after SL: inject a re-entry leg into the plan ──
+        # Only in STRONG_TREND_DOWN or MILD_TREND (high WR regimes where shakeouts are common)
+        # Direction block ALREADY added above — but we lift it for re-entry if quality is high
+        if (exit_reason == "SL_HIT"
+                and self._daily_adaptive_plan is not None
+                and self._last_entry_confidence >= 62.0
+                and net < 0):
+            plan_regime = self._daily_adaptive_plan.get("regime", "")
+            reentry_regime_ok = plan_regime in ("STRONG_TREND_DOWN", "MILD_TREND")
+            legs: list = list(self._daily_adaptive_plan.get("executable_legs") or [])
+            day_cap = int(self._daily_adaptive_plan.get("day_trade_cap") or self.cfg.max_trades_per_day)
+            trades_so_far = int(self.risk.status().get("trades_today", 0))
+            # Only re-enter if: regime ok, capacity left, no existing next leg
+            if reentry_regime_ok and trades_so_far < day_cap and trades_so_far >= len(legs):
+                reentry_leg: Dict[str, Any] = {
+                    "strategy": pos.strategy or "",
+                    "direction": pos.direction,
+                    "lots": 1,
+                    "sl_pct": 0.0,
+                    "target_pct": 0.0,
+                    "filter_log": {"reentry": True, "after_sl": True, "regime": plan_regime},
+                }
+                self._daily_adaptive_plan["executable_legs"] = legs + [reentry_leg]
+                # Lift direction block ONLY for this re-entry (remove from blocked set temporarily)
+                self._lost_directions_today.discard(pos.direction)
+                logger.info(
+                    f"REENTRY_INJECTED: {pos.strategy} {pos.direction} after SL "
+                    f"(regime={plan_regime}, conf={self._last_entry_confidence:.0f}) — "
+                    f"direction block lifted for re-entry"
+                )
 
         # Stop trading for the day if profit >= 2R
         if net > 0 and pos.entry_price > 0:
@@ -698,6 +787,24 @@ class KiteORBTrader:
 
         # Intraday "SKIP" day classifier does not block daily_adaptive (different model).
         effective_vix = float(vix if vix is not None else self._get_vix() or 14.0)
+
+        # ── Late trend entry: if morning scan found no signal but strong trend emerges 10-12am ──
+        # Reset plan to allow one fresh scan (only done once per day via _late_trend_rescanned guard)
+        curr_mins = now.hour * 60 + now.minute
+        if (self._daily_adaptive_plan is not None
+                and not self._late_trend_rescanned
+                and not (self._daily_adaptive_plan.get("executable_legs"))
+                and 10 * 60 <= curr_mins <= 12 * 60
+                and self._current_trend is not None
+                and self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR")
+                and (self._current_trend.conviction or 0) >= 0.72):
+            logger.info(
+                f"LATE_TREND_ENTRY: morning had no signal, but strong trend "
+                f"state={self._current_trend.state.value} conviction={self._current_trend.conviction:.2f} "
+                f"detected at {now.strftime('%H:%M')} — resetting plan for late scan"
+            )
+            self._daily_adaptive_plan = None
+            self._late_trend_rescanned = True  # prevent infinite re-scan loops
 
         if self._daily_adaptive_plan is None:
             df = self._refresh_daily_nifty_df()
@@ -804,6 +911,7 @@ class KiteORBTrader:
 
         # Pick best by composite score
         best_leg, best_conf, best_composite = max(scored, key=lambda x: x[2])
+        self._last_entry_confidence = best_conf  # store for re-entry quality gate
 
         # A+ filter: confidence >= threshold
         # In strong trend, allow A- (confidence >= 65) — market is forgiving
@@ -861,6 +969,18 @@ class KiteORBTrader:
             return
 
         logger.info(f"MOMENTUM OK: {momentum_reason}")
+
+        # ── Direction correlation block (hard block after any loss in same direction) ──
+        if leg["direction"] in self._lost_directions_today:
+            logger.info(
+                f"DIRECTION_BLOCKED: {leg['direction']} already lost today — "
+                f"skipping {leg['strategy']} to prevent overexposure"
+            )
+            self._skip_reasons_today.append({
+                "strategy": leg["strategy"], "direction": leg["direction"],
+                "reason": "Direction correlation block — this direction already lost today",
+            })
+            return
 
         # ── Skip after same-direction loss (prevents chasing failed setups) ──
         # Exception: strong trend days often shake out then resume — allow re-entry
@@ -1323,8 +1443,34 @@ class KiteORBTrader:
         spot = float(candle["close"])
         is_thursday = datetime.now().date().weekday() == 3
 
-        # OTM offset from daily regime (1-OTM on STRONG days for better R:R)
-        otm_offset = self._daily_regime.otm_offset if self._daily_regime else 0
+        # ── Conviction-based OTM selection ──────────────────────────
+        # A+ = EXTREME impulse + STRONG_BEAR/BULL → deep OTM (2 steps = 100pts)
+        # STRONG trend (not A+) → 1-OTM (50pts for better premium/R:R)
+        # Normal → ATM; regime otm_offset provides a fallback floor.
+        impulse_grade_now = (
+            self._current_impulse.grade
+            if self._current_impulse is not None else ImpulseGrade.NONE
+        )
+        trend_state_now = (
+            self._current_trend.state if self._current_trend is not None else None
+        )
+        _strong_states = (TrendState.STRONG_BEAR, TrendState.STRONG_BULL)
+        _is_aplus = (
+            impulse_grade_now == ImpulseGrade.EXTREME
+            and trend_state_now in _strong_states
+        )
+        _is_strong = (
+            trend_state_now in _strong_states
+            and not _is_aplus
+        )
+        if _is_aplus:
+            otm_offset = self.cfg.aplus_otm_steps
+        elif _is_strong:
+            otm_offset = self.cfg.strong_otm_steps
+        else:
+            regime_otm = self._daily_regime.otm_offset if self._daily_regime else 0
+            otm_offset = max(regime_otm, self.cfg.normal_otm_steps)
+
         target_strike_offset = otm_offset * self.cfg.strike_step
         if signal == "CALL":
             target_spot_for_strike = spot + target_strike_offset
@@ -1357,13 +1503,39 @@ class KiteORBTrader:
             logger.warning(f"Spread too wide: {spread_pct:.3f}")
             return
 
-        sl_pct = sl_pct_override
+        # ── Contextual SL (live bot) ─────────────────────────────────
+        # A+ setup: full wide SL (passed in as sl_pct_override, typically 0.30)
+        # STRONG trend: medium SL (~25%)
+        # Normal: tight SL (~20-22%) — don't give marginal setups extra room
+        if _is_aplus:
+            sl_pct = sl_pct_override              # full 30%
+        elif _is_strong:
+            sl_pct = sl_pct_override * 0.83       # ~25%
+        else:
+            sl_pct = sl_pct_override * 0.73       # ~22%
         if is_thursday:
             sl_pct = min(sl_pct, self.cfg.thursday_max_loss_pct)
+        logger.info(f"CONTEXTUAL_SL: setup={setup_tag} sl={sl_pct*100:.1f}% (base={sl_pct_override*100:.0f}%)")
 
-        # Regime-driven risk: STRONG=3%, normal=2%, RANGING=1% (intraday sizing only)
+        # ── Conviction-based risk scaling ────────────────────────────
+        # A+ (EXTREME impulse + STRONG trend) → 5% risk (3-4 lots at ₹1L)
+        # STRONG trend (non-A+)               → 3% risk (2 lots)
+        # Normal                              → regime/config default (1-2 lots)
         base_risk_pct = self._daily_regime.execution.risk_pct if self._daily_regime else self.cfg.risk_per_trade_pct
-        effective_risk_pct = base_risk_pct * risk_multiplier
+        if _is_aplus:
+            effective_risk_pct = self.cfg.aplus_risk_pct * risk_multiplier
+            logger.info(
+                f"CONVICTION_SIZING: A+ setup (EXTREME impulse + {trend_state_now}) "
+                f"→ risk={effective_risk_pct*100:.1f}% OTM={otm_offset} steps"
+            )
+        elif _is_strong:
+            effective_risk_pct = max(base_risk_pct * 1.50, 0.03) * risk_multiplier
+            logger.info(
+                f"CONVICTION_SIZING: STRONG trend ({trend_state_now}) "
+                f"→ risk={effective_risk_pct*100:.1f}% OTM={otm_offset} steps"
+            )
+        else:
+            effective_risk_pct = base_risk_pct * risk_multiplier
         if regime.regime == "VOLATILE":
             effective_risk_pct = min(effective_risk_pct, base_risk_pct * 0.50)
 
@@ -1407,10 +1579,13 @@ class KiteORBTrader:
             ),
             filter_log, vix,
         )
+        setup_tag = "A+" if _is_aplus else ("STRONG" if _is_strong else "STD")
+        otm_tag   = f"OTM+{otm_offset}" if otm_offset > 0 else "ATM"
         logger.info(
-            f"SIGNAL: {strategy} {signal} | trend={trend_info} regime={regime.regime} | "
+            f"SIGNAL: {strategy} {signal} [{setup_tag}/{otm_tag}] | "
+            f"trend={trend_info} impulse={impulse_grade_now} regime={regime.regime} | "
             f"confidence={conf_score:.0f} | "
-            f"{symbol} | LTP={opt_price:.2f} SL={sl_price:.2f} ({sl_pct*100:.0f}%) "
+            f"{symbol} strike={strike} | LTP={opt_price:.2f} SL={sl_price:.2f} ({sl_pct*100:.0f}%) "
             f"TGT={target_price:.2f} ({target_pct_override*100:.0f}%) | "
             f"Lots={lots} Qty={qty} Risk=₹{size_info['actual_risk']:.0f} "
             f"(risk_mult={risk_multiplier:.2f})"
@@ -1523,16 +1698,19 @@ class KiteORBTrader:
             "lots": lots, "qty": qty, "risk_amount": size_info["actual_risk"],
             "slm_order_id": self._active_slm_order_id,
             "order_type": "LIMIT" if self.cfg.use_limit_orders else "MARKET",
+            "setup_tag": setup_tag, "otm_offset": otm_offset,
+            "impulse_grade": impulse_grade_now,
         })
 
         daily_regime_name = self._daily_regime.name if self._daily_regime else "?"
-        otm_tag = f" | OTM={otm_offset}" if otm_offset > 0 else ""
+        _otm_label = f"OTM+{otm_offset}" if otm_offset > 0 else "ATM"
+        _setup_label = "A+" if _is_aplus else ("STRONG" if _is_strong else "STD")
         self._notify(
-            f"🚀 ENTRY: {strategy} {signal} [{daily_regime_name}]{otm_tag}\n"
+            f"🚀 ENTRY: {strategy} {signal} [{daily_regime_name}] [{_setup_label}/{_otm_label}]\n"
             f"{symbol}\n"
             f"Fill: ₹{fill_price:.0f} (slip {((fill_price - opt_price) / opt_price * 100):+.1f}%)\n"
             f"SL: ₹{sl_price:.0f} ({sl_pct*100:.0f}%) | TGT: ₹{target_price:.0f}\n"
-            f"Risk: ₹{size_info['actual_risk']:.0f} | SL-M: {'YES' if self._active_slm_order_id else 'NO'}"
+            f"Risk: ₹{size_info['actual_risk']:.0f} | Lots: {lots} | SL-M: {'YES' if self._active_slm_order_id else 'NO'}"
         )
 
     # ── Notifications ─────────────────────────────────────────────

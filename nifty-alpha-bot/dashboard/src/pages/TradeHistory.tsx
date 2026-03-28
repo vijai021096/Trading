@@ -37,13 +37,15 @@ import { FilterVisualizer } from '../components/panels/FilterVisualizer'
 
 const FILTERS = [
   'All',
+  'TREND_CONTINUATION',
+  'BREAKOUT_MOMENTUM',
+  'REVERSAL_SNAP',
+  'GAP_FADE',
+  'INSIDE_BAR_BREAK',
+  'VWAP_CROSS',
   'ORB',
-  'MOMENTUM_BREAKOUT',
   'EMA_PULLBACK',
   'VWAP_RECLAIM',
-  'RELAXED_ORB',
-  'MEAN_REVERSION',
-  'RANGE_FADE',
   'Wins',
   'Losses',
 ] as const
@@ -307,6 +309,23 @@ export function TradeHistory() {
       map.set(t.trade_date, d)
     })
     return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date))
+  }, [filtered])
+
+  const weeklyBreakdown = useMemo(() => {
+    const map = new Map<string, { weekKey: string; startDate: string; pnl: number; count: number; wins: number }>()
+    filtered.forEach((t) => {
+      const d = new Date(t.trade_date + 'T00:00:00')
+      const dow = (d.getDay() + 6) % 7  // 0=Mon…6=Sun
+      const mon = new Date(d)
+      mon.setDate(d.getDate() - dow)
+      const weekKey = mon.toISOString().slice(0, 10)
+      const entry = map.get(weekKey) ?? { weekKey, startDate: weekKey, pnl: 0, count: 0, wins: 0 }
+      entry.pnl += t.net_pnl
+      entry.count++
+      if (t.net_pnl >= 0) entry.wins++
+      map.set(weekKey, entry)
+    })
+    return Array.from(map.values()).sort((a, b) => a.weekKey.localeCompare(b.weekKey))
   }, [filtered])
 
   return (
@@ -601,6 +620,101 @@ export function TradeHistory() {
         </motion.div>
       )}
 
+      {/* Weekly performance breakdown */}
+      {weeklyBreakdown.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.13 }}
+          className="glass-card rounded-2xl p-5 neon-border"
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-7 h-7 rounded-lg bg-amber/10 flex items-center justify-center">
+              <Calendar size={13} className="text-amber" />
+            </div>
+            <span className="text-[11px] font-bold tracking-[0.15em] uppercase text-text3">Weekly Performance</span>
+            <span className="ml-auto text-[10px] text-text3">{weeklyBreakdown.length} weeks · target 3–4 trades/week</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="border-b border-line/15">
+                  {['Week', 'Mon', 'Trades', 'W/L', 'Win%', 'Net P&L', 'P&L Bar'].map(h => (
+                    <th key={h} className={clsx(
+                      'py-2 px-3 text-[9px] font-bold tracking-wider uppercase text-text3',
+                      h === 'Net P&L' || h === 'P&L Bar' || h === 'Trades' || h === 'Win%' ? 'text-right' : 'text-left'
+                    )}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {weeklyBreakdown.slice().reverse().map((w) => {
+                  const wr = w.count > 0 ? (w.wins / w.count) * 100 : 0
+                  const maxAbs = Math.max(...weeklyBreakdown.map(x => Math.abs(x.pnl)), 1)
+                  const barWidth = Math.min(100, (Math.abs(w.pnl) / maxAbs) * 100)
+                  const tradeGoalMet = w.count >= 3
+                  const mon = new Date(w.startDate + 'T00:00:00')
+                  const weekLabel = `W${Math.ceil((mon.getDate() + (new Date(mon.getFullYear(), mon.getMonth(), 1).getDay() + 6) % 7) / 7)}`
+                  const monthLabel = mon.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })
+                  return (
+                    <tr key={w.weekKey} className="border-b border-line/8 hover:bg-card/30 transition-colors">
+                      <td className="py-2 px-3 font-mono text-text3 text-[10px]">{weekLabel} {monthLabel}</td>
+                      <td className="py-2 px-3 text-text3 text-[10px] font-mono">{w.startDate.slice(5)}</td>
+                      <td className="py-2 px-3 text-right">
+                        <span className={clsx(
+                          'font-bold font-mono',
+                          tradeGoalMet ? 'text-green' : w.count >= 2 ? 'text-amber' : 'text-red'
+                        )}>
+                          {w.count}
+                        </span>
+                        {tradeGoalMet && <span className="text-[8px] text-green ml-1">✓</span>}
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono">
+                        <span className="text-green">{w.wins}W</span>
+                        <span className="text-text3 mx-0.5">/</span>
+                        <span className="text-red">{w.count - w.wins}L</span>
+                      </td>
+                      <td className={clsx('py-2 px-3 text-right font-mono font-bold', wr >= 50 ? 'text-green' : w.count === 0 ? 'text-text3' : 'text-red')}>
+                        {w.count > 0 ? `${wr.toFixed(0)}%` : '—'}
+                      </td>
+                      <td className={clsx('py-2 px-3 text-right font-mono font-bold', w.pnl >= 0 ? 'text-green' : 'text-red')}>
+                        {w.pnl >= 0 ? '+' : ''}{formatRs(w.pnl)}
+                      </td>
+                      <td className="py-2 px-3 text-right">
+                        <div className="flex items-center justify-end gap-1 min-w-[80px]">
+                          <div className="flex-1 h-1.5 rounded-full bg-surface overflow-hidden">
+                            <div
+                              className={clsx('h-full rounded-full transition-all', w.pnl >= 0 ? 'bg-green' : 'bg-red')}
+                              style={{ width: `${barWidth}%` }}
+                            />
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          {/* Goal summary */}
+          <div className="mt-3 pt-3 border-t border-line/15 flex items-center gap-4 flex-wrap text-[10px] text-text3">
+            <span>
+              <span className="text-green font-bold">{weeklyBreakdown.filter(w => w.count >= 3).length}</span> weeks hit 3+ trade goal
+            </span>
+            <span>·</span>
+            <span>
+              Avg <span className="text-text2 font-bold">
+                {weeklyBreakdown.length > 0 ? (filtered.length / weeklyBreakdown.length).toFixed(1) : '0'} trades/week
+              </span>
+            </span>
+            <span>·</span>
+            <span>
+              Best week: <span className="text-green font-bold">{Math.max(...weeklyBreakdown.map(w => w.count), 0)} trades</span>
+            </span>
+          </div>
+        </motion.div>
+      )}
+
       {/* Performance heatmap */}
       {dailyBreakdown.length > 0 && (
         <motion.div
@@ -797,14 +911,17 @@ export function TradeHistory() {
                           <span
                             className={clsx(
                               'px-1.5 py-0.5 rounded text-[10px] font-bold',
+                              t.strategy === 'TREND_CONTINUATION' && 'bg-green/10 text-green',
+                              t.strategy === 'BREAKOUT_MOMENTUM' && 'bg-accent/10 text-accent-l',
+                              t.strategy === 'REVERSAL_SNAP' && 'bg-red/10 text-red',
+                              t.strategy === 'GAP_FADE' && 'bg-amber/10 text-amber',
+                              t.strategy === 'INSIDE_BAR_BREAK' && 'bg-purple-400/10 text-purple-400',
+                              t.strategy === 'VWAP_CROSS' && 'bg-blue-400/10 text-blue-400',
                               t.strategy === 'ORB' && 'bg-amber/10 text-amber',
                               t.strategy === 'VWAP_RECLAIM' && 'bg-cyan/10 text-cyan',
-                              t.strategy === 'MEAN_REVERSION' && 'bg-accent/10 text-accent-l',
                               t.strategy === 'EMA_PULLBACK' && 'bg-green/10 text-green',
                               t.strategy === 'MOMENTUM_BREAKOUT' && 'bg-green/15 text-green border border-green/20',
-                              t.strategy === 'RELAXED_ORB' && 'bg-amber/8 text-amber border border-amber/15',
-                              t.strategy === 'RANGE_FADE' && 'bg-cyan/8 text-cyan border border-cyan/15',
-                              !['ORB', 'VWAP_RECLAIM', 'MEAN_REVERSION', 'EMA_PULLBACK', 'MOMENTUM_BREAKOUT', 'RELAXED_ORB', 'RANGE_FADE'].includes(
+                              !['TREND_CONTINUATION','BREAKOUT_MOMENTUM','REVERSAL_SNAP','GAP_FADE','INSIDE_BAR_BREAK','VWAP_CROSS','ORB','VWAP_RECLAIM','EMA_PULLBACK','MOMENTUM_BREAKOUT'].includes(
                                 t.strategy,
                               ) && 'bg-surface text-text2',
                             )}

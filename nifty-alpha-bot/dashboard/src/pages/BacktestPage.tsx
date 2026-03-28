@@ -6,7 +6,7 @@ import axios from 'axios'
 import {
   FlaskConical, Play, Loader2, TrendingUp, TrendingDown, Target, BarChart3,
   Calendar, AlertCircle, ChevronDown, ArrowUpRight, Gauge, Trophy, Flame,
-  BarChart2, LineChart, Layers, Info, LayoutGrid, Activity
+  BarChart2, LineChart, Layers, Info, LayoutGrid, Activity, Clock, TrendingUp as RR
 } from 'lucide-react'
 import { AreaChart, Area, BarChart, Bar, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid, Cell } from 'recharts'
 
@@ -203,15 +203,20 @@ export function BacktestPage() {
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
 
           {/* Metrics grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            {[
-              { label: 'Total Return', key: 'total_net_pnl', prefix: '₹', color: (m.total_net_pnl ?? 0) >= 0 ? 'green' : 'red', icon: TrendingUp },
-              { label: 'Trades', key: 'total_trades', color: 'accent', icon: BarChart3 },
-              { label: 'Win Rate', key: 'win_rate_pct', suffix: '%', decimals: 1, color: (m.win_rate_pct ?? 0) >= 50 ? 'green' : 'red', icon: Target },
-              { label: 'Sharpe', key: 'sharpe_ratio', decimals: 2, color: (m.sharpe_ratio ?? 0) >= 1 ? 'green' : 'amber', icon: Gauge },
-              { label: 'Max DD', key: 'max_drawdown_abs', prefix: '₹', color: 'red', icon: TrendingDown },
-              { label: 'P. Factor', key: 'profit_factor', decimals: 2, color: (m.profit_factor ?? 0) >= 1 ? 'green' : 'red', icon: Trophy },
-            ].map(({ label, key, prefix, suffix, decimals, color, icon: Icon }) => {
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8 gap-3">
+            {(() => {
+              const rrRatio = (m.avg_win && m.avg_loss && m.avg_loss !== 0) ? Math.abs(m.avg_win / m.avg_loss) : 0
+              return [
+                { label: 'Net Return', key: 'total_net_pnl', prefix: '₹', color: (m.total_net_pnl ?? 0) >= 0 ? 'green' : 'red', icon: TrendingUp },
+                { label: 'Return %', key: 'return_pct', suffix: '%', decimals: 1, color: (m.return_pct ?? 0) >= 0 ? 'green' : 'red', icon: ArrowUpRight },
+                { label: 'Trades', key: 'total_trades', color: 'accent', icon: BarChart3 },
+                { label: 'Win Rate', key: 'win_rate_pct', suffix: '%', decimals: 1, color: (m.win_rate_pct ?? 0) >= 50 ? 'green' : 'red', icon: Target },
+                { label: 'P. Factor', key: 'profit_factor', decimals: 2, color: (m.profit_factor ?? 0) >= 1.5 ? 'green' : (m.profit_factor ?? 0) >= 1 ? 'amber' : 'red', icon: Trophy },
+                { label: 'RR Ratio', key: '_rr', _val: rrRatio, suffix: 'x', decimals: 2, color: rrRatio >= 2 ? 'green' : rrRatio >= 1 ? 'amber' : 'red', icon: Flame },
+                { label: 'Sharpe', key: 'sharpe_ratio', decimals: 2, color: (m.sharpe_ratio ?? 0) >= 1 ? 'green' : 'amber', icon: Gauge },
+                { label: 'Max DD', key: 'max_drawdown_pct', suffix: '%', decimals: 1, color: 'red', icon: TrendingDown },
+              ]
+            })().map(({ label, key, _val, prefix, suffix, decimals, color, icon: Icon }) => {
               const borderMap = { green: 'border-l-green', red: 'border-l-red', accent: 'border-l-accent', amber: 'border-l-amber' } as const
               const textMap = { green: 'text-green', red: 'text-red', accent: 'text-accent', amber: 'text-amber' } as const
               const valTextMap = { green: 'text-green-l', red: 'text-red-l', accent: 'text-accent-l', amber: 'text-amber' } as const
@@ -223,10 +228,34 @@ export function BacktestPage() {
                   <Icon size={11} className={textMap[color as keyof typeof textMap]} />
                 </div>
                 <div className={clsx('text-[18px] font-extrabold font-mono stat-val', valTextMap[color as keyof typeof valTextMap])}>
-                  <CountUp end={Math.abs(m[key] ?? 0)} prefix={prefix ?? ''} suffix={suffix ?? ''} duration={0.8} decimals={decimals ?? 0} separator="," preserveValue />
+                  <CountUp end={Math.abs(_val ?? m[key] ?? 0)} prefix={prefix ?? ''} suffix={suffix ?? ''} duration={0.8} decimals={decimals ?? 0} separator="," preserveValue />
                 </div>
               </motion.div>
             )})}
+          </div>
+
+          {/* Key stats strip */}
+          <div className="glass rounded-2xl px-5 py-3 flex flex-wrap gap-6 text-sm">
+            {[
+              { label: 'Start Capital', val: `₹${(m.final_capital - m.total_net_pnl).toLocaleString('en-IN', { maximumFractionDigits: 0 })}` },
+              { label: 'Final Capital', val: `₹${(m.final_capital ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, highlight: true },
+              { label: 'Avg Win', val: `₹${(m.avg_win ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, green: true },
+              { label: 'Avg Loss', val: `₹${Math.abs(m.avg_loss ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, red: true },
+              { label: 'Wins / Losses', val: `${m.win_count ?? 0}W / ${m.loss_count ?? 0}L` },
+              { label: 'Max DD (abs)', val: `₹${(m.max_drawdown_abs ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, red: true },
+              { label: 'Calmar', val: (m.calmar_ratio ?? 0).toFixed(2) },
+              { label: 'Consec. Losses', val: String(m.consecutive_losses_max ?? 0) },
+              { label: 'Avg Duration', val: `${(m.avg_trade_duration_min ?? 0).toFixed(0)} min` },
+              { label: 'Trading Days', val: String(m.trading_days ?? 0) },
+            ].map(({ label, val, highlight, green, red }) => (
+              <div key={label} className="flex flex-col min-w-[100px]">
+                <span className="text-[9px] font-bold tracking-widest uppercase text-text3">{label}</span>
+                <span className={clsx('text-sm font-bold font-mono mt-0.5',
+                  highlight ? 'text-accent-l' : green ? 'text-green-l' : red ? 'text-red-l' : 'text-text1')}>
+                  {val}
+                </span>
+              </div>
+            ))}
           </div>
 
           {/* Equity curve */}
@@ -263,26 +292,60 @@ export function BacktestPage() {
           {/* Monthly returns */}
           {result.monthly && result.monthly.length > 0 && (
             <div className="glass-card rounded-2xl p-5 neon-border">
-              <div className="flex items-center gap-2 mb-3">
-                <Calendar size={13} className="text-cyan" />
-                <span className="text-[11px] font-bold tracking-[0.15em] uppercase text-text3">Monthly Returns</span>
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <div className="flex items-center gap-2">
+                  <Calendar size={13} className="text-cyan" />
+                  <span className="text-[11px] font-bold tracking-[0.15em] uppercase text-text3">Monthly P&amp;L</span>
+                </div>
+                <span className="text-[10px] text-text3">
+                  {result.monthly.filter((m: any) => (m.net_pnl ?? m.return ?? 0) >= 0).length} green / {result.monthly.filter((m: any) => (m.net_pnl ?? m.return ?? 0) < 0).length} red months
+                </span>
               </div>
-              <div className="h-[180px]">
+              <div className="h-[200px]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={result.monthly}>
+                  <BarChart data={result.monthly} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1c2244" />
-                    <XAxis dataKey="month" tick={{ fill: '#4b5c82', fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <XAxis dataKey="month" tick={{ fill: '#4b5c82', fontSize: 9 }} axisLine={false} tickLine={false} angle={-25} textAnchor="end" height={40} />
                     <YAxis tick={{ fill: '#4b5c82', fontSize: 10 }} axisLine={false} tickLine={false}
                       tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} />
                     <Tooltip contentStyle={{ background: '#111631', border: '1px solid #1c2244', borderRadius: '10px', fontSize: 11 }}
-                      formatter={(v: number) => [`₹${v.toLocaleString('en-IN')}`, 'Return']} />
-                    <Bar dataKey="return" radius={[4, 4, 0, 0]}>
+                      formatter={(v: number, name: string) => [`₹${v.toLocaleString('en-IN')}`, name === 'net_pnl' ? 'Net P&L' : 'Return']}
+                      labelFormatter={(l) => `Month: ${l}`} />
+                    <Bar dataKey="net_pnl" radius={[4, 4, 0, 0]} maxBarSize={32}>
                       {result.monthly.map((d: any, i: number) => (
-                        <Cell key={i} fill={(d.return ?? 0) >= 0 ? '#10b981' : '#ef4444'} opacity={0.7} />
+                        <Cell key={i} fill={(d.net_pnl ?? d.return ?? 0) >= 0 ? '#10b981' : '#ef4444'} opacity={0.8} />
                       ))}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
+              </div>
+              {/* Monthly table */}
+              <div className="mt-3 overflow-x-auto rounded-xl border border-line/15">
+                <table className="w-full text-[10px] min-w-[500px]">
+                  <thead>
+                    <tr className="border-b border-line/20 bg-card/30">
+                      <th className="text-left py-2 px-3 text-text3 uppercase tracking-wider font-bold">Month</th>
+                      <th className="text-right py-2 px-3 text-text3 uppercase tracking-wider font-bold">Trades</th>
+                      <th className="text-right py-2 px-3 text-text3 uppercase tracking-wider font-bold">WR%</th>
+                      <th className="text-right py-2 px-3 text-text3 uppercase tracking-wider font-bold">Net P&L</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.monthly.map((mo: any, i: number) => {
+                      const pnl = mo.net_pnl ?? mo.return ?? 0
+                      return (
+                        <tr key={i} className="border-b border-line/8 hover:bg-card/20">
+                          <td className="py-1.5 px-3 font-mono text-text2">{mo.month}</td>
+                          <td className="py-1.5 px-3 text-right font-mono text-text3">{mo.trades ?? '—'}</td>
+                          <td className="py-1.5 px-3 text-right font-mono text-text2">{mo.win_rate != null ? `${mo.win_rate.toFixed(0)}%` : '—'}</td>
+                          <td className={clsx('py-1.5 px-3 text-right font-mono font-bold', pnl >= 0 ? 'text-green' : 'text-red')}>
+                            {pnl >= 0 ? '+' : ''}₹{pnl.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
@@ -428,39 +491,59 @@ export function BacktestPage() {
                 <ChevronDown size={14} className={clsx('text-text3 transition-transform', showTrades && 'rotate-180')} />
               </button>
               {showTrades && (
-                <div className="overflow-x-auto max-h-[400px]">
-                  <table className="w-full text-[11px]">
+                <div className="overflow-x-auto max-h-[500px]">
+                  <table className="w-full text-[10px] min-w-[900px]">
                     <thead className="sticky top-0 bg-panel">
                       <tr className="border-b border-line/20">
-                        <th className="text-left py-2 px-4 text-[9px] font-bold tracking-wider text-text3 uppercase">Date</th>
-                        <th className="text-left py-2 px-4 text-[9px] font-bold tracking-wider text-text3 uppercase">Dir</th>
-                        <th className="text-right py-2 px-4 text-[9px] font-bold tracking-wider text-text3 uppercase">Entry</th>
-                        <th className="text-right py-2 px-4 text-[9px] font-bold tracking-wider text-text3 uppercase">Exit</th>
-                        <th className="text-left py-2 px-4 text-[9px] font-bold tracking-wider text-text3 uppercase">Reason</th>
-                        <th className="text-right py-2 px-4 text-[9px] font-bold tracking-wider text-text3 uppercase">P&L</th>
+                        <th className="text-left py-2 px-3 text-[9px] font-bold tracking-wider text-text3 uppercase">#</th>
+                        <th className="text-left py-2 px-3 text-[9px] font-bold tracking-wider text-text3 uppercase">Date</th>
+                        <th className="text-left py-2 px-3 text-[9px] font-bold tracking-wider text-text3 uppercase">Strategy</th>
+                        <th className="text-left py-2 px-3 text-[9px] font-bold tracking-wider text-text3 uppercase">Regime</th>
+                        <th className="text-left py-2 px-3 text-[9px] font-bold tracking-wider text-text3 uppercase">Dir</th>
+                        <th className="text-right py-2 px-3 text-[9px] font-bold tracking-wider text-text3 uppercase">Lots</th>
+                        <th className="text-right py-2 px-3 text-[9px] font-bold tracking-wider text-text3 uppercase">Entry</th>
+                        <th className="text-right py-2 px-3 text-[9px] font-bold tracking-wider text-text3 uppercase">Exit</th>
+                        <th className="text-left py-2 px-3 text-[9px] font-bold tracking-wider text-text3 uppercase">Exit Reason</th>
+                        <th className="text-right py-2 px-3 text-[9px] font-bold tracking-wider text-text3 uppercase">Net P&L</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {result.trades.map((t: any, i: number) => (
-                        <tr key={i} className="border-b border-line/8 hover:bg-card/30">
-                          <td className="py-2 px-4 font-mono text-text3">{t.date || t.trade_date}</td>
-                          <td className="py-2 px-4">
-                            <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold',
-                              t.direction === 'CALL' ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>{t.direction}</span>
-                          </td>
-                          <td className="py-2 px-4 text-right font-mono text-text2">₹{(t.entry_price ?? 0).toFixed(1)}</td>
-                          <td className="py-2 px-4 text-right font-mono text-text2">₹{(t.exit_price ?? 0).toFixed(1)}</td>
-                          <td className="py-2 px-4">
-                            <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold',
-                              t.exit_reason === 'TARGET' ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>
-                              {t.exit_reason?.replace(/_/g, ' ')}
-                            </span>
-                          </td>
-                          <td className={clsx('py-2 px-4 text-right font-mono font-bold', (t.net_pnl ?? 0) >= 0 ? 'text-green' : 'text-red')}>
-                            {(t.net_pnl ?? 0) >= 0 ? '+' : ''}₹{(t.net_pnl ?? 0).toLocaleString('en-IN')}
-                          </td>
-                        </tr>
-                      ))}
+                      {result.trades.map((t: any, i: number) => {
+                        const pnl = t.net_pnl ?? 0
+                        const isTarget = (t.exit_reason ?? '').includes('TARGET') || (t.exit_reason ?? '').includes('EOD_PROFIT')
+                        const isSl = (t.exit_reason ?? '').includes('SL') || (t.exit_reason ?? '').includes('TIME_SL')
+                        const stColor = strategyColor(t.strategy ?? '')
+                        return (
+                          <tr key={i} className="border-b border-line/8 hover:bg-card/30">
+                            <td className="py-2 px-3 font-mono text-text3">{i+1}</td>
+                            <td className="py-2 px-3 font-mono text-text3">{t.trade_date ?? t.date}</td>
+                            <td className="py-2 px-3">
+                              <span className="font-bold text-[9px]" style={{ color: stColor }}>
+                                {(t.strategy ?? 'UNKNOWN').replace(/_/g, ' ')}
+                              </span>
+                            </td>
+                            <td className="py-2 px-3">
+                              <span className="text-[9px] text-text3">{(t.regime ?? '—').replace(/_/g, ' ')}</span>
+                            </td>
+                            <td className="py-2 px-3">
+                              <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold',
+                                t.direction === 'CALL' ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>{t.direction}</span>
+                            </td>
+                            <td className="py-2 px-3 text-right font-mono text-text2">{t.lots ?? 1}</td>
+                            <td className="py-2 px-3 text-right font-mono text-text2">₹{(t.entry_price ?? 0).toFixed(1)}</td>
+                            <td className="py-2 px-3 text-right font-mono text-text2">₹{(t.exit_price ?? 0).toFixed(1)}</td>
+                            <td className="py-2 px-3">
+                              <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold',
+                                isTarget ? 'bg-green/10 text-green' : isSl ? 'bg-red/10 text-red' : 'bg-surface text-text3')}>
+                                {(t.exit_reason ?? '—').replace(/_/g, ' ')}
+                              </span>
+                            </td>
+                            <td className={clsx('py-2 px-3 text-right font-mono font-bold', pnl >= 0 ? 'text-green' : 'text-red')}>
+                              {pnl >= 0 ? '+' : ''}₹{pnl.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                            </td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>

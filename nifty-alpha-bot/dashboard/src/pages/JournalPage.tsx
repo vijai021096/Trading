@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react'
+import { useMemo, useState, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import CountUp from 'react-countup'
 import clsx from 'clsx'
@@ -72,13 +72,15 @@ const API_STRATEGIES = [
 ] as const
 
 const KNOWN_STRATEGIES = [
+  'TREND_CONTINUATION',
+  'BREAKOUT_MOMENTUM',
+  'REVERSAL_SNAP',
+  'GAP_FADE',
+  'INSIDE_BAR_BREAK',
+  'VWAP_CROSS',
   'ORB',
-  'RELAXED_ORB',
-  'VWAP_RECLAIM',
-  'MEAN_REVERSION',
-  'RANGE_FADE',
   'EMA_PULLBACK',
-  'GAP_MOMENTUM',
+  'VWAP_RECLAIM',
 ] as const
 
 function normalizeExit(reason?: string): string {
@@ -249,11 +251,14 @@ function gradeStyles(grade: 'A' | 'B' | 'C' | 'D') {
 
 function strategyChipClass(strategy?: string): string {
   const s = strategy || ''
-  if (s.includes('ORB')) return 'bg-amber/10 text-amber border-amber/20'
+  if (s.includes('TREND_CONTINUATION')) return 'bg-green/10 text-green border-green/20'
+  if (s.includes('BREAKOUT')) return 'bg-accent/10 text-accent-l border-accent/20'
+  if (s.includes('REVERSAL')) return 'bg-red/10 text-red-l border-red/20'
+  if (s.includes('GAP')) return 'bg-amber/10 text-amber border-amber/20'
+  if (s.includes('INSIDE')) return 'bg-cyan/10 text-cyan border-cyan/20'
   if (s.includes('VWAP')) return 'bg-cyan/10 text-cyan border-cyan/20'
-  if (s.includes('MEAN') || s.includes('RANGE') || s.includes('FADE')) return 'bg-accent/10 text-accent-l border-accent/20'
-  if (s.includes('EMA')) return 'bg-cyan/8 text-cyan border-cyan/15'
-  if (s.includes('GAP')) return 'bg-amber/8 text-amber border-amber/15'
+  if (s.includes('ORB')) return 'bg-amber/10 text-amber border-amber/20'
+  if (s.includes('EMA')) return 'bg-green/8 text-green border-green/15'
   return 'bg-surface text-text2 border-line/25'
 }
 
@@ -348,6 +353,11 @@ export function JournalPage() {
     }
   }, [filtered])
 
+  // Auto-load live trades on mount
+  useEffect(() => {
+    if (source === 'live') loadJournal()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   const emptyAfterLoad = !loading && !error && trades.length === 0
 
   return (
@@ -363,9 +373,9 @@ export function JournalPage() {
             <BookOpen size={18} className="text-green" />
           </div>
           <div>
-            <h1 className="text-lg font-extrabold text-text1 tracking-tight">Auto Trade Journal</h1>
+            <h1 className="text-lg font-extrabold text-text1 tracking-tight">Trade Journal</h1>
             <p className="text-[11px] text-text3">
-              Load backtest trades, then review narratives, filters, execution quality, and grades
+              Live &amp; backtest trade analysis — monthly breakdown, strategy performance, entry narratives &amp; grades
             </p>
           </div>
         </div>
@@ -587,6 +597,99 @@ export function JournalPage() {
               })}
             </div>
           )}
+
+          {/* Monthly breakdown & strategy breakdown */}
+          {trades.length > 0 && !dateFilter && strategyFilter === 'ALL' && (() => {
+            const monthMap = new Map<string, { pnl: number; trades: number; wins: number }>()
+            const stratMap = new Map<string, { pnl: number; trades: number; wins: number }>()
+            for (const t of trades) {
+              const month = String(t.trade_date ?? '').slice(0, 7)
+              const strat = t.strategy ?? 'UNKNOWN'
+              const pnl = num(t.net_pnl)
+              if (month) {
+                const m = monthMap.get(month) ?? { pnl: 0, trades: 0, wins: 0 }
+                m.pnl += pnl; m.trades++; if (pnl >= 0) m.wins++
+                monthMap.set(month, m)
+              }
+              const s = stratMap.get(strat) ?? { pnl: 0, trades: 0, wins: 0 }
+              s.pnl += pnl; s.trades++; if (pnl >= 0) s.wins++
+              stratMap.set(strat, s)
+            }
+            const months = Array.from(monthMap.entries()).sort(([a], [b]) => a.localeCompare(b))
+            const strats = Array.from(stratMap.entries()).sort(([,a], [,b]) => b.pnl - a.pnl)
+            return (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Monthly breakdown */}
+                <div className="glass-card rounded-2xl p-4 neon-border">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Calendar size={13} className="text-cyan" />
+                    <span className="text-[11px] font-bold uppercase tracking-widest text-text3">Monthly P&L</span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[10px]">
+                      <thead>
+                        <tr className="border-b border-line/20">
+                          <th className="text-left py-1.5 px-2 text-text3 uppercase font-bold">Month</th>
+                          <th className="text-right py-1.5 px-2 text-text3 uppercase font-bold">Trades</th>
+                          <th className="text-right py-1.5 px-2 text-text3 uppercase font-bold">WR%</th>
+                          <th className="text-right py-1.5 px-2 text-text3 uppercase font-bold">Net P&L</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {months.map(([month, d]) => {
+                          const wr = d.trades ? (d.wins / d.trades * 100) : 0
+                          return (
+                            <tr key={month} className="border-b border-line/8 hover:bg-card/20 cursor-pointer"
+                              onClick={() => setDateFilter(dateFilter === month ? '' : month)}>
+                              <td className="py-1.5 px-2 font-mono text-text2">{month}</td>
+                              <td className="py-1.5 px-2 text-right font-mono text-text3">{d.trades}</td>
+                              <td className="py-1.5 px-2 text-right font-mono text-text2">{wr.toFixed(0)}%</td>
+                              <td className={clsx('py-1.5 px-2 text-right font-mono font-bold', d.pnl >= 0 ? 'text-green' : 'text-red')}>
+                                {d.pnl >= 0 ? '+' : ''}₹{d.pnl.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                {/* Strategy breakdown */}
+                <div className="glass-card rounded-2xl p-4 neon-border">
+                  <div className="flex items-center gap-2 mb-3">
+                    <BarChart3 size={13} className="text-accent" />
+                    <span className="text-[11px] font-bold uppercase tracking-widest text-text3">Strategy Breakdown</span>
+                  </div>
+                  <div className="space-y-2">
+                    {strats.map(([strat, d]) => {
+                      const wr = d.trades ? (d.wins / d.trades * 100) : 0
+                      return (
+                        <div key={strat} className="flex items-center gap-3 cursor-pointer hover:bg-surface/30 rounded-lg p-1.5"
+                          onClick={() => setStrategyFilter(strategyFilter === strat ? 'ALL' : strat)}>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <span className={clsx('text-[10px] font-bold truncate', strategyChipClass(strat).split(' ').find(c => c.startsWith('text-')))}>
+                                {strat.replace(/_/g, ' ')}
+                              </span>
+                              <span className={clsx('text-[10px] font-bold font-mono ml-2', d.pnl >= 0 ? 'text-green' : 'text-red')}>
+                                {d.pnl >= 0 ? '+' : ''}₹{d.pnl.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-[9px] text-text3">{d.trades} trades · {wr.toFixed(0)}% WR</span>
+                              <div className="flex-1 h-1 bg-surface rounded-full overflow-hidden">
+                                <div className={clsx('h-full rounded-full', d.pnl >= 0 ? 'bg-green' : 'bg-red')} style={{ width: `${wr}%` }} />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
 
           <div className="space-y-3">
             {filtered.map((trade, i) => {
