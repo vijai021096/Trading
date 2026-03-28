@@ -410,6 +410,7 @@ async def heartbeat_loop():
                 "risk_multiplier": trend_ev.get("risk_multiplier"),
                 "strategy_priority": trend_ev.get("strategy_priority", []),
                 "trend_scores": trend_ev.get("scores", {}),
+                "trend_impulse_grade": trend_ev.get("impulse_grade"),
                 "regime": regime_ev.get("regime"),
                 "regime_atr_ratio": regime_ev.get("atr_ratio"),
                 "regime_adx": regime_ev.get("adx_proxy"),

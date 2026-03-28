@@ -59,7 +59,9 @@ def compute_metrics(
         if dd > max_drawdown_abs:
             max_drawdown_abs = dd
 
-    max_drawdown_pct = (max_drawdown_abs / capital) * 100
+    # Standard peak-to-trough drawdown: denominator is the peak equity, not starting capital.
+    # Using starting capital gives inflated % when equity has grown well above it.
+    max_drawdown_pct = (max_drawdown_abs / peak) * 100 if peak > 0 else 0.0
 
     # ── Sharpe Ratio (annualized) ─────────────────────────────────
     # Use daily P&L bucketing

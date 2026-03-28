@@ -84,6 +84,7 @@ export interface MarketState {
   risk_multiplier: number | null
   strategy_priority: string[]
   trend_scores: Record<string, number>
+  trend_impulse_grade: string | null
   regime: string | null
   regime_atr_ratio: number | null
   regime_adx: number | null

@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from shared.impulse_detector import ImpulseGrade, ImpulseResult, detect_impulse
 from shared.indicators import ema_at, rsi_at, vwap_at
 
 
@@ -93,6 +94,7 @@ class TrendResult:
     risk_multiplier: float      # final risk scaling factor (VIX-adjusted)
     strategy_priority: List[str]
     scores: Dict[str, int] = field(default_factory=dict)
+    impulse_grade: str = ImpulseGrade.NONE   # NONE/WEAK/STRONG/EXTREME
     detail: str = ""
 
 
@@ -100,6 +102,7 @@ def detect_trend(
     candles: List[Dict[str, Any]],
     vix: float = 15.0,
     structure_lookback: int = 5,
+    impulse: Optional["ImpulseResult"] = None,
 ) -> TrendResult:
     """
     Detect intraday bullish/bearish trend from recent 5-min candles.
@@ -108,9 +111,37 @@ def detect_trend(
         candles:            All intraday 5-min candles so far (oldest first)
         vix:                Current India VIX value
         structure_lookback: How many recent candles to analyse for HH/LL structure
+        impulse:            Optional pre-computed ImpulseResult from detect_impulse().
+                            When provided and directions agree, bonus votes are added
+                            to the score — allowing early confirmation before the slow
+                            5-indicator path has 14 candles.
     """
+    # ── Fast path: impulse-only detection (before slow indicators have data) ─
+    # If we have fewer than 14 candles but a qualifying impulse exists, use it
+    # to produce an early directional verdict rather than defaulting to NEUTRAL.
     if len(candles) < 14:
-        # Too early in the day to have reliable signals
+        if (
+            impulse is not None
+            and impulse.grade in (ImpulseGrade.EXTREME, ImpulseGrade.STRONG)
+            and impulse.direction in ("CALL", "PUT")
+        ):
+            # Map STRONG→BEAR/BULL, EXTREME→STRONG_BEAR/STRONG_BULL
+            if impulse.grade == ImpulseGrade.EXTREME:
+                state     = TrendState.STRONG_BEAR if impulse.direction == "PUT" else TrendState.STRONG_BULL
+            else:
+                state     = TrendState.BEAR if impulse.direction == "PUT" else TrendState.BULL
+            direction = impulse.direction
+            conviction = 0.80   # high but not 1.0 — slow path hasn't confirmed yet
+            risk_mult  = TREND_RISK_MULTIPLIER[state]
+            return TrendResult(
+                state=state,
+                direction=direction,
+                conviction=conviction,
+                risk_multiplier=round(risk_mult, 2),
+                strategy_priority=STRATEGY_PRIORITY_BY_TREND[state],
+                impulse_grade=impulse.grade,
+                detail=f"EARLY via impulse ({impulse.grade}) — {impulse.detail}",
+            )
         return TrendResult(
             state=TrendState.NEUTRAL,
             direction="NEUTRAL",
@@ -192,16 +223,58 @@ def detect_trend(
         else:
             scores["structure"] = 0
 
-    # ── Aggregate score → state ───────────────────────────────────
-    total = sum(scores.values())
-    n_votes = len(scores)
-    conviction = abs(total) / n_votes if n_votes > 0 else 0.0
+    # ── 5b. Bearish confirmation pattern: 3 consecutive lower highs + VWAP rejection
+    # Three straight candles each making a lower high confirms a downtrend structure.
+    # VWAP rejection (high touched VWAP but close below it) adds institutional confirmation.
+    if vwap is not None and len(candles) >= 3:
+        last3 = candles[-3:]
+        h3 = [float(c["high"]) for c in last3]
+        consecutive_lower_highs = h3[2] < h3[1] < h3[0]
+        last_c = last3[-1]
+        vwap_rejection = float(last_c["high"]) >= vwap * 0.9995 and float(last_c["close"]) < vwap
+        if consecutive_lower_highs and vwap_rejection:
+            scores["bear_pattern"] = -1
 
-    # VIX dampens conviction (high uncertainty = less directional confidence)
-    if vix > 20:
-        conviction *= 0.80
-    if vix > 25:
-        conviction *= 0.75
+    # ── Impulse bonus votes ───────────────────────────────────────
+    # Add impulse bonus only when impulse direction agrees with slow-path lean.
+    # "Lean" = sign of current slow-path total before impulse is added.
+    # DIRECTION CONSISTENCY CHECK: conflicting impulse is silently ignored + logged.
+    impulse_grade     = ImpulseGrade.NONE
+    impulse_bonus     = 0
+    impulse_conflict  = False
+    slow_total        = sum(scores.values())
+    slow_direction    = "CALL" if slow_total > 0 else ("PUT" if slow_total < 0 else "NEUTRAL")
+
+    if impulse is not None and impulse.grade != ImpulseGrade.NONE:
+        impulse_grade = impulse.grade
+        if impulse.direction == slow_direction or slow_direction == "NEUTRAL":
+            impulse_bonus = impulse.bonus_votes
+            # Apply sign: PUT impulse → negative bonus, CALL → positive
+            if impulse.direction == "PUT":
+                impulse_bonus = -abs(impulse_bonus)
+        else:
+            # Direction conflict — impulse says one thing, indicators say the opposite.
+            # Do NOT add bonus; flag for logging so the operator can see what happened.
+            impulse_conflict = True
+            from loguru import logger as _logger
+            _logger.info(
+                f"IMPULSE_CONFLICT: grade={impulse_grade} dir={impulse.direction} "
+                f"conflicts with indicator lean={slow_direction} (slow_total={slow_total}) — bonus ignored"
+            )
+
+    # ── Aggregate score → state ───────────────────────────────────
+    total   = slow_total + impulse_bonus
+    n_votes = len(scores)   # denominator stays slow-path only (for conviction purity)
+    conviction = abs(slow_total) / n_votes if n_votes > 0 else 0.0
+
+    # VIX dampens conviction ONLY when direction is genuinely unclear (NEUTRAL).
+    # Bear/bull trend days naturally carry higher VIX — don't penalise them twice.
+    is_directional = abs(total) >= 2
+    if not is_directional:
+        if vix > 20:
+            conviction *= 0.80
+        if vix > 25:
+            conviction *= 0.75
 
     if total >= 4:
         state = TrendState.STRONG_BULL
@@ -219,17 +292,26 @@ def detect_trend(
         state = TrendState.NEUTRAL
         direction = "NEUTRAL"
 
-    # Risk multiplier — start from trend-state base, cap based on VIX
+    # Risk multiplier — start from trend-state base.
+    # VIX caps apply in all states, but are less aggressive for confirmed trends.
     risk_mult = TREND_RISK_MULTIPLIER[state]
-    if vix > 20:
-        risk_mult = min(risk_mult, 0.75)
-    if vix > 25:
-        risk_mult = min(risk_mult, 0.55)
-    if vix > 30:
-        risk_mult = min(risk_mult, 0.40)   # Extreme VIX: very small size
+    if state in (TrendState.STRONG_BULL, TrendState.STRONG_BEAR):
+        # Confirmed strong trend — only extreme VIX warrants a cap
+        if vix > 30:
+            risk_mult = min(risk_mult, 0.55)
+    else:
+        if vix > 20:
+            risk_mult = min(risk_mult, 0.75)
+        if vix > 25:
+            risk_mult = min(risk_mult, 0.55)
+        if vix > 30:
+            risk_mult = min(risk_mult, 0.40)
 
     # Build detail string for logging
-    parts = [f"score={total}/{n_votes}", f"conviction={conviction:.2f}"]
+    parts = [
+        f"base_score={slow_total} bonus={impulse_bonus:+d} → total={total}",
+        f"conviction={conviction:.2f}",
+    ]
     if ema9 and ema21:
         parts.append(f"EMA9={ema9:.0f} EMA21={ema21:.0f}")
     if vwap:
@@ -238,6 +320,8 @@ def detect_trend(
         parts.append(f"RSI={rsi:.1f}")
     parts.append(f"VIX={vix:.1f}")
     parts.append(f"votes={scores}")
+    if impulse_grade != ImpulseGrade.NONE:
+        parts.append(f"impulse={impulse_grade}({impulse_bonus:+d}{'✓' if not impulse_conflict else ' CONFLICT'})")
 
     return TrendResult(
         state=state,
@@ -246,6 +330,7 @@ def detect_trend(
         risk_multiplier=round(risk_mult, 2),
         strategy_priority=STRATEGY_PRIORITY_BY_TREND[state],
         scores=scores,
+        impulse_grade=impulse_grade,
         detail=" | ".join(parts),
     )
 

@@ -279,6 +279,11 @@ def main():
     # Run comprehensive diagnostics
     _run_bot_diagnostics(settings, client, access_token)
 
+    # Run module self-test — validates impulse detector, trend detector,
+    # all 4 strategy engines, quality filter and risk manager with synthetic data
+    from bot.startup_validator import run_startup_validation
+    run_startup_validation(paper_mode=settings.paper_mode)
+
     trader = KiteORBTrader(client)
     trader.run()
 
