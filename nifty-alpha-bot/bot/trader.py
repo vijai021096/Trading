@@ -1818,6 +1818,17 @@ class KiteORBTrader:
                         "last_trade_pnl": self._last_trade_pnl,
                         "last_trade_strategy": self._last_trade_strategy,
                         "skip_reasons": self._skip_reasons_today[-5:],
+                        "move_from_open_pct": (
+                            round((float(candles[-1]["close"]) - float(candles[0]["open"]))
+                                  / float(candles[0]["open"]) * 100, 3)
+                            if candles and len(candles) >= 2
+                            and float(candles[0].get("open", 0)) > 0
+                            else 0.0
+                        ),
+                        "nifty_open_price": float(candles[0]["open"]) if candles else 0.0,
+                        "trend_state_live": self._current_trend.state.value if self._current_trend else "NEUTRAL",
+                        "trend_conviction_live": round(self._current_trend.conviction, 3) if self._current_trend else 0.0,
+                        "impulse_grade_live": (self._current_impulse.grade if self._current_impulse else "NONE"),
                     }
                     logger.info(
                         f"HEARTBEAT [{mode}] "

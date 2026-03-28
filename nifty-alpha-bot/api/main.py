@@ -313,8 +313,10 @@ async def heartbeat_loop():
             # Bot process check
             bot_running = POSITION_FILE.exists() and pos_state != "IDLE"
 
-            # Nifty price (from cache, not a live call)
+            # Nifty price + open (from Kite OHLC)
             nifty_price = None
+            _nifty_open = 0.0
+            _move_from_open_pct = 0.0
             try:
                 token = (os.environ.get("KITE_ACCESS_TOKEN") or "").strip()
                 if not token:
@@ -324,8 +326,15 @@ async def heartbeat_loop():
                     from kiteconnect import KiteConnect
                     k = KiteConnect(api_key=settings.kite_api_key)
                     k.set_access_token(token)
-                    q = k.ltp(["NSE:NIFTY 50"])
-                    nifty_price = q.get("NSE:NIFTY 50", {}).get("last_price")
+                    q = k.ohlc(["NSE:NIFTY 50"])
+                    nifty_data = q.get("NSE:NIFTY 50", {})
+                    nifty_price = nifty_data.get("last_price")
+                    _nifty_open = nifty_data.get("ohlc", {}).get("open", 0)
+                    if _nifty_open and _nifty_open > 0 and nifty_price:
+                        _move_from_open_pct = round((nifty_price - _nifty_open) / _nifty_open * 100, 3)
+                    else:
+                        _nifty_open = 0.0
+                        _move_from_open_pct = 0.0
             except Exception:
                 pass
 
@@ -382,6 +391,8 @@ async def heartbeat_loop():
                 "market_open": market_open,
                 "thinking": thinking,
                 "nifty_price": nifty_price,
+                "nifty_open_price": _nifty_open,
+                "move_from_open_pct": _move_from_open_pct,
                 "kite_connected": kite_status.get("kite_connected", False),
                 "kite_token_saved": kite_status.get("kite_token_saved", False),
                 "trades_today": len(today_trades),

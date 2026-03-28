@@ -478,22 +478,33 @@ export function Dashboard() {
                         const trendSt = marketState?.trend_state ?? 'NEUTRAL'
                         const scan = (botStatus as any)?.last_scan
                         const bestConf = scan?.scans?.length ? Math.max(...(scan.scans as any[]).map((s: any) => s.confidence)) : 0
+                        const moveFromOpen: number = (botStatus as any)?.move_from_open_pct ?? 0
                         const impulseOk = ['STRONG', 'EXTREME'].includes(impulse)
                         const convOk = conviction >= 0.4
                         const confOk = bestConf >= 65
-                        if (impulseOk && convOk && confOk) return null  // everything passes — don't show
+                        if (impulseOk && convOk && confOk) return null
 
-                        const items: Array<{met: boolean, text: string}> = []
+                        const items: Array<{text: string}> = []
                         if (!impulseOk) {
-                          if (trendDir === 'PUT' || trendSt.includes('BEAR'))
-                            items.push({ met: false, text: 'Bearish move >0.7% in 15 min OR 3 lower highs + VWAP rejection' })
-                          else if (trendDir === 'CALL' || trendSt.includes('BULL'))
-                            items.push({ met: false, text: 'Bullish move >0.7% in 15 min OR EMA pullback + expansion' })
-                          else
-                            items.push({ met: false, text: 'Directional impulse: move >0.7% from open' })
+                          const isBear = trendDir === 'PUT' || trendSt.includes('BEAR')
+                          const isBull = trendDir === 'CALL' || trendSt.includes('BULL')
+                          if (isBear) {
+                            const needed = -0.70
+                            items.push({ text: `Move from open: ${moveFromOpen >= 0 ? '+' : ''}${moveFromOpen.toFixed(2)}% → need ${needed.toFixed(2)}%` })
+                          } else if (isBull) {
+                            const needed = 0.70
+                            items.push({ text: `Move from open: +${moveFromOpen.toFixed(2)}% → need +${needed.toFixed(2)}%` })
+                          } else {
+                            items.push({ text: `Move from open: ${moveFromOpen >= 0 ? '+' : ''}${moveFromOpen.toFixed(2)}% → need ±0.70%` })
+                          }
                         }
-                        if (!convOk) items.push({ met: false, text: `Conviction > 40%  (currently ${(conviction * 100).toFixed(0)}%)` })
-                        if (!confOk) items.push({ met: false, text: `Strategy confidence > 65  (best: ${bestConf > 0 ? bestConf.toFixed(0) : '—'})` })
+                        if (!convOk) {
+                          const needed = 40
+                          const curr = Math.round(conviction * 100)
+                          const gap = needed - curr
+                          items.push({ text: `Conviction +${gap}% needed (${curr} → ${needed})` })
+                        }
+                        if (!confOk) items.push({ text: `Strategy confidence > 65  (best: ${bestConf > 0 ? bestConf.toFixed(0) : '—'})` })
 
                         return (
                           <div className="bg-amber/5 rounded-xl p-2.5 border border-amber/15">
@@ -504,7 +515,7 @@ export function Dashboard() {
                               {items.map((w, i) => (
                                 <div key={i} className="flex items-start gap-1.5 text-[9px] text-text3 leading-[14px]">
                                   <span className="text-amber mt-px shrink-0">•</span>
-                                  <span>{w.text}</span>
+                                  <span className="font-mono">{w.text}</span>
                                 </div>
                               ))}
                             </div>
@@ -959,6 +970,7 @@ export function Dashboard() {
             const regime    = marketState?.regime ?? ''
             const scan      = (botStatus as any)?.last_scan
             const bestConf  = scan?.scans?.length ? Math.max(...(scan.scans as any[]).map((s: any) => s.confidence)) : 0
+            const moveFromOpen: number = (botStatus as any)?.move_from_open_pct ?? 0
             const impulseOk = ['STRONG', 'EXTREME'].includes(impulse)
             const convOk    = conviction >= 0.4
             const confOk    = bestConf >= 65
@@ -972,20 +984,57 @@ export function Dashboard() {
               { label: 'Confidence',  current: bestConf > 0 ? bestConf.toFixed(0) : '—', need: '>65', ok: confOk },
             ]
 
+            // Dynamic waiting items with live values
             const waiting: string[] = []
             if (!impulseOk) {
-              if (trendDir === 'PUT' || trendSt.includes('BEAR')) {
-                waiting.push('Bearish move >0.7% from open')
-                waiting.push('3 lower highs + VWAP rejection')
-              } else if (trendDir === 'CALL' || trendSt.includes('BULL')) {
-                waiting.push('Bullish move >0.7% from open')
+              const isBear = trendDir === 'PUT' || trendSt.includes('BEAR')
+              const isBull = trendDir === 'CALL' || trendSt.includes('BULL')
+              if (isBear) {
+                waiting.push(`Move from open: ${moveFromOpen >= 0 ? '+' : ''}${moveFromOpen.toFixed(2)}% → need -0.70%`)
+                waiting.push('3 lower highs + VWAP rejection candle')
+              } else if (isBull) {
+                waiting.push(`Move from open: +${moveFromOpen.toFixed(2)}% → need +0.70%`)
                 waiting.push('EMA pullback + momentum expansion')
               } else {
-                waiting.push('Momentum expansion or ORB breakout')
+                waiting.push(`Move from open: ${moveFromOpen >= 0 ? '+' : ''}${moveFromOpen.toFixed(2)}% → need ±0.70%`)
               }
             }
-            if (!convOk)  waiting.push(`Conviction spike  (${(conviction*100).toFixed(0)}% → 40%+)`)
-            if (!confOk)  waiting.push(`Strategy edge > 65  (now ${bestConf > 0 ? bestConf.toFixed(0) : '—'})`)
+            if (!convOk) {
+              const curr = Math.round(conviction * 100)
+              const gap = 40 - curr
+              waiting.push(`Conviction +${gap}% needed (${curr} → 40)`)
+            }
+            if (!confOk) waiting.push(`Strategy confidence → 65  (now ${bestConf > 0 ? bestConf.toFixed(0) : '—'})`)
+
+            // ── Trigger Likelihood score (0–100) ──────────────────────────────────────
+            // Each factor contributes weighted points:
+            //   Impulse:    EXTREME=30, STRONG=20, WEAK=10, NONE=0
+            //   Conviction: linear 0–25 (conviction * 25)
+            //   Confidence: linear 0–20 (bestConf / 100 * 20, capped)
+            //   Move size:  abs(moveFromOpen) / 1.5 * 15, capped at 15
+            //   Time:       peak 9:20–11:00 = +10, 11:00–13:00 = +5, else +0
+            //   Regime:     STRONG_TREND_* = +10, MILD_TREND = +7, BREAKOUT = +5
+            const nowH = new Date().getHours()
+            const nowM = new Date().getMinutes()
+            const nowMinsLocal = nowH * 60 + nowM
+            const impulsePoints = impulse === 'EXTREME' ? 30 : impulse === 'STRONG' ? 20 : impulse === 'WEAK' ? 10 : 0
+            const convPoints = Math.min(25, conviction * 25)
+            const confPoints = Math.min(20, bestConf / 100 * 20)
+            const movePoints = Math.min(15, Math.abs(moveFromOpen) / 1.5 * 15)
+            const timePoints = (nowMinsLocal >= 9*60+20 && nowMinsLocal < 11*60) ? 10 : (nowMinsLocal >= 11*60 && nowMinsLocal < 13*60) ? 5 : 0
+            const regimePoints = regime.includes('STRONG_TREND') ? 10 : regime === 'MILD_TREND' ? 7 : regime === 'BREAKOUT' ? 5 : 0
+            const triggerScore = Math.round(Math.min(100, impulsePoints + convPoints + confPoints + movePoints + timePoints + regimePoints))
+            const triggerLabel = triggerScore >= 70 ? 'HIGH' : triggerScore >= 40 ? 'MEDIUM' : 'LOW'
+            const triggerColor = triggerScore >= 70 ? 'text-green' : triggerScore >= 40 ? 'text-amber' : 'text-text3'
+            const triggerBg    = triggerScore >= 70 ? 'bg-green/8 border-green/20' : triggerScore >= 40 ? 'bg-amber/8 border-amber/20' : 'bg-surface/40 border-line/20'
+            const triggerBarColor = triggerScore >= 70 ? 'bg-green' : triggerScore >= 40 ? 'bg-amber' : 'bg-text3/40'
+            const triggerReasons: string[] = []
+            if (impulsePoints >= 20) triggerReasons.push(`Strong impulse (${impulse})`)
+            else if (impulsePoints === 0) triggerReasons.push('No impulse yet')
+            if (convPoints >= 15) triggerReasons.push(`High conviction (${(conviction*100).toFixed(0)}%)`)
+            if (confPoints >= 12) triggerReasons.push(`Strategy edge ≥${bestConf.toFixed(0)}`)
+            if (movePoints >= 8) triggerReasons.push(`${Math.abs(moveFromOpen).toFixed(2)}% move from open`)
+            if (regimePoints >= 7) triggerReasons.push(`${regime.replace(/_/g, ' ')} regime`)
 
             const priority: string[] = marketState?.strategy_priority ?? []
             const topStrat = (priority[0] ?? (trendDir === 'PUT' ? 'TREND_CONTINUATION' : 'BREAKOUT_MOMENTUM')).replace(/_/g, ' ')
@@ -1049,7 +1098,7 @@ export function Dashboard() {
                       {waiting.slice(0, 3).map((w, i) => (
                         <div key={i} className="flex items-start gap-1.5 text-[9px] text-text3 leading-[14px]">
                           <span className="text-amber shrink-0 mt-px">•</span>
-                          <span>{w}</span>
+                          <span className="font-mono">{w}</span>
                         </div>
                       ))}
                     </div>
@@ -1058,7 +1107,7 @@ export function Dashboard() {
 
                 {/* Next Expected Trade */}
                 {trendDir !== 'NEUTRAL' ? (
-                  <div className={clsx('rounded-xl px-3 py-2.5 border',
+                  <div className={clsx('rounded-xl px-3 py-2.5 border mb-3',
                     trendDir === 'PUT' ? 'bg-red/8 border-red/20' : 'bg-green/8 border-green/20')}>
                     <div className="text-[9px] font-bold text-text3 uppercase tracking-widest mb-1">Next Expected Trade</div>
                     <div className={clsx('text-sm font-black flex items-center gap-1.5',
@@ -1072,10 +1121,42 @@ export function Dashboard() {
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-xl px-3 py-2.5 border border-line/20 bg-surface/40 text-center">
+                  <div className="rounded-xl px-3 py-2.5 border border-line/20 bg-surface/40 text-center mb-3">
                     <span className="text-[10px] text-text3">Watching for breakout or trend signal</span>
                   </div>
                 )}
+
+                {/* ── Trigger Likelihood ── */}
+                <div className={clsx('rounded-xl p-3 border', triggerBg)}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[9px] font-bold text-text3 uppercase tracking-widest flex items-center gap-1">
+                      <Timer size={9} /> Trigger Likelihood Today
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className={clsx('text-base font-black font-mono', triggerColor)}>{triggerScore}%</span>
+                      <span className={clsx('text-[9px] font-bold px-1.5 py-0.5 rounded-lg',
+                        triggerScore >= 70 ? 'bg-green/15 text-green' : triggerScore >= 40 ? 'bg-amber/15 text-amber' : 'bg-surface/60 text-text3')}>
+                        {triggerLabel}
+                      </span>
+                    </div>
+                  </div>
+                  {/* Progress bar */}
+                  <div className="h-1.5 bg-surface/60 rounded-full overflow-hidden mb-2">
+                    <div className={clsx('h-full rounded-full transition-all duration-500', triggerBarColor)}
+                         style={{ width: `${triggerScore}%` }} />
+                  </div>
+                  {/* Reasoning bullets */}
+                  {triggerReasons.length > 0 && (
+                    <div className="space-y-0.5">
+                      {triggerReasons.slice(0, 3).map((r, i) => (
+                        <div key={i} className="flex items-center gap-1 text-[9px] text-text3">
+                          <span className={triggerColor}>+</span>
+                          <span>{r}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </motion.div>
             )
           })()}
