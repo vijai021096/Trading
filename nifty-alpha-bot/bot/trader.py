@@ -364,6 +364,25 @@ class KiteORBTrader:
             if self.cfg.trading_engine.strip().lower() == "daily_adaptive" and load_anchor_ym() is None:
                 save_anchor_ym(today.year, today.month)
 
+            # Persist daily_regime + active_engine so API heartbeat can expose them to UI
+            try:
+                import json as _json
+                from pathlib import Path as _Path
+                _regime_file = _Path(__file__).parent.parent / "state" / "kite_bot_daily_regime.json"
+                _regime_name = self._daily_regime.name if self._daily_regime else None
+                _active_engine = (
+                    "BULL" if (_regime_name and ("BULL" in _regime_name or "UP" in _regime_name))
+                    else "BEAR" if (_regime_name and ("BEAR" in _regime_name or "DOWN" in _regime_name))
+                    else "NEUTRAL"
+                )
+                _regime_file.write_text(_json.dumps({
+                    "daily_regime": _regime_name,
+                    "active_engine": _active_engine,
+                    "classified_at": today.isoformat(),
+                }))
+            except Exception:
+                pass
+
             regime_msg = (
                 f"DAILY REGIME: {self._daily_regime.name}\n"
                 f"Direction: {self._daily_regime.allowed_direction or 'ANY'}\n"

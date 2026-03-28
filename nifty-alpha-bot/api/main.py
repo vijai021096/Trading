@@ -385,6 +385,15 @@ async def heartbeat_loop():
             # Latest scan cycle data
             scan_data = _get_latest_event("SCAN_CYCLE") or {}
 
+            # Daily regime + engine routing (written by trader when it classifies at market open)
+            regime_file = _STATE_DIR / "kite_bot_daily_regime.json"
+            daily_regime_data = {}
+            if regime_file.exists():
+                try:
+                    daily_regime_data = json.loads(regime_file.read_text())
+                except Exception:
+                    pass
+
             payload = {
                 "state": pos_state,
                 "market_status": market_status,
@@ -434,6 +443,9 @@ async def heartbeat_loop():
                     "candidates": scan_data.get("candidates", []),
                     "scans": scan_data.get("scans", []),
                 } if scan_data else None,
+                # Daily regime engine routing (set by bot at market open)
+                "daily_regime": daily_regime_data.get("daily_regime"),
+                "active_engine": daily_regime_data.get("active_engine"),
                 # Position details (if active)
                 "position": pos if pos_state == "ACTIVE" else None,
             }
@@ -1073,9 +1085,10 @@ async def run_backtest_api(body: dict):
 def _run_backtest_sync(months: int, capital: float, strategy: str = "BOTH",
                        start_date_str: Optional[str] = None,
                        end_date_str: Optional[str] = None) -> dict:
-    from backtest.data_downloader import download_nifty_spot, download_nifty_daily, download_india_vix
-    from backtest.backtest_engine import BacktestConfig, run_backtest
-    from backtest.daily_backtest_engine import DailyBacktestConfig, run_daily_backtest
+    from backtest.data_downloader import download_nifty_daily, download_india_vix
+    from backtest.combined_runner import CombinedBacktestConfig, run_combined_backtest
+    from backtest.daily_backtest_engine import DailyBacktestConfig
+    from backtest.bull_backtest_engine import BullBacktestConfig
     from datetime import date as date_cls
 
     sd = None
@@ -1090,22 +1103,19 @@ def _run_backtest_sync(months: int, capital: float, strategy: str = "BOTH",
     else:
         diff_months = months
 
-    vix_df = download_india_vix(months=max(diff_months, 24))
+    # Use cached data — no force_refresh (yfinance may be blocked on this server)
+    nifty_df = download_nifty_daily(months=max(diff_months, 6), force_refresh=False)
+    vix_df = download_india_vix(months=max(diff_months, 6), force_refresh=False)
 
-    use_daily = diff_months > 2
+    if nifty_df is None or len(nifty_df) < 20:
+        raise ValueError("No daily data available. Data cache may be empty.")
 
-    if use_daily:
-        nifty_df = download_nifty_daily(months=diff_months, force_refresh=True)
-        cfg = DailyBacktestConfig(capital=capital)
-        result = run_daily_backtest(nifty_df, vix_df, cfg, start_date=sd, end_date=ed, verbose=True, strategy_filter=strategy)
-    else:
-        nifty_df = download_nifty_spot(months=diff_months)
-        cfg = BacktestConfig(capital=capital)
-        if strategy == "ORB":
-            cfg.enable_vwap_reclaim = False
-        elif strategy == "VWAP":
-            cfg.enable_vwap_reclaim = True
-        result = run_backtest(nifty_df, vix_df, cfg, start_date=sd, end_date=ed, verbose=False)
+    cfg = CombinedBacktestConfig(
+        bear_cfg=DailyBacktestConfig(capital=capital),
+        bull_cfg=BullBacktestConfig(capital=capital),
+    )
+    result = run_combined_backtest(nifty_df, vix_df, cfg=cfg,
+                                   start_date=sd, end_date=ed, verbose=False)
 
     eq = result["metrics"].get("equity_curve", [])
     trades_list = result.get("trades", [])
