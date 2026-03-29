@@ -394,6 +394,10 @@ async def heartbeat_loop():
                 except Exception:
                     pass
 
+            # Pull last_exit_reason / last_trade_pnl / impulse_grade_live from
+            # the bot's own HEARTBEAT event (not from TREND_DETECTED).
+            bot_hb = _get_latest_event("HEARTBEAT")
+
             payload = {
                 "state": pos_state,
                 "market_status": market_status,
@@ -430,7 +434,12 @@ async def heartbeat_loop():
                 "risk_multiplier": trend_ev.get("risk_multiplier"),
                 "strategy_priority": trend_ev.get("strategy_priority", []),
                 "trend_scores": trend_ev.get("scores", {}),
-                "trend_impulse_grade": trend_ev.get("impulse_grade"),
+                # impulse_grade_live is written by bot to HEARTBEAT; TREND_DETECTED uses impulse_grade
+                "trend_impulse_grade": (bot_hb.get("impulse_grade_live") if bot_hb else None) or trend_ev.get("impulse_grade"),
+                # Last trade context — only available in bot's HEARTBEAT events
+                "last_exit_reason": bot_hb.get("last_exit_reason", "") if bot_hb else "",
+                "last_trade_pnl": bot_hb.get("last_trade_pnl", 0.0) if bot_hb else 0.0,
+                "last_trade_strategy": bot_hb.get("last_trade_strategy", "") if bot_hb else "",
                 "regime": regime_ev.get("regime"),
                 "regime_atr_ratio": regime_ev.get("atr_ratio"),
                 "regime_adx": regime_ev.get("adx_proxy"),

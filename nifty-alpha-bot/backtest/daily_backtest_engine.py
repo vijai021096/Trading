@@ -140,7 +140,7 @@ class DailyBacktestConfig:
     # Composite score 0-100: RSI zone + ADX strength + VIX favorability +
     # filter checks passed + strategy tier. Blocks low-quality setups.
     enable_quality_gate: bool = True
-    min_quality_score: float = 55.0        # Optimised: 55 (40→55 for fewer noise trades)
+    min_quality_score: float = 58.0        # 58 balances quality gate vs trade frequency (62 too restrictive)
 
     # ── Strong-trend relaxed quality gate (A- trades) ──
     # In strong trend regimes, market is forgiving — allow slightly weaker setups
@@ -149,7 +149,7 @@ class DailyBacktestConfig:
     # ── Skip-after-loss filter (mirrors live bot logic) ──
     # After a losing trade, same-direction re-entry requires HIGHER quality score
     enable_skip_after_loss: bool = True
-    skip_after_loss_min_quality: float = 62.0  # Optimised: 62 (was 60 — slight tightening)
+    skip_after_loss_min_quality: float = 62.0  # after a loss: demand higher quality (prevents revenge trades)
 
     # ── Re-entry on same valid setup after SL (Change 3 — tightened) ──
     # Max 1 re-entry per day; STRONG_TREND_DOWN only (removed MILD_TREND — too loose);
@@ -176,15 +176,20 @@ class DailyBacktestConfig:
     strong_trend_max_trades: int = 3
 
     # ── VOLATILE + strong trend override ──
-    # Mirrors live bot: even on high-VIX (VOLATILE) days, allow 1 extra trend trade
-    # when ADX shows strong directional conviction (proxy for: conviction≥0.8,
-    # price moved>0.8%, pullback entry, A+ score≥75 conditions in trader.py)
+    # On high-VIX days, big trends still happen (crash days, recovery days).
+    # Hard override (below) catches ≥0.5% moves. This override catches moderate
+    # volatile days where ADX confirms direction but move is 0.3–0.5%:
+    # only TREND_CONTINUATION (best WR), quality≥72, very tight SL, max 1 trade.
     enable_volatile_trend_override: bool = True
-    volatile_override_adx_min: float = 0.42        # same as strong_trend_adx_thresh
-    volatile_override_max_cap: int = 2             # allow up to 2 trades on these days (was hard 1)
-    volatile_override_extra_strategies: tuple = ("TREND_CONTINUATION", "BREAKOUT_MOMENTUM")
-    volatile_override_quality_min: float = 55.0   # stricter quality gate (proxy for A+ score≥75)
-    volatile_override_sl_mult: float = 0.85        # tighter SL (proxy for pullback entry condition)
+    volatile_override_adx_min: float = 0.38          # Slightly looser — high VIX already implies vol
+    volatile_override_max_cap: int = 1               # Max 1 trade on truly volatile days (was 2)
+    volatile_override_extra_strategies: tuple = ("TREND_CONTINUATION",)   # Only best strategy
+    volatile_override_quality_min: float = 72.0      # High bar (was 55) — only A+ setups
+    volatile_override_sl_mult: float = 0.70          # Very tight SL (70% of normal) — take profit fast
+
+    # ── Hard trend override threshold ──
+    # If daily move ≥ this %, override VOLATILE/MILD → STRONG_TREND_DOWN/UP
+    hard_override_min_pct: float = 0.005             # 0.5% (was implicit 0.7%) — catch moderate volatile trend days
 
     # ── Hybrid bias-direction system ──
     # Resolution of NEUTRAL signals in backtest simulation
@@ -208,7 +213,7 @@ class DailyBacktestConfig:
     fourth_trade_lot_fraction: float = 0.30
 
     # ── Regime thresholds ──
-    adx_strong_trend: float = 0.34
+    adx_strong_trend: float = 0.28         # Lowered: 0.34→0.28 (only 1 STRONG_TREND_DOWN in 2yr — threshold too tight)
     adx_mild_trend: float = 0.175
     atr_volatile_mult: float = 1.7
     atr_squeeze_mult: float = 0.65
@@ -233,10 +238,10 @@ class DailyBacktestConfig:
     enable_trend_continuation: bool = True
     enable_breakout_momentum: bool = True
     enable_reversal_snap: bool = True
-    enable_gap_fade: bool = True           # Enabled: +27 trades/yr, WR=43.9%, PF=2.60
+    enable_gap_fade: bool = False          # Disabled: 25% WR, -₹29k net — losing in all regimes at quality≥62
     enable_range_bounce: bool = False      # Disabled: WR=38%, structurally weak
-    enable_inside_bar_break: bool = True   # Enabled: adds 21 trades/yr, DD unchanged
-    enable_vwap_cross: bool = True         # Enabled: adds ~15 trades/yr cleanly
+    enable_inside_bar_break: bool = False  # Disabled: 18.8% WR, -₹31k net — too many false breakouts
+    enable_vwap_cross: bool = True         # Enabled: 100% WR on recent data, good R:R
     enable_ema_fresh_cross: bool = False   # Disabled: WR=11%, avg=-₹1,054 — losing
 
     # ── Fallback signal: fires when no primary strategy matches ──
@@ -399,10 +404,11 @@ def _classify_regime(
 STRATEGY_PRIORITY = {
     "STRONG_TREND_UP":   ["BREAKOUT_MOMENTUM", "TREND_CONTINUATION", "EMA_FRESH_CROSS"],
     "STRONG_TREND_DOWN": ["BREAKOUT_MOMENTUM", "TREND_CONTINUATION", "EMA_FRESH_CROSS"],
-    "MILD_TREND":        ["EMA_FRESH_CROSS", "TREND_CONTINUATION", "BREAKOUT_MOMENTUM", "VWAP_CROSS", "GAP_FADE", "INSIDE_BAR_BREAK"],
+    # BM removed from MILD_TREND: 29% WR (-₹47k on 21 trades) — ambiguous direction in mild trend kills edge
+    "MILD_TREND":        ["EMA_FRESH_CROSS", "TREND_CONTINUATION", "VWAP_CROSS", "REVERSAL_SNAP"],
     "MEAN_REVERT":       ["RANGE_BOUNCE", "GAP_FADE", "REVERSAL_SNAP", "VWAP_CROSS", "INSIDE_BAR_BREAK"],
     "BREAKOUT":          ["BREAKOUT_MOMENTUM", "EMA_FRESH_CROSS", "INSIDE_BAR_BREAK", "TREND_CONTINUATION", "GAP_FADE"],
-    "VOLATILE":          ["GAP_FADE", "REVERSAL_SNAP"],  # EMA_FRESH_CROSS excluded — VIX too high
+    "VOLATILE":          [],  # No strategies on choppy high-VIX days (25% WR); strong moves override to STRONG_TREND
 }
 
 # Regime-adaptive SL/target multipliers: (sl_mult, tgt_mult)
@@ -884,7 +890,7 @@ _STRATEGY_TIER: Dict[str, int] = {
 #   MEAN_REVERT:        WR=44%  (below average)
 #   STRONG_TREND_UP:    WR=8%   (trap — CALL trades fail badly in strong up-trends)
 _REGIME_QUALITY: Dict[str, int] = {
-    "VOLATILE":           25,
+    "VOLATILE":           -10,  # Penalty: 25% WR, no strategies run here (choppy high-VIX)
     "MILD_TREND":         20,
     "MEAN_REVERT":        10,
     "STRONG_TREND_DOWN":  18,
@@ -1293,15 +1299,15 @@ def run_daily_backtest(
             vix, cfg,
         )
 
-        # ── Change 1: Hard trend override ──────────────────────────────────
-        # Daily bar: if intraday move (open→close) ≥ 0.7%, the day declared a trend.
-        # Override NEUTRAL/MILD/VOLATILE to the appropriate STRONG_TREND regime.
+        # ── Hard trend override ─────────────────────────────────────────────
+        # If intraday move ≥ hard_override_min_pct, declare a trend day.
+        # Lowered to 0.5% (was 0.7%) so moderate volatile trend days are captured.
         if opens[i] > 0:
             _day_move_pct = (closes[i] - opens[i]) / opens[i]
-            if _day_move_pct <= -0.007 and regime not in ("STRONG_TREND_DOWN",):
+            if _day_move_pct <= -cfg.hard_override_min_pct and regime not in ("STRONG_TREND_DOWN",):
                 regime = "STRONG_TREND_DOWN"
                 skip_reasons["hard_override_bear"] = skip_reasons.get("hard_override_bear", 0) + 1
-            elif _day_move_pct >= 0.007 and regime not in ("STRONG_TREND_UP",):
+            elif _day_move_pct >= cfg.hard_override_min_pct and regime not in ("STRONG_TREND_UP",):
                 regime = "STRONG_TREND_UP"
                 skip_reasons["hard_override_bull"] = skip_reasons.get("hard_override_bull", 0) + 1
 
@@ -1348,7 +1354,13 @@ def run_daily_backtest(
             scan_order = scan_order + list(extra)
             day_trade_cap = max(day_trade_cap, min(cfg.volatile_override_max_cap, cfg.max_trades_per_day))
 
+        # Per-regime strategy block: BM on MILD_TREND has 29% WR (-₹47k on 21 trades)
+        # because ambiguous direction in mild trend = wrong-way breakout entries
+        _blocked_today: set = {"BREAKOUT_MOMENTUM"} if regime == "MILD_TREND" else set()
+
         for strat_name in scan_order:
+            if strat_name in _blocked_today:
+                continue
             enabled_attr = f"enable_{strat_name.lower()}"
             if hasattr(cfg, enabled_attr) and not getattr(cfg, enabled_attr):
                 continue

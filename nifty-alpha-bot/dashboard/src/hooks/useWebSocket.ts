@@ -105,10 +105,15 @@ export function useWebSocket() {
           }
           if (msg.events?.length) {
             store.addEvents(msg.events)
-            fetchTrades()
-            fetchDailyPnl()
-            fetchSlippage()
-            fetchBotStatus()
+            // Don't re-fetch status on INIT — the mount already called fetchBotStatus()
+            // and the INIT events may be stale, causing the API's older heartbeat to
+            // overwrite the fresh data we just loaded.
+            if (msg.type !== 'INIT') {
+              fetchTrades()
+              fetchDailyPnl()
+              fetchSlippage()
+              fetchBotStatus()
+            }
           }
         } catch {}
       }

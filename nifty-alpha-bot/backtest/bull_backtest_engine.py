@@ -95,7 +95,7 @@ class BullBacktestConfig:
 
     # ── Quality gates ──
     enable_quality_gate: bool = True
-    min_quality_score: float = 58.0       # higher gate: only take better setups
+    min_quality_score: float = 58.0       # matches bear engine; 58 balances quality vs frequency
     strong_bull_quality_discount: float = 8.0  # STRONG_BULL discount: 58-8=50 floor
     skip_after_loss_min_quality: float = 65.0  # after a loss: demand better setup
 
@@ -125,8 +125,9 @@ class BullBacktestConfig:
     second_trade_lot_fraction: float = 0.50
 
     # ── Strategy enable flags ──
-    enable_bull_ema_pullback: bool = True
+    enable_bull_ema_pullback: bool = True   # STRONG_BULL only (regime check in loop) — ~40% WR when trend is strong
     enable_bull_vwap_reclaim: bool = True
+    enable_bull_trend_continuation: bool = True   # STRONG_BULL only: full EMA stack continuation
     enable_bull_higher_low: bool = False   # Disabled: WR=8-12% on daily data, hurts results
 
 
@@ -261,61 +262,64 @@ def _check_bull_ema_pullback(
     cfg: BullBacktestConfig,
 ) -> Optional[Tuple[str, str, dict]]:
     """
-    BULL_TREND_CONTINUATION — buy momentum when EMA8>EMA21>EMA50 and price
-    holds ABOVE EMA8 (no deep pullback). This is the bull mirror of the bear
-    engine's TREND_CONTINUATION PUT strategy.
+    TRUE EMA PULLBACK — day's low dipped into the EMA21 support zone, then
+    closed back above EMA8. Buying the dip at EMA21 support in an uptrend.
 
-    Enter at today's open. Intraday low stays near EMA8 (within 0.6%),
-    so the option doesn't get stopped out by an intraday dip.
+    This is the correct bull dip-buy: price pulled back to the EMA21 level
+    (institutional support in a trending market) and bounced. Entry at next
+    open captures the follow-through from the bounce.
 
     Conditions:
-      1. EMA8 > EMA21 > EMA50 (full bullish stack)
-      2. Today's low ≥ EMA8 × 0.994 — low held above EMA8 (no SL-triggering dip)
-      3. Today's close > EMA8 (closed in bullish zone)
-      4. Green candle: close ≥ open (buyers in control all day)
-      5. RSI 52–72 (momentum, not overbought)
+      1. EMA8 > EMA21 (uptrend structure intact)
+      2. Low touched EMA21 zone: low ≤ EMA21 × 1.008 (within 0.8% above EMA21)
+         AND low > EMA21 × 0.993 (didn't break below EMA21 by more than 0.7%)
+      3. Close > EMA8 (bounced back above fast EMA — recovery confirmed)
+      4. Close ≥ Open × 0.998 (roughly green — buyers took control by close)
+      5. RSI 42–62 (moderate momentum — not overbought after bounce)
+      6. Prior day's close > EMA8 (uptrend was intact before the pullback)
     """
     if i < 4:
         return None
 
     ef, es = ema_fast[i], ema_slow[i]
-    # Need all 3 EMAs stacked (ema_trend is ema_slow[i] here; use ema_slow[i-1] as proxy for EMA50 slope)
-    # Use ema_slow as EMA21, and check ef > es (EMA8 > EMA21)
     if ef <= es:
         return None
-    # EMA trend (EMA50): approximate by ema_slow going up
-    if ema_slow[i] <= ema_slow[i - 2]:   # EMA21 not rising = no EMA50 stack
+
+    ema21 = es
+    # Low must dip INTO the EMA21 zone (within 0.8% above EMA21)
+    if lows[i] > ema21 * 1.008:     # never tested EMA21 — not a pullback
+        return None
+    # Low must not break below EMA21 by more than 0.7% (support held)
+    if lows[i] < ema21 * 0.993:
         return None
 
-    ema8 = ef
-    # Low must stay above EMA8 × 0.994 (max 0.6% dip below EMA8 — intraday noise, not SL)
-    if lows[i] < ema8 * 0.994:
+    # Close must bounce back above EMA8 (recovery confirmed)
+    if closes[i] <= ef:
         return None
-    # Close must be above EMA8 (bullish close)
-    if closes[i] <= ema8:
+    # Roughly green or neutral candle (buyers won)
+    if closes[i] < opens[i] * 0.998:
         return None
-    # Green candle (close ≥ open)
-    if closes[i] < opens[i]:
+    # RSI in moderate zone (not overbought, not broken trend)
+    if not (42.0 <= rsi[i] <= 62.0):
         return None
-    # RSI in momentum zone — not overbought, not trending down
-    if not (52.0 <= rsi[i] <= 72.0):
-        return None
-    # Price has been rising: close > prior close
-    if closes[i] < closes[i - 1] * 0.999:
+    # Prior day was in uptrend (close above EMA8)
+    if i >= 1 and closes[i - 1] <= ema_fast[i - 1]:
         return None
 
+    bounce_strength = round((closes[i] - ema21) / ema21 * 100, 2)
+    pullback_depth = round((ema21 - lows[i]) / ema21 * 100, 2)
     body = abs(closes[i] - opens[i])
     rng = highs[i] - lows[i]
     body_ratio = round(body / rng, 2) if rng > 0 else 0.0
-    above_ema8_pct = round((closes[i] - ema8) / ema8 * 100, 2)
 
     fl: dict = {
-        "full_ema_stack":  {"passed": True, "value": round(ef - es, 1)},
-        "low_above_ema8":  {"passed": True, "value": round(lows[i] - ema8, 1)},
-        "green_candle":    {"passed": closes[i] > opens[i], "value": round(closes[i] - opens[i], 1)},
-        "rsi_momentum":    {"passed": True, "value": round(rsi[i], 1)},
-        "above_ema8_pct":  {"passed": above_ema8_pct >= 0, "value": above_ema8_pct},
-        "body_ratio":      {"passed": body_ratio >= 0.20, "value": body_ratio},
+        "ema8_above_ema21":   {"passed": True, "value": round(ef - es, 1)},
+        "low_touched_ema21":  {"passed": True, "value": round(lows[i] - ema21, 1)},
+        "close_above_ema8":   {"passed": True, "value": round(closes[i] - ef, 1)},
+        "bounce_from_ema21":  {"passed": True, "value": bounce_strength},
+        "rsi_moderate":       {"passed": True, "value": round(rsi[i], 1)},
+        "pullback_depth_pct": {"passed": True, "value": pullback_depth},
+        "body_ratio":         {"passed": body_ratio >= 0.20, "value": body_ratio},
     }
     return "CALL", "BULL_EMA_PULLBACK", fl
 
@@ -329,17 +333,21 @@ def _check_bull_vwap_reclaim(
     cfg: BullBacktestConfig,
 ) -> Optional[Tuple[str, str, dict]]:
     """
-    BULL_VWAP_ABOVE — day trades above VWAP with strong close and low staying
-    above VWAP (institutional buying all day). Entry at today's open when prior
-    day also closed above VWAP (trend continuation, not a dip buy).
+    TRUE VWAP RECLAIM — price dipped below VWAP intraday, then closed back
+    above VWAP. Institutional buyers stepped in at VWAP support and pushed
+    price back above. Classic dip-buy at VWAP in an uptrend.
+
+    The key "reclaim" mechanic: low < VWAP (actual dip below), close > VWAP
+    (buyers won by end of day). This is more selective than "close near VWAP"
+    and delivers a higher win rate.
 
     Conditions:
-      1. EMA8 > EMA21 (primary uptrend)
-      2. Today's low > VWAP × 0.997 — price stayed above VWAP (no significant dip)
-      3. Today's close > VWAP + (0.2% × VWAP) — strong close above VWAP
-      4. Green candle (close > open)
-      5. Yesterday also closed above VWAP (persistent institutional bid)
-      6. RSI 50–70
+      1. EMA8 > EMA21 (primary uptrend intact)
+      2. Low < VWAP × 0.998 (actually dipped below VWAP, at least 0.2%)
+      3. Low > VWAP × 0.990 (dip < 1% — not a full breakdown)
+      4. Close > VWAP × 1.001 (reclaimed VWAP, closed 0.1%+ above it)
+      5. RSI 44–68 (moderate momentum — no overbought)
+      6. Prior day's close > EMA21 (uptrend context was valid)
     """
     if i < 2:
         return None
@@ -349,36 +357,38 @@ def _check_bull_vwap_reclaim(
     if ema_fast[i] <= ema_slow[i]:
         return None
 
-    # Low stayed above VWAP (no meaningful dip = SL unlikely)
-    if lows[i] < vwap * 0.997:
+    # Must have actually dipped BELOW VWAP (real reclaim, not just hovering)
+    if lows[i] >= vwap * 0.998:      # low didn't go below VWAP — not a reclaim
         return None
-    # Close well above VWAP
-    vwap_margin = vwap * 0.002  # 0.2% margin
-    if closes[i] <= vwap + vwap_margin:
-        return None
-    # Green candle
-    if closes[i] <= opens[i]:
-        return None
-    # Yesterday also above VWAP (persistent trend)
-    if i >= 1 and closes[i - 1] <= vwap_vals[i - 1]:
-        return None
-    # RSI zone
-    if not (50.0 <= rsi[i] <= 70.0):
+    # Dip must not be catastrophic (> 1% below VWAP = failed reclaim, trend broken)
+    if lows[i] < vwap * 0.990:
         return None
 
-    above_vwap_pct = round((closes[i] - vwap) / vwap * 100, 2)
-    rng = highs[i] - lows[i]
+    # Close must reclaim VWAP (0.1%+ above)
+    if closes[i] <= vwap * 1.001:
+        return None
+
+    # RSI zone (moderate, not overbought)
+    if not (44.0 <= rsi[i] <= 68.0):
+        return None
+
+    # Prior day uptrend context (prior close above EMA21)
+    if i >= 1 and closes[i - 1] <= ema_slow[i - 1]:
+        return None
+
+    dip_pct   = round((vwap - lows[i]) / vwap * 100, 2)
+    reclaim_pct = round((closes[i] - vwap) / vwap * 100, 2)
     body = abs(closes[i] - opens[i])
+    rng  = highs[i] - lows[i]
     body_ratio = round(body / rng, 2) if rng > 0 else 0.0
 
     fl: dict = {
-        "ema_uptrend":     {"passed": True, "value": round(ema_fast[i] - ema_slow[i], 1)},
-        "low_above_vwap":  {"passed": True, "value": round(lows[i] - vwap, 1)},
-        "strong_close":    {"passed": True, "value": above_vwap_pct},
-        "green_candle":    {"passed": True, "value": round(closes[i] - opens[i], 1)},
-        "vwap_persistence":{"passed": True, "value": round(closes[i - 1] - vwap_vals[i - 1], 1) if i >= 1 else 0},
-        "rsi_ok":          {"passed": True, "value": round(rsi[i], 1)},
-        "body_ratio":      {"passed": body_ratio >= 0.20, "value": body_ratio},
+        "ema_uptrend":       {"passed": True, "value": round(ema_fast[i] - ema_slow[i], 1)},
+        "dipped_below_vwap": {"passed": True, "value": round(lows[i] - vwap, 1)},
+        "reclaimed_vwap":    {"passed": True, "value": reclaim_pct},
+        "rsi_moderate":      {"passed": True, "value": round(rsi[i], 1)},
+        "dip_depth_pct":     {"passed": True, "value": dip_pct},
+        "body_ratio":        {"passed": body_ratio >= 0.20, "value": body_ratio},
     }
     return "CALL", "BULL_VWAP_RECLAIM", fl
 
@@ -430,14 +440,77 @@ def _check_bull_higher_low(
     return "CALL", "BULL_HIGHER_LOW", fl
 
 
+def _check_bull_trend_continuation(
+    i: int,
+    highs: list, lows: list, closes: list, opens: list,
+    ema_fast: list, ema_slow: list,
+    rsi: list,
+    cfg: BullBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """
+    BULL_TREND_CONTINUATION — STRONG_BULL only. Full EMA stack with price
+    holding above EMA8, green candle, RSI 55-72. Classic momentum continuation
+    for very strong trending days. Only fires on STRONG_BULL regime.
+
+    Conditions:
+      1. EMA8 > EMA21, and EMA21 is rising (proxy for full EMA stack)
+      2. Low ≥ EMA8 × 0.994 — intraday dip stayed near EMA8 (trend is strong)
+      3. Close > EMA8 (closed in bullish zone)
+      4. Green candle (close ≥ open)
+      5. RSI 55–72 (strong momentum, not overbought)
+      6. Close > prior close (price is advancing, not stalling)
+    """
+    if i < 4:
+        return None
+
+    ef, es = ema_fast[i], ema_slow[i]
+    if ef <= es:
+        return None
+    # EMA21 must be rising (strong trend)
+    if ema_slow[i] <= ema_slow[i - 2]:
+        return None
+
+    # Low held near EMA8 (strong trend — no deep pullback)
+    if lows[i] < ef * 0.994:
+        return None
+    # Close above EMA8
+    if closes[i] <= ef:
+        return None
+    # Green candle
+    if closes[i] < opens[i]:
+        return None
+    # Momentum RSI zone — not oversold, not extreme overbought
+    if not (50.0 <= rsi[i] <= 75.0):
+        return None
+    # Price advancing
+    if closes[i] < closes[i - 1] * 0.999:
+        return None
+
+    body = abs(closes[i] - opens[i])
+    rng  = highs[i] - lows[i]
+    body_ratio = round(body / rng, 2) if rng > 0 else 0.0
+    above_ema8_pct = round((closes[i] - ef) / ef * 100, 2)
+
+    fl: dict = {
+        "full_ema_stack": {"passed": True, "value": round(ef - es, 1)},
+        "low_above_ema8": {"passed": True, "value": round(lows[i] - ef, 1)},
+        "green_candle":   {"passed": True, "value": round(closes[i] - opens[i], 1)},
+        "rsi_strong":     {"passed": True, "value": round(rsi[i], 1)},
+        "above_ema8_pct": {"passed": above_ema8_pct >= 0, "value": above_ema8_pct},
+        "body_ratio":     {"passed": body_ratio >= 0.20, "value": body_ratio},
+    }
+    return "CALL", "BULL_TREND_CONTINUATION", fl
+
+
 # ═══════════════════════════════════════════════════════════════════
 # QUALITY SCORING (bull-specific calibration)
 # ═══════════════════════════════════════════════════════════════════
 
 _BULL_STRATEGY_TIER: Dict[str, float] = {
-    "BULL_HIGHER_LOW":    18.0,   # strongest: multiple sessions of institutional buying
-    "BULL_EMA_PULLBACK":  15.0,   # good: buying near support in trend
-    "BULL_VWAP_RECLAIM":  12.0,   # solid: institutional level reclaim
+    "BULL_EMA_PULLBACK":        18.0,   # best: buying EMA21 dip in uptrend (true pullback)
+    "BULL_VWAP_RECLAIM":        17.0,   # excellent: VWAP dip + reclaim (true institutional reclaim)
+    "BULL_TREND_CONTINUATION":  12.0,   # good: STRONG_BULL only momentum continuation
+    "BULL_HIGHER_LOW":           8.0,   # disabled; WR=8-12%
 }
 
 _BULL_REGIME_QUALITY: Dict[str, float] = {
@@ -685,9 +758,12 @@ def evaluate_live_bull(
     matches = []
     if vix <= cfg.vix_max:
         for check_fn, strat_flag, strat_name in [
-            (_check_bull_ema_pullback, cfg.enable_bull_ema_pullback, "BULL_EMA_PULLBACK"),
-            (_check_bull_vwap_reclaim, cfg.enable_bull_vwap_reclaim, "BULL_VWAP_RECLAIM"),
-            (_check_bull_higher_low,   cfg.enable_bull_higher_low,   "BULL_HIGHER_LOW"),
+            (_check_bull_ema_pullback,       cfg.enable_bull_ema_pullback and regime == "STRONG_BULL",
+             "BULL_EMA_PULLBACK"),
+            (_check_bull_vwap_reclaim,       cfg.enable_bull_vwap_reclaim,       "BULL_VWAP_RECLAIM"),
+            (_check_bull_trend_continuation, cfg.enable_bull_trend_continuation,
+             "BULL_TREND_CONTINUATION"),
+            (_check_bull_higher_low,         cfg.enable_bull_higher_low,         "BULL_HIGHER_LOW"),
         ]:
             if not strat_flag:
                 continue
@@ -699,10 +775,10 @@ def evaluate_live_bull(
                                   ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
             if result is not None:
                 signal, strat_nm, fl = result
-                sl_base = cfg.sl_pct_bep if strat_nm == "BULL_EMA_PULLBACK" else \
-                          cfg.sl_pct_bvr if strat_nm == "BULL_VWAP_RECLAIM" else cfg.sl_pct_bhl
-                tgt_base = cfg.target_pct_bep if strat_nm == "BULL_EMA_PULLBACK" else \
-                           cfg.target_pct_bvr if strat_nm == "BULL_VWAP_RECLAIM" else cfg.target_pct_bhl
+                sl_base = (cfg.sl_pct_bep if strat_nm in ("BULL_EMA_PULLBACK", "BULL_TREND_CONTINUATION") else
+                           cfg.sl_pct_bvr if strat_nm == "BULL_VWAP_RECLAIM" else cfg.sl_pct_bhl)
+                tgt_base = (cfg.target_pct_bep if strat_nm in ("BULL_EMA_PULLBACK", "BULL_TREND_CONTINUATION") else
+                            cfg.target_pct_bvr if strat_nm == "BULL_VWAP_RECLAIM" else cfg.target_pct_bhl)
                 cap_use = capital if capital > 0 else cfg.capital
                 lots = cfg.lots  # simplified for live; combined runner scales via backtest
                 matches.append({
@@ -821,7 +897,7 @@ def run_bull_backtest(
         print(f" BULL ENGINE BACKTEST — {end_idx - start_idx} trading days")
         print(f" Range: {dates[start_idx]} → {dates[min(end_idx-1, len(dates)-1)]}")
         print(f" Capital: ₹{cfg.capital:,.0f} | Lots: {cfg.lots} | Lot size: {cfg.lot_size}")
-        print(f" Strategies: BULL_EMA_PULLBACK, BULL_VWAP_RECLAIM, BULL_HIGHER_LOW")
+        print(f" Strategies: BULL_EMA_PULLBACK (pullback), BULL_VWAP_RECLAIM (reclaim), BULL_TREND_CONTINUATION (strong-bull only)")
         print(f"{'='*72}\n")
 
     # Momentum strategies: signal detected at open (same as bear engine).
@@ -859,10 +935,11 @@ def run_bull_backtest(
 
         rsi = rsi_vals[i]
 
-        # ── Scan all 3 strategies ─────────────────────────────────────────
+        # ── Scan all strategies ───────────────────────────────────────────
         matches: List[Tuple[str, str, dict]] = []
 
-        if cfg.enable_bull_ema_pullback:
+        # EMA_PULLBACK: STRONG_BULL only — on MILD_BULL, EMA21 dip usually means trend weakening (-₹24k)
+        if cfg.enable_bull_ema_pullback and regime == "STRONG_BULL":
             r = _check_bull_ema_pullback(
                 i, highs, lows, closes, opens,
                 ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
@@ -873,6 +950,15 @@ def run_bull_backtest(
             r = _check_bull_vwap_reclaim(
                 i, highs, lows, closes, opens,
                 ema_fast_vals, ema_slow_vals, rsi_vals, vwap_vals, cfg)
+            if r:
+                matches.append(r)
+
+        # BULL_TREND_CONTINUATION: both regimes — STRONG_BULL quality score (25) vs MILD_BULL (15)
+        # naturally tiers the quality gate: STRONG_BULL easily passes 58, MILD_BULL needs other factors
+        if cfg.enable_bull_trend_continuation:
+            r = _check_bull_trend_continuation(
+                i, highs, lows, closes, opens,
+                ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
             if r:
                 matches.append(r)
 
@@ -949,12 +1035,14 @@ def run_bull_backtest(
                 effective_lots = max(1, int(round(effective_lots * cfg.second_trade_lot_fraction)))
 
             # Contextual SL
-            sl_base = cfg.sl_pct_bep if strategy_name == "BULL_EMA_PULLBACK" else \
-                      cfg.sl_pct_bvr if strategy_name == "BULL_VWAP_RECLAIM" else \
-                      cfg.sl_pct_bhl
-            tgt_base = cfg.target_pct_bep if strategy_name == "BULL_EMA_PULLBACK" else \
-                       cfg.target_pct_bvr if strategy_name == "BULL_VWAP_RECLAIM" else \
-                       cfg.target_pct_bhl
+            sl_base = (cfg.sl_pct_bep if strategy_name == "BULL_EMA_PULLBACK" else
+                       cfg.sl_pct_bvr if strategy_name == "BULL_VWAP_RECLAIM" else
+                       cfg.sl_pct_bep if strategy_name == "BULL_TREND_CONTINUATION" else
+                       cfg.sl_pct_bhl)
+            tgt_base = (cfg.target_pct_bep if strategy_name == "BULL_EMA_PULLBACK" else
+                        cfg.target_pct_bvr if strategy_name == "BULL_VWAP_RECLAIM" else
+                        cfg.target_pct_bep if strategy_name == "BULL_TREND_CONTINUATION" else
+                        cfg.target_pct_bhl)
 
             if cfg.enable_contextual_sl:
                 if quality >= cfg.sl_aplus_quality_min:

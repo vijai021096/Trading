@@ -48,8 +48,10 @@ export function Dashboard() {
     return todayTrades.map(t => ({ time: new Date(t.entry_ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }), pnl: sum += t.net_pnl }))
   }, [todayTrades])
 
-  const marketOpen = botStatus?.market_open ?? (new Date().getHours() >= 9 && (new Date().getHours() < 15 || (new Date().getHours() === 15 && new Date().getMinutes() <= 30)))
-  const marketStatus = botStatus?.market_status ?? (marketOpen ? 'OPEN' : 'CLOSED')
+  // Default false until botStatus loads — avoids a flash where time-based check
+  // says "market open" (12:xx PM) but botStatus hasn't arrived yet (WEEKEND/CLOSED).
+  const marketOpen = botStatus?.market_open ?? false
+  const marketStatus = botStatus?.market_status ?? 'CLOSED'
   const todayCount = botStatus?.trades_today ?? dailyPnl?.trades ?? 0
   const maxTrades = botStatus?.max_trades ?? 4
   const pnl = botStatus?.daily_pnl ?? dailyPnl?.net_pnl ?? 0
@@ -92,10 +94,9 @@ export function Dashboard() {
   const lastTradePnl = (botStatus as any)?.last_trade_pnl as number | undefined
   const lastTradeStrategy = (botStatus as any)?.last_trade_strategy as string | undefined
 
-  // Fix 10: Market phase from current time
-  const nowHour = new Date().getHours()
-  const nowMin = new Date().getMinutes()
-  const nowMins = nowHour * 60 + nowMin
+  // Fix 10: Market phase from IST time (not browser local time — avoids wrong phase if user is overseas)
+  const _nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
+  const nowMins = _nowIST.getHours() * 60 + _nowIST.getMinutes()
   const marketPhase = nowMins < 9 * 60 + 15 ? null
     : nowMins < 9 * 60 + 30 ? { label: 'ORB WINDOW', desc: 'ORB + Relaxed ORB entries', color: 'text-amber', bg: 'bg-amber/10' }
     : nowMins < 10 * 60 ? { label: 'ORB FOLLOW-THROUGH', desc: 'ORB breakouts + EMA Pullback starts', color: 'text-amber', bg: 'bg-amber/10' }
@@ -659,9 +660,7 @@ export function Dashboard() {
                     { name: 'TREND CONT.', desc: 'EMA pullback in established trend', time: '9:16–13:00', icon: TrendingUp, color: 'text-green', stratKey: 'TREND_CONTINUATION', priority: 'HIGH' },
                     { name: 'BREAKOUT MOM.', desc: 'N-candle range breakout + volume', time: '9:16–13:00', icon: Zap, color: 'text-accent', stratKey: 'BREAKOUT_MOMENTUM', priority: 'HIGH' },
                     { name: 'REVERSAL SNAP', desc: 'RSI exhaustion + reversal candle', time: '9:16–13:00', icon: Target, color: 'text-red', stratKey: 'REVERSAL_SNAP', priority: 'HIGH' },
-                    { name: 'GAP FADE', desc: 'Fade opening gap fills (enabled)', time: '9:16–10:30', icon: BarChart3, color: 'text-amber', stratKey: 'GAP_FADE', priority: 'MEDIUM' },
-                    { name: 'INSIDE BAR BRK', desc: 'Inside bar compression breakout', time: '9:16–13:00', icon: Layers, color: 'text-cyan', stratKey: 'INSIDE_BAR_BREAK', priority: 'MEDIUM' },
-                    { name: 'VWAP CROSS', desc: 'VWAP cross with prior deviation', time: '9:16–13:30', icon: Activity, color: 'text-accent', stratKey: 'VWAP_CROSS', priority: 'MEDIUM' },
+                    { name: 'VWAP CROSS', desc: 'VWAP cross with prior deviation', time: '9:16–13:30', icon: Activity, color: 'text-accent', stratKey: 'VWAP_CROSS', priority: 'HIGH' },
                   ] : [
                     { name: 'ORB', desc: 'Opening range breakout', time: '9:15–10:00', icon: Zap, color: 'text-amber', stratKey: 'ORB', priority: 'HIGH' },
                     { name: 'EMA PULLBACK', desc: 'Pullback to EMA21 with trend', time: '9:30–13:00', icon: TrendingUp, color: 'text-green', stratKey: 'EMA_PULLBACK', priority: 'HIGH' },
@@ -1033,9 +1032,7 @@ export function Dashboard() {
             //   Move size:  abs(moveFromOpen) / 1.5 * 15, capped at 15
             //   Time:       peak 9:20–11:00 = +10, 11:00–13:00 = +5, else +0
             //   Regime:     STRONG_TREND_* = +10, MILD_TREND = +7, BREAKOUT = +5
-            const nowH = new Date().getHours()
-            const nowM = new Date().getMinutes()
-            const nowMinsLocal = nowH * 60 + nowM
+            const nowMinsLocal = nowMins  // already IST-corrected at top of component
             const impulsePoints = impulse === 'EXTREME' ? 30 : impulse === 'STRONG' ? 20 : impulse === 'WEAK' ? 10 : 0
             const convPoints = Math.min(25, conviction * 25)
             const confPoints = Math.min(20, bestConf / 100 * 20)
@@ -1349,15 +1346,13 @@ const REGIME_META: Record<string, { color: string; bg: string }> = {
 }
 
 const STRAT_COLORS: Record<string, string> = {
-  // Daily-adaptive engine strategy names
+  // Daily-adaptive engine strategy names (active)
   TREND_CONTINUATION: 'text-green',
   BREAKOUT_MOMENTUM:  'text-accent',
   EMA_FRESH_CROSS:    'text-green',
   REVERSAL_SNAP:      'text-red',
-  GAP_FADE:           'text-amber',
-  RANGE_BOUNCE:       'text-cyan',
-  INSIDE_BAR_BREAK:   'text-purple-400',
   VWAP_CROSS:         'text-blue-400',
+  // Disabled: GAP_FADE (25% WR), INSIDE_BAR_BREAK (18.8% WR), RANGE_BOUNCE (38% WR)
   // Intraday engine strategy names (shown in strategy_priority from trend_detector)
   ORB:               'text-amber',
   RELAXED_ORB:       'text-amber',
@@ -1371,9 +1366,6 @@ const STRAT_WINDOWS: Record<string, string> = {
   BREAKOUT_MOMENTUM:  '9:16–13:00',
   EMA_FRESH_CROSS:    '9:16–13:00',
   REVERSAL_SNAP:      '9:16–13:00',
-  GAP_FADE:           '9:16–10:30',
-  RANGE_BOUNCE:       '9:16–13:00',
-  INSIDE_BAR_BREAK:   '9:16–13:00',
   VWAP_CROSS:         '10:00–13:30',
 }
 
