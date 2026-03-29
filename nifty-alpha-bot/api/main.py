@@ -382,8 +382,36 @@ async def heartbeat_loop():
             trend_ev = mkt_state.get("trend") or {}
             regime_ev = mkt_state.get("regime") or {}
 
-            # Latest scan cycle data
+            # Latest scan cycle data — prefer SCAN_CYCLE (intraday), fall back to DAILY_ADAPTIVE_SCAN
             scan_data = _get_latest_event("SCAN_CYCLE") or {}
+            if not scan_data:
+                da_scan = _get_latest_event("DAILY_ADAPTIVE_SCAN") or {}
+                if da_scan:
+                    legs = da_scan.get("executable_legs") or []
+                    def _leg_conf(lg):
+                        fl = lg.get("filter_log") or {}
+                        qs = fl.get("quality_score")
+                        # quality_score is stored directly as a float in filter_log
+                        if isinstance(qs, (int, float)):
+                            return round(float(qs), 1)
+                        return 0.0
+                    scan_data = {
+                        "strategies_evaluated": len(legs),
+                        "signals_detected": len(legs),
+                        "candidates": [
+                            {"strategy": lg.get("strategy", ""), "signal": lg.get("direction", ""),
+                             "confidence": _leg_conf(lg)}
+                            for lg in legs
+                        ],
+                        "scans": [
+                            {"strategy": lg.get("strategy", ""), "signal": lg.get("direction", ""),
+                             "confidence": _leg_conf(lg), "passed": True,
+                             "regime": da_scan.get("regime", ""),
+                             "sl_pct": lg.get("sl_pct"), "target_pct": lg.get("target_pct"),
+                             "lots": lg.get("lots", 1)}
+                            for lg in legs
+                        ],
+                    }
 
             # Daily regime + engine routing (written by trader when it classifies at market open)
             regime_file = _STATE_DIR / "kite_bot_daily_regime.json"
