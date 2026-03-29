@@ -5,10 +5,13 @@ Bull-market daily backtest engine — separate from the bear engine.
   STRONG_BULL  — EMA8>EMA21>EMA50 + ADX>0.28 + VIX<20 + close>EMA50
   MILD_BULL    — EMA8>EMA21 + close>EMA21 + RSI>50 + VIX<24
 
-3 Strategies (all produce CALL signals — buying dips in uptrend):
-  BULL_EMA_PULLBACK  — day's low tests EMA21, close bounces above it
-  BULL_VWAP_RECLAIM  — intraday dip below VWAP, close reclaims it with body
-  BULL_HIGHER_LOW    — 4 consecutive higher lows + green candle + rising RSI
+5 Strategies (all produce CALL signals — buying dips in uptrend):
+  BULL_EMA_PULLBACK   — day's low tests EMA21 zone, close bounces above EMA8
+  BULL_EMA8_TOUCH     — day's low dips to EMA8 zone, bounces above EMA8 (more frequent)
+  BULL_VWAP_RECLAIM   — intraday dip below VWAP, close reclaims it (MILD_BULL only)
+  BULL_REVERSAL_DIP   — opens flat/down in bull trend, recovers above EMA8 by close
+  BULL_TREND_CONTINUATION — STRONG_BULL momentum continuation (RSI 50-78)
+  BULL_HIGHER_LOW     — 4 consecutive higher lows + green candle + rising RSI
 
 Why separate from bear engine:
   Bull trends are slower and smoother — they need different rules.
@@ -66,12 +69,15 @@ class BullBacktestConfig:
     vwap_lookback: int = 5
 
     # ── SL / Target ──
-    # Momentum strategies: low stays ABOVE EMA8 so intraday dip is small.
-    # Use 22-25% SL (same as bear engine's working strategies) — 2.5-3x RR.
-    sl_pct_bep: float = 0.22   # BULL_TREND_CONTINUATION  2.7x RR
+    # Pullback strategies (EMA_PULLBACK, EMA8_TOUCH, REVERSAL_DIP): price dips then recovers —
+    # SL is wider (25%) because we're buying at a support level with room to bounce 3x+.
+    sl_pct_bep: float = 0.25   # BULL_EMA_PULLBACK / BULL_EMA8_TOUCH / BULL_TREND_CONTINUATION  2.4x RR
     target_pct_bep: float = 0.60
 
-    sl_pct_bvr: float = 0.20   # BULL_VWAP_ABOVE  2.75x RR
+    sl_pct_brd: float = 0.22   # BULL_REVERSAL_DIP  2.7x RR (entry at open after recovery)
+    target_pct_brd: float = 0.60
+
+    sl_pct_bvr: float = 0.20   # BULL_VWAP_RECLAIM  2.75x RR
     target_pct_bvr: float = 0.55
 
     sl_pct_bhl: float = 0.25   # BULL_HIGHER_LOW  (disabled by default)
@@ -105,7 +111,7 @@ class BullBacktestConfig:
     # ── Regime thresholds ──
     adx_strong_bull: float = 0.28
     vix_strong_bull_max: float = 20.0
-    vix_mild_bull_max: float = 24.0
+    vix_mild_bull_max: float = 20.0   # tightened from 24 — VIX 20-24 in mild bull = nervous market, bear engine handles better
     rsi_mild_bull_min: float = 50.0
 
     # ── Risk ──
@@ -125,10 +131,12 @@ class BullBacktestConfig:
     second_trade_lot_fraction: float = 0.50
 
     # ── Strategy enable flags ──
-    enable_bull_ema_pullback: bool = True   # STRONG_BULL only (regime check in loop) — ~40% WR when trend is strong
-    enable_bull_vwap_reclaim: bool = True
-    enable_bull_trend_continuation: bool = True   # STRONG_BULL only: full EMA stack continuation
-    enable_bull_higher_low: bool = False   # Disabled: WR=8-12% on daily data, hurts results
+    enable_bull_ema_pullback: bool = False      # Disabled: unreliable regardless of entry timing, blocks good strategies
+    enable_bull_ema8_touch: bool = False        # Disabled: MILD_BULL = 21% WR (-₹27k), STRONG_BULL = 33% marginal — hurts overall P&L
+    enable_bull_vwap_reclaim: bool = True       # MILD_BULL only — on STRONG_BULL, VWAP dip is a warning (0% WR tested)
+    enable_bull_reversal_dip: bool = True       # Both regimes — prior day opens down + recovers above EMA8 → enter next day
+    enable_bull_trend_continuation: bool = True # Both regimes — RSI 50-78, EMA21 rising
+    enable_bull_higher_low: bool = False        # Disabled: WR=8-12% on daily data, hurts results
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -262,20 +270,21 @@ def _check_bull_ema_pullback(
     cfg: BullBacktestConfig,
 ) -> Optional[Tuple[str, str, dict]]:
     """
-    TRUE EMA PULLBACK — day's low dipped into the EMA21 support zone, then
+    EMA21 PULLBACK — day's low dipped into the EMA21 support zone, then
     closed back above EMA8. Buying the dip at EMA21 support in an uptrend.
 
-    This is the correct bull dip-buy: price pulled back to the EMA21 level
-    (institutional support in a trending market) and bounced. Entry at next
-    open captures the follow-through from the bounce.
+    Zone widened to 2% above EMA21 (from prior 0.8%) — the institutional
+    support zone is not a hairline; price pulls back to within this range
+    before buyers step in. Kept strict on the downside (must not break EMA21
+    by >1%) to avoid catching breakdowns.
 
     Conditions:
       1. EMA8 > EMA21 (uptrend structure intact)
-      2. Low touched EMA21 zone: low ≤ EMA21 × 1.008 (within 0.8% above EMA21)
-         AND low > EMA21 × 0.993 (didn't break below EMA21 by more than 0.7%)
+      2. Low within EMA21 support zone: low ≤ EMA21 × 1.020 (within 2% above EMA21)
+         AND low > EMA21 × 0.990 (didn't break below EMA21 by more than 1%)
       3. Close > EMA8 (bounced back above fast EMA — recovery confirmed)
       4. Close ≥ Open × 0.998 (roughly green — buyers took control by close)
-      5. RSI 42–62 (moderate momentum — not overbought after bounce)
+      5. RSI 42–65 (moderate momentum — not overbought after bounce)
       6. Prior day's close > EMA8 (uptrend was intact before the pullback)
     """
     if i < 4:
@@ -286,11 +295,11 @@ def _check_bull_ema_pullback(
         return None
 
     ema21 = es
-    # Low must dip INTO the EMA21 zone (within 0.8% above EMA21)
-    if lows[i] > ema21 * 1.008:     # never tested EMA21 — not a pullback
+    # Low within EMA21 support zone (within 2% above EMA21 — widened from 0.8%)
+    if lows[i] > ema21 * 1.020:     # too far above EMA21 — no meaningful test
         return None
-    # Low must not break below EMA21 by more than 0.7% (support held)
-    if lows[i] < ema21 * 0.993:
+    # Low must not break below EMA21 by more than 1% (support held)
+    if lows[i] < ema21 * 0.990:
         return None
 
     # Close must bounce back above EMA8 (recovery confirmed)
@@ -300,7 +309,7 @@ def _check_bull_ema_pullback(
     if closes[i] < opens[i] * 0.998:
         return None
     # RSI in moderate zone (not overbought, not broken trend)
-    if not (42.0 <= rsi[i] <= 62.0):
+    if not (42.0 <= rsi[i] <= 65.0):
         return None
     # Prior day was in uptrend (close above EMA8)
     if i >= 1 and closes[i - 1] <= ema_fast[i - 1]:
@@ -393,6 +402,152 @@ def _check_bull_vwap_reclaim(
     return "CALL", "BULL_VWAP_RECLAIM", fl
 
 
+def _check_bull_ema8_touch(
+    i: int,
+    highs: list, lows: list, closes: list, opens: list,
+    ema_fast: list, ema_slow: list,
+    rsi: list,
+    cfg: BullBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """
+    BULL_EMA8_TOUCH — day's low dips to the EMA8 zone (within 0.3% above EMA8),
+    price holds support and closes back above EMA8. Pullback to the fast EMA
+    in an uptrend — EMA8 acts as dynamic support on strong bull days.
+
+    More frequent than EMA21 pullbacks because price tests EMA8 every 2-3 days
+    in a trending market. Unlike BULL_TREND_CONTINUATION (which requires the low
+    to stay ABOVE EMA8 × 0.994), this strategy captures the actual touch-and-bounce.
+
+    Conditions:
+      1. EMA8 > EMA21 and EMA21 rising (strong uptrend structure)
+      2. Low ≤ EMA8 × 1.003 (actually touched the EMA8 zone, within 0.3% above)
+         AND low > EMA8 × 0.990 (support held — didn't break below by >1%)
+      3. Close > EMA8 (bounced back above fast EMA)
+      4. RSI 44–68 (moderate momentum — not oversold, not overbought)
+      5. Prior close > EMA21 (uptrend context valid before the dip)
+    """
+    if i < 4:
+        return None
+
+    ef, es = ema_fast[i], ema_slow[i]
+    if ef <= es:
+        return None
+    # EMA21 must be rising — confirms trend is NOT just hovering (2-day slope)
+    if ema_slow[i] <= ema_slow[i - 2]:
+        return None
+
+    # Low must have touched the EMA8 zone (within 0.3% above EMA8)
+    if lows[i] > ef * 1.003:         # low stayed too far above EMA8 — no real test
+        return None
+    # Support held — didn't break below EMA8 by more than 1%
+    if lows[i] < ef * 0.990:
+        return None
+
+    # Close back above EMA8 (bounce confirmed)
+    if closes[i] <= ef:
+        return None
+
+    # RSI moderate zone
+    if not (44.0 <= rsi[i] <= 68.0):
+        return None
+
+    # Prior close above EMA21 (uptrend was intact)
+    if i >= 1 and closes[i - 1] <= ema_slow[i - 1]:
+        return None
+
+    touch_depth = round((ef - lows[i]) / ef * 100, 2)   # how far below EMA8 the low went
+    bounce_pct  = round((closes[i] - lows[i]) / lows[i] * 100, 2)
+    body = abs(closes[i] - opens[i])
+    rng  = highs[i] - lows[i]
+    body_ratio = round(body / rng, 2) if rng > 0 else 0.0
+
+    fl: dict = {
+        "ema_uptrend":      {"passed": True,              "value": round(ef - es, 1)},
+        "ema21_rising":     {"passed": True,              "value": round(es - ema_slow[i-2], 1)},
+        "low_touched_ema8": {"passed": True,              "value": round(lows[i] - ef, 1)},
+        "close_above_ema8": {"passed": True,              "value": round(closes[i] - ef, 1)},
+        "touch_depth_pct":  {"passed": True,              "value": touch_depth},
+        "bounce_pct":       {"passed": bounce_pct >= 0.3, "value": bounce_pct},
+        "rsi_moderate":     {"passed": True,              "value": round(rsi[i], 1)},
+        "body_ratio":       {"passed": body_ratio >= 0.15,"value": body_ratio},
+    }
+    return "CALL", "BULL_EMA8_TOUCH", fl
+
+
+def _check_bull_reversal_dip(
+    i: int,
+    highs: list, lows: list, closes: list, opens: list,
+    ema_fast: list, ema_slow: list,
+    rsi: list,
+    cfg: BullBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """
+    BULL_REVERSAL_DIP — price opens flat or down (fear/profit-taking at open)
+    in a bull trend but buyers step in and close the day above EMA8 with a
+    strong recovery body. Classic "shakeout and recovery" pattern in an uptrend.
+
+    In a bull market, early weakness that resolves to strength by close is a
+    high-conviction buy signal — weak hands shaken out, strong hands absorbed.
+
+    Conditions:
+      1. EMA8 > EMA21 (uptrend intact)
+      2. Open ≤ prior close × 0.998 (opened flat or down — early weakness)
+      3. Close > Open + 0.2% (net recovered — buyers dominated by end of day)
+      4. Close > EMA8 (back in bullish zone)
+      5. Low > EMA21 × 0.992 (EMA21 support not broken — still in bull structure)
+      6. RSI 40–65 (moderate — not overbought, has room to run)
+      7. Body ratio > 0.35 (strong reversal body — not a doji)
+    """
+    if i < 3:
+        return None
+
+    ef, es = ema_fast[i], ema_slow[i]
+    if ef <= es:
+        return None
+
+    # Opened flat or down (early weakness)
+    if opens[i] > closes[i - 1] * 0.998:
+        return None
+
+    # Net recovered — closed higher than open (buyers dominated)
+    if closes[i] <= opens[i] * 1.002:
+        return None
+
+    # Close above EMA8 (back in bull zone)
+    if closes[i] <= ef:
+        return None
+
+    # EMA21 support held (no regime break)
+    if lows[i] < es * 0.992:
+        return None
+
+    # RSI moderate — room to run
+    if not (40.0 <= rsi[i] <= 65.0):
+        return None
+
+    # Strong recovery body (real buyers, not just a doji)
+    body = abs(closes[i] - opens[i])
+    rng  = highs[i] - lows[i]
+    body_ratio = round(body / rng, 2) if rng > 0 else 0.0
+    if body_ratio < 0.35:
+        return None
+
+    open_gap_pct  = round((opens[i] - closes[i - 1]) / closes[i - 1] * 100, 2)
+    recovery_pct  = round((closes[i] - opens[i]) / opens[i] * 100, 2)
+    above_ema8_pct = round((closes[i] - ef) / ef * 100, 2)
+
+    fl: dict = {
+        "ema_uptrend":      {"passed": True,                     "value": round(ef - es, 1)},
+        "open_weakness":    {"passed": True,                     "value": open_gap_pct},
+        "close_recovered":  {"passed": True,                     "value": recovery_pct},
+        "close_above_ema8": {"passed": True,                     "value": above_ema8_pct},
+        "ema21_held":       {"passed": True,                     "value": round(lows[i] - es, 1)},
+        "rsi_moderate":     {"passed": True,                     "value": round(rsi[i], 1)},
+        "body_ratio":       {"passed": body_ratio >= 0.35,       "value": body_ratio},
+    }
+    return "CALL", "BULL_REVERSAL_DIP", fl
+
+
 def _check_bull_higher_low(
     i: int,
     highs: list, lows: list, closes: list, opens: list,
@@ -466,7 +621,7 @@ def _check_bull_trend_continuation(
     ef, es = ema_fast[i], ema_slow[i]
     if ef <= es:
         return None
-    # EMA21 must be rising (strong trend)
+    # EMA21 must be rising (strong trend — prevents firing on stalling trend days)
     if ema_slow[i] <= ema_slow[i - 2]:
         return None
 
@@ -507,10 +662,12 @@ def _check_bull_trend_continuation(
 # ═══════════════════════════════════════════════════════════════════
 
 _BULL_STRATEGY_TIER: Dict[str, float] = {
-    "BULL_EMA_PULLBACK":        18.0,   # best: buying EMA21 dip in uptrend (true pullback)
-    "BULL_VWAP_RECLAIM":        17.0,   # excellent: VWAP dip + reclaim (true institutional reclaim)
-    "BULL_TREND_CONTINUATION":  12.0,   # good: STRONG_BULL only momentum continuation
-    "BULL_HIGHER_LOW":           8.0,   # disabled; WR=8-12%
+    "BULL_VWAP_RECLAIM":        17.0,   # excellent: VWAP dip + reclaim — MILD_BULL only (44%+ WR)
+    "BULL_TREND_CONTINUATION":  15.0,   # best workhorse: STRONG_BULL 61% WR, MILD_BULL 43% WR
+    "BULL_REVERSAL_DIP":        13.0,   # good: prior-day open-down recovery → next-day follow-through
+    "BULL_EMA_PULLBACK":         8.0,   # disabled; unreliable in backtests
+    "BULL_EMA8_TOUCH":           8.0,   # disabled; MILD_BULL 21% WR, hurts P&L
+    "BULL_HIGHER_LOW":           6.0,   # disabled; WR=8-12%
 }
 
 _BULL_REGIME_QUALITY: Dict[str, float] = {
@@ -760,7 +917,10 @@ def evaluate_live_bull(
         for check_fn, strat_flag, strat_name in [
             (_check_bull_ema_pullback,       cfg.enable_bull_ema_pullback and regime == "STRONG_BULL",
              "BULL_EMA_PULLBACK"),
-            (_check_bull_vwap_reclaim,       cfg.enable_bull_vwap_reclaim,       "BULL_VWAP_RECLAIM"),
+            (_check_bull_ema8_touch,         cfg.enable_bull_ema8_touch,         "BULL_EMA8_TOUCH"),
+            (_check_bull_vwap_reclaim,       cfg.enable_bull_vwap_reclaim and regime != "STRONG_BULL",
+             "BULL_VWAP_RECLAIM"),
+            (_check_bull_reversal_dip,       cfg.enable_bull_reversal_dip,       "BULL_REVERSAL_DIP"),
             (_check_bull_trend_continuation, cfg.enable_bull_trend_continuation,
              "BULL_TREND_CONTINUATION"),
             (_check_bull_higher_low,         cfg.enable_bull_higher_low,         "BULL_HIGHER_LOW"),
@@ -775,10 +935,14 @@ def evaluate_live_bull(
                                   ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
             if result is not None:
                 signal, strat_nm, fl = result
-                sl_base = (cfg.sl_pct_bep if strat_nm in ("BULL_EMA_PULLBACK", "BULL_TREND_CONTINUATION") else
-                           cfg.sl_pct_bvr if strat_nm == "BULL_VWAP_RECLAIM" else cfg.sl_pct_bhl)
-                tgt_base = (cfg.target_pct_bep if strat_nm in ("BULL_EMA_PULLBACK", "BULL_TREND_CONTINUATION") else
-                            cfg.target_pct_bvr if strat_nm == "BULL_VWAP_RECLAIM" else cfg.target_pct_bhl)
+                if strat_nm in ("BULL_EMA_PULLBACK", "BULL_EMA8_TOUCH", "BULL_TREND_CONTINUATION"):
+                    sl_base, tgt_base = cfg.sl_pct_bep, cfg.target_pct_bep
+                elif strat_nm == "BULL_REVERSAL_DIP":
+                    sl_base, tgt_base = cfg.sl_pct_brd, cfg.target_pct_brd
+                elif strat_nm == "BULL_VWAP_RECLAIM":
+                    sl_base, tgt_base = cfg.sl_pct_bvr, cfg.target_pct_bvr
+                else:
+                    sl_base, tgt_base = cfg.sl_pct_bhl, cfg.target_pct_bhl
                 cap_use = capital if capital > 0 else cfg.capital
                 lots = cfg.lots  # simplified for live; combined runner scales via backtest
                 matches.append({
@@ -936,25 +1100,58 @@ def run_bull_backtest(
         rsi = rsi_vals[i]
 
         # ── Scan all strategies ───────────────────────────────────────────
+        # Architecture: pullback strategies detect the signal on the PRIOR bar (i-1)
+        # and enter at TODAY's open (i). This avoids the option SL being hit during
+        # the same-day pullback — we only enter AFTER the bounce is confirmed at prior close.
+        #
+        # Momentum/continuation strategies detect and enter on the SAME day (i), because
+        # their conditions (low stays above EMA8, green candle) mean no intraday SL risk.
         matches: List[Tuple[str, str, dict]] = []
 
-        # EMA_PULLBACK: STRONG_BULL only — on MILD_BULL, EMA21 dip usually means trend weakening (-₹24k)
-        if cfg.enable_bull_ema_pullback and regime == "STRONG_BULL":
-            r = _check_bull_ema_pullback(
-                i, highs, lows, closes, opens,
+        # ── PRIOR-DAY DETECTION (enter today after signal confirmed at prior close) ──
+
+        # EMA_PULLBACK: prior day's low tested EMA21 zone and bounced → enter today
+        # STRONG_BULL only (on MILD_BULL, EMA21 touch often signals trend weakening)
+        if cfg.enable_bull_ema_pullback and i >= 5:
+            prev_regime = _classify_bull_regime(
+                i-1, closes, ema_fast_vals, ema_slow_vals, ema_trend_vals,
+                adx_vals, rsi_vals, vix, cfg)
+            if prev_regime == "STRONG_BULL":
+                r = _check_bull_ema_pullback(
+                    i-1, highs, lows, closes, opens,
+                    ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
+                if r:
+                    matches.append(r)
+
+        # EMA8_TOUCH: prior day's low touched EMA8 zone and closed above → enter today
+        # Works on both regimes; EMA21 must be rising to confirm trend not stalling
+        if cfg.enable_bull_ema8_touch and i >= 5:
+            r = _check_bull_ema8_touch(
+                i-1, highs, lows, closes, opens,
                 ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
             if r:
                 matches.append(r)
 
-        if cfg.enable_bull_vwap_reclaim:
+        # REVERSAL_DIP: prior day opened down in bull trend but recovered above EMA8 → enter today
+        if cfg.enable_bull_reversal_dip and i >= 3:
+            r = _check_bull_reversal_dip(
+                i-1, highs, lows, closes, opens,
+                ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
+            if r:
+                matches.append(r)
+
+        # ── SAME-DAY DETECTION (enter today, conditions confirmed at open or intraday) ──
+
+        # VWAP_RECLAIM: MILD_BULL only — on STRONG_BULL, VWAP dip is a warning not a buy (0% WR tested)
+        if cfg.enable_bull_vwap_reclaim and regime != "STRONG_BULL":
             r = _check_bull_vwap_reclaim(
                 i, highs, lows, closes, opens,
                 ema_fast_vals, ema_slow_vals, rsi_vals, vwap_vals, cfg)
             if r:
                 matches.append(r)
 
-        # BULL_TREND_CONTINUATION: both regimes — STRONG_BULL quality score (25) vs MILD_BULL (15)
-        # naturally tiers the quality gate: STRONG_BULL easily passes 58, MILD_BULL needs other factors
+        # TREND_CONTINUATION: both regimes — low stays above EMA8 (no intraday SL risk)
+        # STRONG_BULL quality score (25) vs MILD_BULL (15) naturally tiers the quality gate
         if cfg.enable_bull_trend_continuation:
             r = _check_bull_trend_continuation(
                 i, highs, lows, closes, opens,
@@ -1034,15 +1231,15 @@ def run_bull_backtest(
             if leg_idx == 1:
                 effective_lots = max(1, int(round(effective_lots * cfg.second_trade_lot_fraction)))
 
-            # Contextual SL
-            sl_base = (cfg.sl_pct_bep if strategy_name == "BULL_EMA_PULLBACK" else
-                       cfg.sl_pct_bvr if strategy_name == "BULL_VWAP_RECLAIM" else
-                       cfg.sl_pct_bep if strategy_name == "BULL_TREND_CONTINUATION" else
-                       cfg.sl_pct_bhl)
-            tgt_base = (cfg.target_pct_bep if strategy_name == "BULL_EMA_PULLBACK" else
-                        cfg.target_pct_bvr if strategy_name == "BULL_VWAP_RECLAIM" else
-                        cfg.target_pct_bep if strategy_name == "BULL_TREND_CONTINUATION" else
-                        cfg.target_pct_bhl)
+            # Contextual SL — pullback strategies (EMA_PULLBACK, EMA8_TOUCH, TC) share wider SL tier
+            if strategy_name in ("BULL_EMA_PULLBACK", "BULL_EMA8_TOUCH", "BULL_TREND_CONTINUATION"):
+                sl_base, tgt_base = cfg.sl_pct_bep, cfg.target_pct_bep
+            elif strategy_name == "BULL_REVERSAL_DIP":
+                sl_base, tgt_base = cfg.sl_pct_brd, cfg.target_pct_brd
+            elif strategy_name == "BULL_VWAP_RECLAIM":
+                sl_base, tgt_base = cfg.sl_pct_bvr, cfg.target_pct_bvr
+            else:
+                sl_base, tgt_base = cfg.sl_pct_bhl, cfg.target_pct_bhl
 
             if cfg.enable_contextual_sl:
                 if quality >= cfg.sl_aplus_quality_min:
