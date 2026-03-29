@@ -495,12 +495,19 @@ async def heartbeat_loop():
 
 
 def _get_latest_event(event_type: str) -> Optional[dict]:
-    """Get the most recent event of a given type from the events log."""
+    """Get the most recent event of a given type from the events log.
+    High-frequency events (HEARTBEAT) are scanned in the last 500 lines.
+    Rare events (DAILY_ADAPTIVE_SCAN, DAILY_REGIME, TREND_DETECTED etc.) are
+    scanned in the last 10000 lines so they survive across restarts."""
     if not EVENTS_LOG.exists():
         return None
+    # How far back to search: rare events need deeper scan
+    _rare = {"DAILY_ADAPTIVE_SCAN", "DAILY_REGIME", "TREND_DETECTED",
+             "REGIME_DETECTED", "ENTRY", "EXIT", "TRADE_CLOSED"}
+    scan_depth = 25000 if event_type in _rare else 500
     try:
         lines = EVENTS_LOG.read_text().strip().split("\n")
-        for line in reversed(lines[-500:]):
+        for line in reversed(lines[-scan_depth:]):
             try:
                 ev = json.loads(line)
                 if ev.get("event") == event_type:
@@ -654,13 +661,95 @@ def health():
 
 @app.get("/api/bot-status")
 def bot_status_rest():
-    """REST endpoint returning the latest full bot status (same as WebSocket push).
-    Reads the most recent HEARTBEAT event which contains paper_mode, capital,
-    kite_connected, trading_engine, skip_reasons, etc."""
-    ev = _get_latest_event("HEARTBEAT")
+    """REST endpoint returning the latest full bot status.
+    Reads the most recent HEARTBEAT and enriches it with stale-but-useful
+    data from DAILY_ADAPTIVE_SCAN, TREND_DETECTED, REGIME_DETECTED so the
+    dashboard always shows the last known state even when market is closed."""
+    ev = _get_latest_event("HEARTBEAT") or {}
+
+    # Always enrich with last known market intelligence (survives bot restarts)
+    mkt = get_latest_market_state()
+    trend_ev  = mkt.get("trend")  or {}
+    regime_ev = mkt.get("regime") or {}
+
+    # Enrich trend fields if missing from HEARTBEAT
+    if not ev.get("trend_state") and trend_ev:
+        ev["trend_state"]     = trend_ev.get("state")
+        ev["trend_direction"] = trend_ev.get("direction")
+        ev["trend_conviction"]= trend_ev.get("conviction")
+        ev["risk_multiplier"] = trend_ev.get("risk_multiplier")
+        ev["strategy_priority"]   = trend_ev.get("strategy_priority", [])
+        ev["trend_scores"]    = trend_ev.get("scores", {})
+        ev["trend_impulse_grade"] = trend_ev.get("impulse_grade")
+        ev["_trend_ts"]       = trend_ev.get("ts")  # stale-data timestamp for UI
+
+    # Enrich regime fields if missing
+    if not ev.get("regime") and regime_ev:
+        ev["regime"]          = regime_ev.get("regime")
+        ev["regime_atr_ratio"]= regime_ev.get("atr_ratio")
+        ev["regime_adx"]      = regime_ev.get("adx_proxy")
+        ev["regime_vix"]      = regime_ev.get("vix")
+        ev["regime_rsi"]      = regime_ev.get("rsi")
+        ev["_regime_ts"]      = regime_ev.get("ts")
+
+    # Enrich daily_regime / active_engine — prefer persistent JSON file (most reliable),
+    # fall back to DAILY_REGIME event scan.  Done unconditionally so it always shows.
+    if not ev.get("daily_regime"):
+        _dr_file = _STATE_DIR / "kite_bot_daily_regime.json"
+        if _dr_file.exists():
+            try:
+                _dr_data = json.loads(_dr_file.read_text())
+                ev["daily_regime"]      = _dr_data.get("daily_regime")
+                ev["active_engine"]     = _dr_data.get("active_engine")
+                ev["_daily_regime_ts"]  = _dr_data.get("classified_at")
+            except Exception:
+                pass
+    if not ev.get("daily_regime"):
+        # File missing — fall back to event scan
+        dr_ev = _get_latest_event("DAILY_REGIME") or {}
+        if dr_ev:
+            ev["daily_regime"]  = dr_ev.get("regime") or dr_ev.get("daily_regime")
+            ev["active_engine"] = dr_ev.get("active_engine") or (
+                "BULL" if "BULL" in str(dr_ev.get("regime","")) or "UP" in str(dr_ev.get("regime",""))
+                else "BEAR" if "BEAR" in str(dr_ev.get("regime","")) or "DOWN" in str(dr_ev.get("regime",""))
+                else "NEUTRAL"
+            )
+            ev["_daily_regime_ts"] = dr_ev.get("ts")
+
+    # Enrich last_scan from DAILY_ADAPTIVE_SCAN if missing
+    if not ev.get("last_scan"):
+        da_scan = _get_latest_event("DAILY_ADAPTIVE_SCAN") or {}
+        if da_scan:
+            legs = da_scan.get("executable_legs") or []
+            def _leg_conf(lg):
+                fl = lg.get("filter_log") or {}
+                qs = fl.get("quality_score")
+                return round(float(qs), 1) if isinstance(qs, (int, float)) else 0.0
+            ev["last_scan"] = {
+                "strategies_evaluated": len(legs),
+                "signals_detected":     len(legs),
+                "regime":               da_scan.get("regime"),
+                "vix":                  da_scan.get("vix"),
+                "signal_bar_date":      da_scan.get("signal_bar_date"),
+                "_scan_ts":             da_scan.get("ts"),  # when this plan was made
+                "candidates": [
+                    {"strategy": lg.get("strategy",""), "signal": lg.get("direction",""),
+                     "confidence": _leg_conf(lg)}
+                    for lg in legs
+                ],
+                "scans": [
+                    {"strategy": lg.get("strategy",""), "signal": lg.get("direction",""),
+                     "confidence": _leg_conf(lg), "passed": True,
+                     "sl_pct": lg.get("sl_pct"), "target_pct": lg.get("target_pct"),
+                     "lots": lg.get("lots",1), "regime": da_scan.get("regime","")}
+                    for lg in legs
+                ],
+            }
+
     if ev:
         return ev
-    # Fallback when bot hasn't started yet
+
+    # Fallback when bot has never started
     return {
         "state": "IDLE",
         "market_open": False,
@@ -1211,7 +1300,7 @@ def get_latest_market_state() -> dict:
         lines = EVENTS_LOG.read_text().strip().split("\n")
         trend_ev: Optional[dict] = None
         regime_ev: Optional[dict] = None
-        for line in reversed(lines[-1000:]):
+        for line in reversed(lines[-25000:]):
             try:
                 ev = json.loads(line)
                 etype = ev.get("event", "")
