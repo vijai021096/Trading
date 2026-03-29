@@ -1059,7 +1059,10 @@ class KiteORBTrader:
         logger.info(f"MOMENTUM OK: {momentum_reason}")
 
         # ── Direction correlation block (hard block after any loss in same direction) ──
-        if leg["direction"] in self._lost_directions_today:
+        # Exception: BULL_DIP_RECOVERY trades a fundamentally different setup (recovery after
+        # prior-day red candle) and should not be blocked by a TC loss on the same day.
+        _is_dip_recovery = (leg.get("strategy") == "BULL_DIP_RECOVERY")
+        if not _is_dip_recovery and leg["direction"] in self._lost_directions_today:
             logger.info(
                 f"DIRECTION_BLOCKED: {leg['direction']} already lost today — "
                 f"skipping {leg['strategy']} to prevent overexposure"
@@ -1595,6 +1598,7 @@ class KiteORBTrader:
         # A+ setup: full wide SL (passed in as sl_pct_override, typically 0.30)
         # STRONG trend: medium SL (~25%)
         # Normal: tight SL (~20-22%) — don't give marginal setups extra room
+        setup_tag = "A+" if _is_aplus else ("STRONG" if _is_strong else "STD")
         if _is_aplus:
             sl_pct = sl_pct_override              # full 30%
         elif _is_strong:
@@ -1667,7 +1671,6 @@ class KiteORBTrader:
             ),
             filter_log, vix,
         )
-        setup_tag = "A+" if _is_aplus else ("STRONG" if _is_strong else "STD")
         otm_tag   = f"OTM+{otm_offset}" if otm_offset > 0 else "ATM"
         logger.info(
             f"SIGNAL: {strategy} {signal} [{setup_tag}/{otm_tag}] | "

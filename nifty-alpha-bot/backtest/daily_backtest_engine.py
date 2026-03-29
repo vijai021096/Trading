@@ -97,6 +97,9 @@ class DailyBacktestConfig:
     sl_pct_vc: float = 0.20
     target_pct_vc: float = 0.55
 
+    sl_pct_br: float = 0.22     # BOUNCE_REJECTION: wider SL — prior-day bounce adds noise
+    target_pct_br: float = 0.55  # 2.5× RR — bear trend resumes after failed bounce
+
     # ── Break-even / EOD ──
     break_even_trigger_pct: float = 0.08  # Matches live: 8% (was 10%)
 
@@ -243,6 +246,7 @@ class DailyBacktestConfig:
     enable_inside_bar_break: bool = False  # Disabled: 18.8% WR, -₹31k net — too many false breakouts
     enable_vwap_cross: bool = True         # Enabled: 100% WR on recent data, good R:R
     enable_ema_fresh_cross: bool = False   # Disabled: WR=11%, avg=-₹1,054 — losing
+    enable_bounce_rejection: bool = True   # Prior day green bounce → today red rejection in bear trend → PUT
 
     # ── Fallback signal: fires when no primary strategy matches ──
     # NOTE: Backtested as harmful for intraday (WR=10%). Kept as option, disabled by default.
@@ -403,9 +407,12 @@ def _classify_regime(
 
 STRATEGY_PRIORITY = {
     "STRONG_TREND_UP":   ["BREAKOUT_MOMENTUM", "TREND_CONTINUATION", "EMA_FRESH_CROSS"],
-    "STRONG_TREND_DOWN": ["BREAKOUT_MOMENTUM", "TREND_CONTINUATION", "EMA_FRESH_CROSS"],
+    # TC first: ensures TC always gets slot 1 (tier 20). BR fills slot 2 ahead of BM when a bounce rejected.
+    # BM gets slot when BR doesn't fire (prior day not green). Never blocks TC.
+    "STRONG_TREND_DOWN": ["TREND_CONTINUATION", "BOUNCE_REJECTION", "BREAKOUT_MOMENTUM", "EMA_FRESH_CROSS"],
     # BM removed from MILD_TREND: 29% WR (-₹47k on 21 trades) — ambiguous direction in mild trend kills edge
-    "MILD_TREND":        ["EMA_FRESH_CROSS", "TREND_CONTINUATION", "VWAP_CROSS", "REVERSAL_SNAP"],
+    # BOUNCE_REJECTION added: bearish MILD_TREND (EMA8<EMA21) with failed bounce is reliable PUT signal
+    "MILD_TREND":        ["BOUNCE_REJECTION", "EMA_FRESH_CROSS", "TREND_CONTINUATION", "VWAP_CROSS", "REVERSAL_SNAP"],
     "MEAN_REVERT":       ["RANGE_BOUNCE", "GAP_FADE", "REVERSAL_SNAP", "VWAP_CROSS", "INSIDE_BAR_BREAK"],
     "BREAKOUT":          ["BREAKOUT_MOMENTUM", "EMA_FRESH_CROSS", "INSIDE_BAR_BREAK", "TREND_CONTINUATION", "GAP_FADE"],
     "VOLATILE":          [],  # No strategies on choppy high-VIX days (25% WR); strong moves override to STRONG_TREND
@@ -431,6 +438,7 @@ SL_TARGET_MAP = {
     "VWAP_CROSS":         ("sl_pct_vc", "target_pct_vc"),
     "EMA_FRESH_CROSS":    ("sl_pct_efc", "target_pct_efc"),
     "FALLBACK_EMA_CROSS": ("sl_pct_fb", "target_pct_fb"),
+    "BOUNCE_REJECTION":   ("sl_pct_br", "target_pct_br"),
 }
 
 ALL_STRATEGIES = set(SL_TARGET_MAP.keys())
@@ -859,6 +867,89 @@ def _check_ema_fresh_cross(
     return None
 
 
+def _check_bounce_rejection(
+    i: int, highs: list, lows: list, closes: list, opens: list,
+    ema_fast_vals: list, ema_slow_vals: list,
+    rsi: float, rsi_vals: list,
+    cfg: DailyBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """
+    BOUNCE_REJECTION — prior day was a green (bounce) candle in a bear trend,
+    today rejects and closes red below EMA8. Dead-cat bounce failed; the downtrend
+    resumes. Enter PUT.
+
+    This is the bear-side mirror of BULL_DIP_RECOVERY. In bearish regimes, every
+    rally is an opportunity to sell — BOUNCE_REJECTION captures the day after the
+    brief rally attempt fails, giving a high-conviction PUT entry with trend momentum
+    back on our side.
+
+    Only fires when EMA8 < EMA21 (bearish EMA structure confirmed). This prevents
+    false signals on bullish MILD_TREND days where the regime classification is the same
+    but the EMA structure says price is actually in an uptrend.
+
+    Conditions:
+      1. EMA8 < EMA21 (bearish EMA structure — not just regime label)
+      2. Prior day was green: closes[i-1] > opens[i-1] × 1.001 (bounce occurred)
+      3. Today is red: closes[i] < opens[i] × 0.998 (rejection confirmed)
+      4. Close < EMA8 × 1.003 (back below or near fast EMA — bearish zone)
+      5. RSI declining or weak: rsi < 55 or rsi_vals[i] < rsi_vals[i-1]
+      6. EMA21 declining: ema_slow[i] < ema_slow[i-3] (bear structure intact)
+      7. Body ratio ≥ 0.25 (real red body, not a doji)
+    """
+    if i < 4:
+        return None
+
+    ef, es = ema_fast_vals[i], ema_slow_vals[i]
+
+    # Bearish EMA structure (EMA8 < EMA21) — critical: MILD_TREND can be bullish too
+    if ef >= es:
+        return None
+
+    # Prior day must be a green candle (the bounce we're rejecting)
+    if closes[i - 1] <= opens[i - 1] * 1.001:
+        return None
+
+    # Today must be a red candle (rejection confirmed)
+    if closes[i] >= opens[i] * 0.998:
+        return None
+
+    # Close must be below or near EMA8 (bearish zone — not above EMA8 on close)
+    if closes[i] > ef * 1.003:
+        return None
+
+    # RSI must be weak or declining (momentum not with the bounce)
+    if rsi >= 55.0 and rsi_vals[i] >= rsi_vals[i - 1]:
+        return None
+
+    # EMA21 must be declining (bear structure intact — not a transition to bullish)
+    if i >= 3 and ema_slow_vals[i] >= ema_slow_vals[i - 3]:
+        return None
+
+    body = abs(closes[i] - opens[i])
+    rng  = highs[i] - lows[i]
+    body_ratio = round(body / rng, 2) if rng > 0 else 0.0
+    if body_ratio < 0.25:
+        return None
+
+    prior_bounce_pct = round((closes[i - 1] - opens[i - 1]) / opens[i - 1] * 100, 2)
+    rejection_pct    = round((closes[i] - opens[i]) / opens[i] * 100, 2)
+    below_ema8_pct   = round((ef - closes[i]) / ef * 100, 2)
+
+    fl: dict = {
+        "bearish_ema_structure": {"passed": True,              "value": round(ef - es, 1)},
+        "prior_day_bounce":      {"passed": True,              "value": prior_bounce_pct},
+        "today_red_rejection":   {"passed": True,              "value": rejection_pct},
+        "below_ema8":            {"passed": True,              "value": below_ema8_pct},
+        "rsi_weak":              {"passed": True,              "value": round(rsi, 1)},
+        "ema21_declining":       {"passed": True,              "value": round(ema_slow_vals[i] - ema_slow_vals[i-3], 1)},
+        "body_ratio":            {"passed": body_ratio >= 0.25, "value": body_ratio},
+        "bias":         "BEARISH",
+        "bias_strength": 0.85,
+        "setup_type":   "BOUNCE_REJECTION",
+    }
+    return "PUT", "BOUNCE_REJECTION", fl
+
+
 # ═══════════════════════════════════════════════════════════════════
 # A+ QUALITY SCORING
 # ═══════════════════════════════════════════════════════════════════
@@ -875,6 +966,7 @@ def _check_ema_fresh_cross(
 _STRATEGY_TIER: Dict[str, int] = {
     "TREND_CONTINUATION":  20,
     "REVERSAL_SNAP":       18,
+    "BOUNCE_REJECTION":    16,   # failed bounce in bear trend: prior green → today red below EMA8
     "BREAKOUT_MOMENTUM":   14,
     "VWAP_CROSS":          12,
     "GAP_FADE":            11,
@@ -1394,6 +1486,11 @@ def run_daily_backtest(
                 signal_result = _check_vwap_cross(
                     i, closes, opens, highs, lows,
                     vwap_vals, rsi, ema_fast_vals, ema_slow_vals, cfg)
+            elif strat_name == "BOUNCE_REJECTION":
+                signal_result = _check_bounce_rejection(
+                    i, highs, lows, closes, opens,
+                    ema_fast_vals, ema_slow_vals,
+                    rsi, rsi_vals, cfg)
             elif strat_name == "EMA_FRESH_CROSS":
                 if vix <= 21.0:
                     signal_result = _check_ema_fresh_cross(
@@ -1809,6 +1906,11 @@ def collect_strategy_matches_for_index(
             signal_result = _check_vwap_cross(
                 i, closes, opens, highs, lows,
                 vwap_vals, rsi, ema_fast_vals, ema_slow_vals, cfg)
+        elif strat_name == "BOUNCE_REJECTION":
+            signal_result = _check_bounce_rejection(
+                i, highs, lows, closes, opens,
+                ema_fast_vals, ema_slow_vals,
+                rsi, rsi_vals, cfg)
         elif strat_name == "EMA_FRESH_CROSS":
             if vix <= 21.0:
                 signal_result = _check_ema_fresh_cross(

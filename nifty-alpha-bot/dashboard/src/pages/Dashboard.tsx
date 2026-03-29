@@ -1347,11 +1347,17 @@ const REGIME_META: Record<string, { color: string; bg: string }> = {
 
 const STRAT_COLORS: Record<string, string> = {
   // Daily-adaptive engine strategy names (active)
-  TREND_CONTINUATION: 'text-green',
-  BREAKOUT_MOMENTUM:  'text-accent',
-  EMA_FRESH_CROSS:    'text-green',
-  REVERSAL_SNAP:      'text-red',
-  VWAP_CROSS:         'text-blue-400',
+  TREND_CONTINUATION:      'text-green',
+  BREAKOUT_MOMENTUM:       'text-accent',
+  EMA_FRESH_CROSS:         'text-green',
+  REVERSAL_SNAP:           'text-red',
+  VWAP_CROSS:              'text-blue-400',
+  BOUNCE_REJECTION:        'text-orange-400',   // bear: prior-day green bounce → today red rejection
+  // Bull engine strategies
+  BULL_TREND_CONTINUATION: 'text-green',
+  BULL_DIP_RECOVERY:       'text-cyan',         // bull: prior-day red dip → today green recovery
+  BULL_MOMENTUM_BREAKOUT:  'text-accent',
+  BULL_VWAP_RECLAIM:       'text-blue-400',
   // Disabled: GAP_FADE (25% WR), INSIDE_BAR_BREAK (18.8% WR), RANGE_BOUNCE (38% WR)
   // Intraday engine strategy names (shown in strategy_priority from trend_detector)
   ORB:               'text-amber',

@@ -137,6 +137,7 @@ class BullBacktestConfig:
     enable_bull_reversal_dip: bool = False      # Disabled: 25% WR across multiple test runs, consistently hurts P&L
     enable_bull_trend_continuation: bool = True # Both regimes — RSI 50-78, EMA21 rising
     enable_bull_higher_low: bool = False        # Disabled: WR=8-12% on daily data, hurts results
+    enable_bull_dip_recovery: bool = True       # Prior day red → today green in bull regime — frequent bounce pattern
     enable_bull_fresh_crossover: bool = False   # Disabled: false crossovers during bear relief bounces give 20% WR, -₹7.6k
     enable_bull_momentum_breakout: bool = True  # Close breaks above prior 5-day high in established bull trend
 
@@ -659,6 +660,93 @@ def _check_bull_trend_continuation(
     return "CALL", "BULL_TREND_CONTINUATION", fl
 
 
+def _check_bull_dip_recovery(
+    i: int,
+    highs: list, lows: list, closes: list, opens: list,
+    ema_fast: list, ema_slow: list,
+    rsi: list,
+    cfg: BullBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """
+    BULL_DIP_RECOVERY — prior day was a red (selling) candle in a bull regime,
+    today recovers green above EMA8. Buyers stepped in after a single session
+    of profit-taking and pushed price back into bullish territory.
+
+    This is the single most frequent bull pattern and complements TC perfectly:
+    TC fires on uninterrupted strength days (no red candles, low stayed above EMA8).
+    DIP_RECOVERY fires on recovery days after a red candle — the intraday range may
+    have dipped below EMA8, but by close buyers are back in control.
+
+    Expected to add 30-50 additional bull trades per year, increasing frequency
+    from ~2/week to closer to 3/week for the full system.
+
+    Conditions:
+      1. EMA8 > EMA21 (bull trend intact)
+      2. Prior day red: closes[i-1] < opens[i-1] (profit-taking occurred)
+      3. Today green: closes[i] > opens[i] × 1.001 (recovery confirmed by close)
+      4. Close > EMA8 (price back in bullish zone)
+      5. Low > EMA21 × 0.990 (EMA21 support held — no regime break)
+      6. RSI 46-72 (moderate momentum — room to run)
+      7. EMA21 rising over 3 days: ema_slow[i] > ema_slow[i-3] (trend established)
+      8. Body ratio ≥ 0.25 (real green body, not a doji)
+    """
+    if i < 4:
+        return None
+
+    ef, es = ema_fast[i], ema_slow[i]
+    if ef <= es:
+        return None
+
+    # Prior day must be a red candle (the dip we're recovering from)
+    if closes[i - 1] >= opens[i - 1]:
+        return None
+
+    # Today must be green (recovery confirmed)
+    if closes[i] < opens[i] * 1.001:
+        return None
+
+    # Close back above EMA8 (bullish zone)
+    if closes[i] <= ef:
+        return None
+
+    # EMA21 support held (no regime break — if EMA21 broke, it's a different setup)
+    if lows[i] < es * 0.990:
+        return None
+
+    # RSI moderate zone — has momentum but not overbought
+    if not (46.0 <= rsi[i] <= 72.0):
+        return None
+
+    # EMA21 must not be actively declining over 5 days (trend not breaking down).
+    # Using 5-day instead of 3-day: on recovery days after a single red candle, EMA21 can be
+    # temporarily flat or slightly below 3-day-ago. 5-day catches genuine trend breakdown
+    # while allowing short-term consolidation.
+    if i >= 5 and ema_slow[i] < ema_slow[i - 5] * 0.999:
+        return None
+
+    body = abs(closes[i] - opens[i])
+    rng  = highs[i] - lows[i]
+    body_ratio = round(body / rng, 2) if rng > 0 else 0.0
+    if body_ratio < 0.25:
+        return None
+
+    prior_red_pct  = round((closes[i - 1] - opens[i - 1]) / opens[i - 1] * 100, 2)
+    recovery_pct   = round((closes[i] - opens[i]) / opens[i] * 100, 2)
+    above_ema8_pct = round((closes[i] - ef) / ef * 100, 2)
+
+    fl: dict = {
+        "ema_uptrend":       {"passed": True,                      "value": round(ef - es, 1)},
+        "prior_day_red":     {"passed": True,                      "value": prior_red_pct},
+        "today_green":       {"passed": True,                      "value": recovery_pct},
+        "close_above_ema8":  {"passed": True,                      "value": above_ema8_pct},
+        "ema21_support_held":{"passed": True,                      "value": round(lows[i] - es, 1)},
+        "rsi_moderate":      {"passed": True,                      "value": round(rsi[i], 1)},
+        "ema21_rising":      {"passed": True,                      "value": round(ema_slow[i] - ema_slow[i-3], 1)},
+        "body_ratio":        {"passed": body_ratio >= 0.25,        "value": body_ratio},
+    }
+    return "CALL", "BULL_DIP_RECOVERY", fl
+
+
 def _check_bull_fresh_crossover(
     i: int,
     highs: list, lows: list, closes: list, opens: list,
@@ -854,8 +942,9 @@ _BULL_STRATEGY_TIER: Dict[str, float] = {
     "BULL_VWAP_RECLAIM":        17.0,   # excellent: VWAP dip + reclaim — MILD_BULL only (44%+ WR)
     "BULL_TREND_CONTINUATION":  15.0,   # best workhorse: STRONG_BULL 61% WR, MILD_BULL 43% WR
     "BULL_MOMENTUM_BREAKOUT":   14.0,   # breakout: close > 5-day high — dip-and-rip days
-    "BULL_REVERSAL_DIP":        13.0,   # disabled; 25% WR across runs, hurts P&L
-    "BULL_FRESH_CROSSOVER":     12.0,   # below TC: fires as fallback when TC blocked by EMA21 slope check
+    "BULL_DIP_RECOVERY":        13.0,   # prior day red → today green bounce in bull regime (frequent, complements TC)
+    "BULL_REVERSAL_DIP":        11.0,   # disabled; 25% WR across runs, hurts P&L
+    "BULL_FRESH_CROSSOVER":     10.0,   # disabled; false crossovers give 20% WR
     "BULL_EMA_PULLBACK":         8.0,   # disabled; unreliable in backtests
     "BULL_EMA8_TOUCH":           8.0,   # disabled; MILD_BULL 21% WR, hurts P&L
     "BULL_HIGHER_LOW":           6.0,   # disabled; WR=8-12%
@@ -1108,6 +1197,12 @@ def evaluate_live_bull(
         adx_now = adx_vals[i]
 
         # FRESH_CROSSOVER and VWAP/TC/BREAKOUT — use inline calls to handle varied signatures
+        if cfg.enable_bull_dip_recovery and i >= 4:
+            result = _check_bull_dip_recovery(i, highs, lows, closes, opens,
+                                              ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
+            if result is not None:
+                matches.append(result)
+
         if cfg.enable_bull_fresh_crossover and i >= 6:
             result = _check_bull_fresh_crossover(
                 i, highs, lows, closes, opens,
@@ -1172,7 +1267,7 @@ def evaluate_live_bull(
             if sname in ("BULL_EMA_PULLBACK", "BULL_EMA8_TOUCH", "BULL_TREND_CONTINUATION",
                          "BULL_FRESH_CROSSOVER"):
                 sl_b, tgt_b = cfg.sl_pct_bep, cfg.target_pct_bep
-            elif sname == "BULL_REVERSAL_DIP":
+            elif sname in ("BULL_REVERSAL_DIP", "BULL_DIP_RECOVERY"):
                 sl_b, tgt_b = cfg.sl_pct_brd, cfg.target_pct_brd
             elif sname in ("BULL_VWAP_RECLAIM", "BULL_MOMENTUM_BREAKOUT"):
                 sl_b, tgt_b = cfg.sl_pct_bvr, cfg.target_pct_bvr
@@ -1343,6 +1438,15 @@ def run_bull_backtest(
 
         # ── PRIOR-DAY DETECTION (enter today after signal confirmed at prior close) ──
 
+        # DIP_RECOVERY: prior day was red (profit-taking), today recovers green above EMA8
+        # Works on both regimes — the most frequent bull pattern, complements TC
+        if cfg.enable_bull_dip_recovery and i >= 4:
+            r = _check_bull_dip_recovery(
+                i, highs, lows, closes, opens,
+                ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
+            if r:
+                matches.append(r)
+
         # EMA_PULLBACK: prior day's low tested EMA21 zone and bounced → enter today
         # STRONG_BULL only (on MILD_BULL, EMA21 touch often signals trend weakening)
         if cfg.enable_bull_ema_pullback and i >= 5:
@@ -1453,7 +1557,10 @@ def run_bull_backtest(
                     break
 
             # Direction correlation block
-            if cfg.enable_direction_correlation_block and signal in lost_directions_today:
+            # DIP_RECOVERY is exempt: it trades a different pattern (recovery after prior-day red)
+            # and should not be blocked by a TC loss on the same day.
+            is_dip_recovery = (strategy_name == "BULL_DIP_RECOVERY")
+            if cfg.enable_direction_correlation_block and signal in lost_directions_today and not is_dip_recovery:
                 skip_reasons["direction_block"] = skip_reasons.get("direction_block", 0) + 1
                 continue
 
@@ -1488,12 +1595,11 @@ def run_bull_backtest(
             # Contextual SL
             if strategy_name in ("BULL_EMA_PULLBACK", "BULL_EMA8_TOUCH", "BULL_TREND_CONTINUATION",
                                  "BULL_FRESH_CROSSOVER"):
-                # Fresh crossover: same wider SL as TC — volatility is higher in early trend days
                 sl_base, tgt_base = cfg.sl_pct_bep, cfg.target_pct_bep
-            elif strategy_name == "BULL_REVERSAL_DIP":
+            elif strategy_name in ("BULL_REVERSAL_DIP", "BULL_DIP_RECOVERY"):
+                # Recovery bounce strategies: same SL tier as REVERSAL_DIP
                 sl_base, tgt_base = cfg.sl_pct_brd, cfg.target_pct_brd
             elif strategy_name in ("BULL_VWAP_RECLAIM", "BULL_MOMENTUM_BREAKOUT"):
-                # Breakout: tighter SL since trend is established — breakout fails fast or works
                 sl_base, tgt_base = cfg.sl_pct_bvr, cfg.target_pct_bvr
             else:
                 sl_base, tgt_base = cfg.sl_pct_bhl, cfg.target_pct_bhl
