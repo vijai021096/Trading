@@ -111,7 +111,7 @@ class BullBacktestConfig:
     # ── Regime thresholds ──
     adx_strong_bull: float = 0.28
     vix_strong_bull_max: float = 20.0
-    vix_mild_bull_max: float = 20.0   # tightened from 24 — VIX 20-24 in mild bull = nervous market, bear engine handles better
+    vix_mild_bull_max: float = 22.0   # raised from 20 — early bull recovery after a bear period often has VIX 20-23 while EMA8 is already crossing EMA21
     rsi_mild_bull_min: float = 50.0
 
     # ── Risk ──
@@ -134,9 +134,11 @@ class BullBacktestConfig:
     enable_bull_ema_pullback: bool = False      # Disabled: unreliable regardless of entry timing, blocks good strategies
     enable_bull_ema8_touch: bool = False        # Disabled: MILD_BULL = 21% WR (-₹27k), STRONG_BULL = 33% marginal — hurts overall P&L
     enable_bull_vwap_reclaim: bool = True       # MILD_BULL only — on STRONG_BULL, VWAP dip is a warning (0% WR tested)
-    enable_bull_reversal_dip: bool = True       # Both regimes — prior day opens down + recovers above EMA8 → enter next day
+    enable_bull_reversal_dip: bool = False      # Disabled: 25% WR across multiple test runs, consistently hurts P&L
     enable_bull_trend_continuation: bool = True # Both regimes — RSI 50-78, EMA21 rising
     enable_bull_higher_low: bool = False        # Disabled: WR=8-12% on daily data, hurts results
+    enable_bull_fresh_crossover: bool = False   # Disabled: false crossovers during bear relief bounces give 20% WR, -₹7.6k
+    enable_bull_momentum_breakout: bool = True  # Close breaks above prior 5-day high in established bull trend
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -521,8 +523,8 @@ def _check_bull_reversal_dip(
     if lows[i] < es * 0.992:
         return None
 
-    # RSI moderate — room to run
-    if not (40.0 <= rsi[i] <= 65.0):
+    # RSI moderate — room to run (cap raised 65→70: early bull recovery has RSI climbing fast)
+    if not (40.0 <= rsi[i] <= 70.0):
         return None
 
     # Strong recovery body (real buyers, not just a doji)
@@ -657,6 +659,193 @@ def _check_bull_trend_continuation(
     return "CALL", "BULL_TREND_CONTINUATION", fl
 
 
+def _check_bull_fresh_crossover(
+    i: int,
+    highs: list, lows: list, closes: list, opens: list,
+    ema_fast: list, ema_slow: list,
+    rsi: list,
+    adx: float,
+    cfg: BullBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """
+    BULL_FRESH_CROSSOVER — EMA8 crossed above EMA21 within the last 4 bars.
+
+    This is specifically designed for the "market dropped for weeks, just turned bullish"
+    scenario. When EMA8 crosses above EMA21 the first time after a bear period, CALL
+    options are cheap (IV still elevated from bear), trend is fresh and has maximum
+    room to run, and institutional buyers are committing capital for the new trend.
+
+    Key difference from BULL_TREND_CONTINUATION: does NOT require EMA21 to be rising.
+    EMA21 is a lagging indicator — during the first 5-10 days of a fresh bull reversal,
+    EMA21 is still declining (reflecting the prior bear). TC's EMA21 slope requirement
+    correctly blocks stalling old trends, but it incorrectly blocks these highest-conviction
+    fresh reversal entries. This strategy handles exactly those days.
+
+    Conditions:
+      1. EMA8 > EMA21 today (crossover intact)
+      2. EMA8 crossed above EMA21 within the last 4 bars (fresh reversal, not old trend)
+      3. Close > EMA8 (price confirmed above fast EMA — buyers in control)
+      4. Green candle (close > open × 0.999)
+      5. RSI 45-72 (recovering from oversold — ample room to run)
+      6. Low > EMA21 × 0.988 (EMA21 support held — bull structure not broken)
+      7. ADX >= 0.14 (some directional movement building)
+    """
+    if i < 6:
+        return None
+
+    ef, es = ema_fast[i], ema_slow[i]
+    if ef <= es:
+        return None
+
+    # EMA8 must have crossed above EMA21 within the last 4 bars
+    # (crossover at bar j means: ema_fast[j] > ema_slow[j] AND ema_fast[j-1] <= ema_slow[j-1])
+    crossed_recently = False
+    for k in range(1, 5):  # k=1..4 → check crossover 1 to 4 bars ago
+        if i - k - 1 < 0:
+            break
+        if ema_fast[i - k] > ema_slow[i - k] and ema_fast[i - k - 1] <= ema_slow[i - k - 1]:
+            crossed_recently = True
+            break
+    if not crossed_recently:
+        return None
+
+    # Price confirmed above EMA8
+    if closes[i] <= ef:
+        return None
+
+    # Green candle (buyers dominating)
+    if closes[i] < opens[i] * 0.999:
+        return None
+
+    # RSI in recovery zone (coming off oversold — fresh bull entry, not overbought chasing)
+    if not (45.0 <= rsi[i] <= 72.0):
+        return None
+
+    # EMA21 support held (not a false crossover that immediately fails)
+    if lows[i] < es * 0.988:
+        return None
+
+    # Some directional strength (trend is building — tighter than 0.14 to avoid false crossovers)
+    if adx < 0.17:
+        return None
+
+    # 3-day price momentum: close must be above the close 3 bars ago.
+    # A genuine bull recovery has price making progress. A brief relief bounce in a downtrend
+    # often reverses within 1-2 bars, leaving the 3-day momentum negative. This is the single
+    # most effective filter against false EMA crossovers during bear markets.
+    if closes[i] <= closes[i - 3]:
+        return None
+
+    days_since_cross = next(
+        (k for k in range(1, 5) if i - k - 1 >= 0
+         and ema_fast[i - k] > ema_slow[i - k]
+         and ema_fast[i - k - 1] <= ema_slow[i - k - 1]),
+        4,
+    )
+    cross_gap = round(ef - es, 1)
+    above_ema8_pct = round((closes[i] - ef) / ef * 100, 2)
+    body = abs(closes[i] - opens[i])
+    rng = highs[i] - lows[i]
+    body_ratio = round(body / rng, 2) if rng > 0 else 0.0
+
+    fl: dict = {
+        "ema8_crossed_above_ema21":  {"passed": True, "value": days_since_cross},
+        "ema8_above_ema21":          {"passed": True, "value": cross_gap},
+        "close_above_ema8":          {"passed": True, "value": above_ema8_pct},
+        "green_candle":              {"passed": True, "value": round(closes[i] - opens[i], 1)},
+        "rsi_recovery_zone":         {"passed": True, "value": round(rsi[i], 1)},
+        "ema21_support_held":        {"passed": True, "value": round(lows[i] - es, 1)},
+        "adx_building":              {"passed": adx >= 0.14, "value": round(adx, 3)},
+        "body_ratio":                {"passed": body_ratio >= 0.20, "value": body_ratio},
+    }
+    return "CALL", "BULL_FRESH_CROSSOVER", fl
+
+
+def _check_bull_momentum_breakout(
+    i: int,
+    highs: list, lows: list, closes: list, opens: list,
+    ema_fast: list, ema_slow: list,
+    rsi: list,
+    adx: float,
+    cfg: BullBacktestConfig,
+    lookback_days: int = 5,
+) -> Optional[Tuple[str, str, dict]]:
+    """
+    BULL_MOMENTUM_BREAKOUT — close breaks above the prior 5-day high in an established
+    bull trend. When price makes a new 5-session high with strong RSI and an established
+    rising EMA21, breakout traders and momentum algorithms pile in for a strong follow-through.
+
+    Unlike BULL_TREND_CONTINUATION (which requires the intraday low to stay above EMA8),
+    this fires even when there was an intraday dip below EMA8. The defining condition is
+    that buyers pushed the close to a new 5-day high — an incredibly bullish outcome after
+    any intraday weakness. These "dip-and-rip to new highs" days have outstanding follow-through.
+
+    Conditions:
+      1. EMA8 > EMA21 (uptrend intact)
+      2. EMA21 is rising: ema_slow[i] > ema_slow[i-2] (established trend, not fresh crossover)
+      3. Close > max(highs[i-5:i]) — actual breakout above prior 5-day high
+      4. Green candle (close > open × 1.001 — buyers drove the breakout)
+      5. RSI 53-76 (strong momentum, not dangerously overbought)
+      6. ADX >= 0.20 (trend has meaningful directional strength)
+      7. Close > EMA8 (price confirmed above fast EMA)
+    """
+    if i < 7:
+        return None
+
+    ef, es = ema_fast[i], ema_slow[i]
+    if ef <= es:
+        return None
+
+    # EMA21 must be rising — ensures this is an established trend, not a fresh crossover
+    # (fresh crossover days are handled by BULL_FRESH_CROSSOVER)
+    if ema_slow[i] <= ema_slow[i - 2]:
+        return None
+
+    # Compute prior N-day high (bars i-lookback to i-1, not including today)
+    if i < lookback_days:
+        return None
+    prior_nd_high = max(highs[i - lookback_days: i])
+
+    # Today's close must break above the prior N-day high (actual breakout)
+    if closes[i] <= prior_nd_high:
+        return None
+
+    # Strong green candle (buyers drove the breakout — not a marginal close above)
+    if closes[i] < opens[i] * 1.001:
+        return None
+
+    # RSI momentum zone — strong but not dangerously overbought
+    if not (53.0 <= rsi[i] <= 76.0):
+        return None
+
+    # ADX confirms directional strength
+    if adx < 0.20:
+        return None
+
+    # Price above EMA8 (in bullish zone at close)
+    if closes[i] <= ef:
+        return None
+
+    breakout_pct = round((closes[i] - prior_nd_high) / prior_nd_high * 100, 2)
+    above_ema8_pct = round((closes[i] - ef) / ef * 100, 2)
+    ema21_slope = round(ema_slow[i] - ema_slow[i - 2], 1)
+    body = abs(closes[i] - opens[i])
+    rng = highs[i] - lows[i]
+    body_ratio = round(body / rng, 2) if rng > 0 else 0.0
+
+    fl: dict = {
+        "ema_uptrend":       {"passed": True, "value": round(ef - es, 1)},
+        "ema21_rising":      {"passed": True, "value": ema21_slope},
+        "broke_5d_high":     {"passed": True, "value": breakout_pct},
+        "green_candle":      {"passed": True, "value": round(closes[i] - opens[i], 1)},
+        "rsi_strong":        {"passed": True, "value": round(rsi[i], 1)},
+        "adx_strength":      {"passed": adx >= 0.20, "value": round(adx, 3)},
+        "close_above_ema8":  {"passed": True, "value": above_ema8_pct},
+        "body_ratio":        {"passed": body_ratio >= 0.20, "value": body_ratio},
+    }
+    return "CALL", "BULL_MOMENTUM_BREAKOUT", fl
+
+
 # ═══════════════════════════════════════════════════════════════════
 # QUALITY SCORING (bull-specific calibration)
 # ═══════════════════════════════════════════════════════════════════
@@ -664,7 +853,9 @@ def _check_bull_trend_continuation(
 _BULL_STRATEGY_TIER: Dict[str, float] = {
     "BULL_VWAP_RECLAIM":        17.0,   # excellent: VWAP dip + reclaim — MILD_BULL only (44%+ WR)
     "BULL_TREND_CONTINUATION":  15.0,   # best workhorse: STRONG_BULL 61% WR, MILD_BULL 43% WR
-    "BULL_REVERSAL_DIP":        13.0,   # good: prior-day open-down recovery → next-day follow-through
+    "BULL_MOMENTUM_BREAKOUT":   14.0,   # breakout: close > 5-day high — dip-and-rip days
+    "BULL_REVERSAL_DIP":        13.0,   # disabled; 25% WR across runs, hurts P&L
+    "BULL_FRESH_CROSSOVER":     12.0,   # below TC: fires as fallback when TC blocked by EMA21 slope check
     "BULL_EMA_PULLBACK":         8.0,   # disabled; unreliable in backtests
     "BULL_EMA8_TOUCH":           8.0,   # disabled; MILD_BULL 21% WR, hurts P&L
     "BULL_HIGHER_LOW":           6.0,   # disabled; WR=8-12%
@@ -914,51 +1105,93 @@ def evaluate_live_bull(
 
     matches = []
     if vix <= cfg.vix_max:
-        for check_fn, strat_flag, strat_name in [
-            (_check_bull_ema_pullback,       cfg.enable_bull_ema_pullback and regime == "STRONG_BULL",
-             "BULL_EMA_PULLBACK"),
-            (_check_bull_ema8_touch,         cfg.enable_bull_ema8_touch,         "BULL_EMA8_TOUCH"),
-            (_check_bull_vwap_reclaim,       cfg.enable_bull_vwap_reclaim and regime != "STRONG_BULL",
-             "BULL_VWAP_RECLAIM"),
-            (_check_bull_reversal_dip,       cfg.enable_bull_reversal_dip,       "BULL_REVERSAL_DIP"),
-            (_check_bull_trend_continuation, cfg.enable_bull_trend_continuation,
-             "BULL_TREND_CONTINUATION"),
-            (_check_bull_higher_low,         cfg.enable_bull_higher_low,         "BULL_HIGHER_LOW"),
-        ]:
-            if not strat_flag:
-                continue
-            if strat_name == "BULL_VWAP_RECLAIM":
-                result = check_fn(i, highs, lows, closes, opens,
-                                  ema_fast_vals, ema_slow_vals, rsi_vals, vwap_vals, cfg)
-            else:
-                result = check_fn(i, highs, lows, closes, opens,
-                                  ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
+        adx_now = adx_vals[i]
+
+        # FRESH_CROSSOVER and VWAP/TC/BREAKOUT — use inline calls to handle varied signatures
+        if cfg.enable_bull_fresh_crossover and i >= 6:
+            result = _check_bull_fresh_crossover(
+                i, highs, lows, closes, opens,
+                ema_fast_vals, ema_slow_vals, rsi_vals, adx_now, cfg)
             if result is not None:
-                signal, strat_nm, fl = result
-                if strat_nm in ("BULL_EMA_PULLBACK", "BULL_EMA8_TOUCH", "BULL_TREND_CONTINUATION"):
-                    sl_base, tgt_base = cfg.sl_pct_bep, cfg.target_pct_bep
-                elif strat_nm == "BULL_REVERSAL_DIP":
-                    sl_base, tgt_base = cfg.sl_pct_brd, cfg.target_pct_brd
-                elif strat_nm == "BULL_VWAP_RECLAIM":
-                    sl_base, tgt_base = cfg.sl_pct_bvr, cfg.target_pct_bvr
-                else:
-                    sl_base, tgt_base = cfg.sl_pct_bhl, cfg.target_pct_bhl
-                cap_use = capital if capital > 0 else cfg.capital
-                lots = cfg.lots  # simplified for live; combined runner scales via backtest
-                matches.append({
-                    "leg":        len(matches) + 1,
-                    "direction":  signal,
-                    "bias":       "BULLISH",
-                    "bias_strength": 0.80,
-                    "setup_type": "BULL_PULLBACK",
-                    "strategy":   strat_nm,
-                    "sl_pct":     round(sl_base, 4),
-                    "target_pct": round(tgt_base, 4),
-                    "lots":       lots,
-                    "filter_log": {**fl, "regime": {"value": regime}, "daily_leg": len(matches) + 1},
-                })
-                if len(matches) >= cfg.max_trades_per_day:
-                    break
+                matches.append(result)
+
+        if cfg.enable_bull_ema_pullback and regime == "STRONG_BULL":
+            result = _check_bull_ema_pullback(i, highs, lows, closes, opens,
+                                              ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
+            if result is not None:
+                matches.append(result)
+
+        if cfg.enable_bull_ema8_touch:
+            result = _check_bull_ema8_touch(i, highs, lows, closes, opens,
+                                            ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
+            if result is not None:
+                matches.append(result)
+
+        if cfg.enable_bull_vwap_reclaim and regime != "STRONG_BULL":
+            result = _check_bull_vwap_reclaim(i, highs, lows, closes, opens,
+                                              ema_fast_vals, ema_slow_vals, rsi_vals, vwap_vals, cfg)
+            if result is not None:
+                matches.append(result)
+
+        if cfg.enable_bull_reversal_dip:
+            result = _check_bull_reversal_dip(i, highs, lows, closes, opens,
+                                              ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
+            if result is not None:
+                matches.append(result)
+
+        if cfg.enable_bull_trend_continuation:
+            result = _check_bull_trend_continuation(i, highs, lows, closes, opens,
+                                                    ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
+            if result is not None:
+                matches.append(result)
+
+        if cfg.enable_bull_momentum_breakout and i >= 7:
+            mb_lb = 3 if regime == "STRONG_BULL" else 5
+            result = _check_bull_momentum_breakout(
+                i, highs, lows, closes, opens,
+                ema_fast_vals, ema_slow_vals, rsi_vals, adx_now, cfg,
+                lookback_days=mb_lb)
+            if result is not None:
+                matches.append(result)
+
+        if cfg.enable_bull_higher_low:
+            result = _check_bull_higher_low(i, highs, lows, closes, opens,
+                                            ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
+            if result is not None:
+                matches.append(result)
+
+        # Score all matches, sort best first, build output list
+        scored_live = []
+        for sig, sname, fl in matches:
+            q = _compute_bull_quality_score(sname, fl, rsi_vals[i], adx_now, vix, regime)
+            scored_live.append((sig, sname, fl, q))
+        scored_live.sort(key=lambda x: x[3], reverse=True)
+
+        final_matches = []
+        for idx, (sig, sname, fl, _q) in enumerate(scored_live[:cfg.max_trades_per_day]):
+            if sname in ("BULL_EMA_PULLBACK", "BULL_EMA8_TOUCH", "BULL_TREND_CONTINUATION",
+                         "BULL_FRESH_CROSSOVER"):
+                sl_b, tgt_b = cfg.sl_pct_bep, cfg.target_pct_bep
+            elif sname == "BULL_REVERSAL_DIP":
+                sl_b, tgt_b = cfg.sl_pct_brd, cfg.target_pct_brd
+            elif sname in ("BULL_VWAP_RECLAIM", "BULL_MOMENTUM_BREAKOUT"):
+                sl_b, tgt_b = cfg.sl_pct_bvr, cfg.target_pct_bvr
+            else:
+                sl_b, tgt_b = cfg.sl_pct_bhl, cfg.target_pct_bhl
+            final_matches.append({
+                "leg":        idx + 1,
+                "direction":  sig,
+                "bias":       "BULLISH",
+                "bias_strength": 0.80,
+                "setup_type": "BULL_PULLBACK",
+                "strategy":   sname,
+                "sl_pct":     round(sl_b, 4),
+                "target_pct": round(tgt_b, 4),
+                "lots":       cfg.lots,
+                "filter_log": {**fl, "regime": {"value": regime}, "daily_leg": idx + 1},
+            })
+    else:
+        final_matches = []
 
     signal_date = dates[i]
 
@@ -969,8 +1202,8 @@ def evaluate_live_bull(
         "regime":           regime,
         "vix":              round(vix, 2),
         "day_trade_cap":    cfg.max_trades_per_day,
-        "raw_matches":      len(matches),
-        "executable_legs":  matches,
+        "raw_matches":      len(final_matches),
+        "executable_legs":  final_matches,
         "strategy_filter":  "BULL",
         "engine":           "BULL",
         "breakout_watch": {
@@ -1142,6 +1375,15 @@ def run_bull_backtest(
 
         # ── SAME-DAY DETECTION (enter today, conditions confirmed at open or intraday) ──
 
+        # FRESH_CROSSOVER: EMA8 crossed above EMA21 within last 4 bars — post-bear recovery entry
+        # Does NOT require EMA21 slope (which TC requires) — EMA21 is still declining on fresh crossovers
+        if cfg.enable_bull_fresh_crossover and i >= 6:
+            r = _check_bull_fresh_crossover(
+                i, highs, lows, closes, opens,
+                ema_fast_vals, ema_slow_vals, rsi_vals, adx_vals[i], cfg)
+            if r:
+                matches.append(r)
+
         # VWAP_RECLAIM: MILD_BULL only — on STRONG_BULL, VWAP dip is a warning not a buy (0% WR tested)
         if cfg.enable_bull_vwap_reclaim and regime != "STRONG_BULL":
             r = _check_bull_vwap_reclaim(
@@ -1156,6 +1398,18 @@ def run_bull_backtest(
             r = _check_bull_trend_continuation(
                 i, highs, lows, closes, opens,
                 ema_fast_vals, ema_slow_vals, rsi_vals, cfg)
+            if r:
+                matches.append(r)
+
+        # MOMENTUM_BREAKOUT: close > prior N-day high — dip-and-rip, captures days TC misses
+        # STRONG_BULL: 3-day lookback (price makes new highs frequently in strong trends)
+        # MILD_BULL: 5-day lookback (stricter — prevent triggering on minor bounces in weaker trend)
+        if cfg.enable_bull_momentum_breakout and i >= 7:
+            mb_lookback = 3 if regime == "STRONG_BULL" else 5
+            r = _check_bull_momentum_breakout(
+                i, highs, lows, closes, opens,
+                ema_fast_vals, ema_slow_vals, rsi_vals, adx_vals[i], cfg,
+                lookback_days=mb_lookback)
             if r:
                 matches.append(r)
 
@@ -1231,12 +1485,15 @@ def run_bull_backtest(
             if leg_idx == 1:
                 effective_lots = max(1, int(round(effective_lots * cfg.second_trade_lot_fraction)))
 
-            # Contextual SL — pullback strategies (EMA_PULLBACK, EMA8_TOUCH, TC) share wider SL tier
-            if strategy_name in ("BULL_EMA_PULLBACK", "BULL_EMA8_TOUCH", "BULL_TREND_CONTINUATION"):
+            # Contextual SL
+            if strategy_name in ("BULL_EMA_PULLBACK", "BULL_EMA8_TOUCH", "BULL_TREND_CONTINUATION",
+                                 "BULL_FRESH_CROSSOVER"):
+                # Fresh crossover: same wider SL as TC — volatility is higher in early trend days
                 sl_base, tgt_base = cfg.sl_pct_bep, cfg.target_pct_bep
             elif strategy_name == "BULL_REVERSAL_DIP":
                 sl_base, tgt_base = cfg.sl_pct_brd, cfg.target_pct_brd
-            elif strategy_name == "BULL_VWAP_RECLAIM":
+            elif strategy_name in ("BULL_VWAP_RECLAIM", "BULL_MOMENTUM_BREAKOUT"):
+                # Breakout: tighter SL since trend is established — breakout fails fast or works
                 sl_base, tgt_base = cfg.sl_pct_bvr, cfg.target_pct_bvr
             else:
                 sl_base, tgt_base = cfg.sl_pct_bhl, cfg.target_pct_bhl
