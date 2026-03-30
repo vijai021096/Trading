@@ -310,13 +310,19 @@ class KiteORBTrader:
     def _in_daily_adaptive_window(self, now: datetime) -> bool:
         t = now.time()
         start = self._t(self.cfg.daily_adaptive_window_start)
-        # Use extended window end for trending regimes
-        extended_regimes = [r.strip() for r in self.cfg.trending_regimes_for_extended_window.split(",")]
-        regime_name = (self._daily_regime.name if self._daily_regime else "")
-        if regime_name in extended_regimes:
-            end = self._t(self.cfg.trending_regime_window_end)
+        # Prefer the regime's own execution window_end if defined
+        if (self._daily_regime and
+                self._daily_regime.execution and
+                self._daily_regime.execution.window_end):
+            end = self._t(self._daily_regime.execution.window_end)
         else:
-            end = self._t(self.cfg.daily_adaptive_window_end)
+            # Fall back: extended window for trending regimes, default otherwise
+            extended_regimes = [r.strip() for r in self.cfg.trending_regimes_for_extended_window.split(",")]
+            regime_name = (self._daily_regime.name if self._daily_regime else "")
+            if regime_name in extended_regimes:
+                end = self._t(self.cfg.trending_regime_window_end)
+            else:
+                end = self._t(self.cfg.daily_adaptive_window_end)
         return start <= t <= end
 
     def _roll_day(self, now: datetime) -> None:
