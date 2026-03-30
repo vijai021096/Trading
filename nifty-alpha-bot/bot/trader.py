@@ -1885,6 +1885,12 @@ class KiteORBTrader:
                 candles = self._refresh_candles(now)
                 vix = self._get_vix()
 
+                # Always update live trend/impulse state regardless of engine type.
+                # daily_adaptive never calls _scan_entry, so without this the
+                # dashboard would permanently show conviction=0 / NEUTRAL / impulse=NONE.
+                if candles and len(candles) >= 4:
+                    self._detect_trend(candles, float(vix or 14.0))
+
                 self._heartbeat_count += 1
                 hb_interval = max(1, 60 // self.cfg.poll_seconds)
                 if self._heartbeat_count % hb_interval == 0:
