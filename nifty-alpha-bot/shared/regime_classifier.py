@@ -143,8 +143,8 @@ REGIME_DEFS: Dict[str, DailyRegime] = {
 
 @dataclass
 class RegimeClassifierConfig:
-    vix_skip_threshold: float = 22.0
-    gap_skip_pct: float = 0.012
+    vix_skip_threshold: float = 30.0
+    gap_skip_pct: float = 0.015
     strong_gap_pct: float = 0.003
     strong_5d_ret_pct: float = 0.01
     breakout_prev_range_max: float = 120.0

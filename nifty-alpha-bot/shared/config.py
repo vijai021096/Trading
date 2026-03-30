@@ -136,7 +136,7 @@ class Settings(BaseSettings):
     rsi_overbought_skip: float = 80.0
     rsi_oversold_skip: float = 20.0
 
-    vix_max: float = 28.0
+    vix_max: float = 30.0
 
     # ── SL / Target ───────────────────────────────────────────────
     atr_sl_multiplier: float = 1.2

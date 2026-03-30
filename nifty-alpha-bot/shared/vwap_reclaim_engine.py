@@ -35,7 +35,7 @@ def evaluate_vwap_reclaim_signal(
     min_volume_surge_ratio: float = 1.2,
     rsi_min: float = 40.0,
     rsi_max: float = 65.0,
-    vix_max: float = 22.0,
+    vix_max: float = 30.0,
 ) -> Dict[str, Any]:
     filters: Dict[str, Dict] = {}
     result_base = {"signal": None, "atr": None, "filters": filters, "all_passed": False}
