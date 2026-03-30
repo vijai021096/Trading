@@ -1014,6 +1014,30 @@ class KiteORBTrader:
                         f"A+_FILTER SKIP: best confidence {best_conf:.0f} < {min_conf:.0f} "
                         f"(composite={best_composite:.1f})"
                     )
+                    # Write to events log every ~60s so the UI logs panel shows live scan activity
+                    _log_event("SCAN_CYCLE", {
+                        "strategies_evaluated": len(scored),
+                        "signals_detected": len(scored),
+                        "best_strategy": best_leg["strategy"],
+                        "best_direction": best_leg.get("direction", ""),
+                        "best_confidence": round(best_conf, 1),
+                        "best_composite": round(best_composite, 1),
+                        "threshold": min_conf,
+                        "skip_reason": f"Confidence {best_conf:.0f} < {min_conf:.0f}",
+                        "regime": stub_regime.regime if stub_regime else "",
+                        "vix": round(effective_vix, 1),
+                        "candidates": [
+                            {"strategy": l["strategy"], "signal": l.get("direction", ""),
+                             "confidence": round(c, 1)}
+                            for l, c, _ in scored
+                        ],
+                        "scans": [
+                            {"strategy": l["strategy"], "signal": l.get("direction", ""),
+                             "confidence": round(c, 1), "passed": c >= min_conf,
+                             "regime": stub_regime.regime if stub_regime else ""}
+                            for l, c, _ in scored
+                        ],
+                    })
                 self._skip_reasons_today.append({
                     "strategy": best_leg["strategy"], "direction": best_leg.get("direction", ""),
                     "reason": f"Confidence {best_conf:.0f} < {min_conf:.0f} threshold",
