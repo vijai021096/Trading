@@ -305,6 +305,119 @@ export function Dashboard() {
         </div>
       </motion.div>
 
+      {/* ── BOT BRAIN / STORY PANEL ────────────────────────────────────── */}
+      {(() => {
+        const narrative = (botStatus as any)?.narrative as {
+          status: string
+          narrative: string[]
+          session: string
+          trend_emoji: string
+          conviction_pct: number
+          impulse_grade: string
+          vix: number
+        } | undefined
+
+        const statusConfig: Record<string, { label: string; color: string; bg: string; pulse: boolean }> = {
+          IN_TRADE:  { label: '🎯 In Trade',   color: 'text-cyan',  bg: 'bg-cyan/12 border-cyan/30',    pulse: true },
+          HUNTING:   { label: '🔍 Hunting',    color: 'text-green', bg: 'bg-green/10 border-green/25',  pulse: true },
+          WATCHING:  { label: '👀 Watching',   color: 'text-text3', bg: 'bg-surface border-line/25',    pulse: false },
+          HALTED:    { label: '✋ Halted',     color: 'text-amber', bg: 'bg-amber/10 border-amber/25',  pulse: false },
+        }
+        const sc = statusConfig[narrative?.status ?? 'WATCHING'] ?? statusConfig.WATCHING
+
+        const impulseColors: Record<string, string> = {
+          EXTREME: 'text-amber bg-amber/10 border-amber/30',
+          STRONG:  'text-green  bg-green/10  border-green/25',
+          WEAK:    'text-text3  bg-surface   border-line/25',
+          NONE:    'text-text3  bg-surface   border-line/20',
+        }
+        const impulseTag = narrative?.impulse_grade ?? 'NONE'
+
+        // Fallback lines if no narrative yet
+        const lines: string[] = narrative?.narrative?.length
+          ? narrative.narrative
+          : marketOpen
+            ? ['🔄 Waiting for first heartbeat from bot...', '📍 Narrative populates after first market scan.']
+            : ['🌙 Market closed — bot resting.', '📊 Narrative will update at 9:15 IST when scanning begins.']
+
+        return (
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }}
+            className="glass-card rounded-2xl p-5">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-xl bg-accent/15 flex items-center justify-center">
+                  <Brain size={15} className="text-accent" />
+                </div>
+                <div>
+                  <div className="text-xs font-black uppercase tracking-widest text-text2">Bot Brain</div>
+                  <div className="text-[10px] text-text3 mt-0.5">Live thinking &amp; market context</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Status badge */}
+                <span className={clsx(
+                  'text-[10px] font-bold px-2.5 py-1 rounded-lg border flex items-center gap-1.5',
+                  sc.bg, sc.color
+                )}>
+                  {sc.pulse && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />}
+                  {sc.label}
+                </span>
+                {/* Impulse badge */}
+                {impulseTag !== 'NONE' && (
+                  <span className={clsx(
+                    'text-[10px] font-bold px-2 py-1 rounded-lg border',
+                    impulseColors[impulseTag] ?? impulseColors.NONE
+                  )}>
+                    ⚡ {impulseTag}
+                  </span>
+                )}
+                {/* Session */}
+                {narrative?.session && (
+                  <span className="text-[10px] text-text3 px-2 py-1 rounded-lg bg-surface border border-line/20">
+                    {narrative.session.charAt(0) + narrative.session.slice(1).toLowerCase()}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Narrative lines */}
+            <div className="space-y-1.5">
+              {lines.map((line, i) => (
+                <div key={i} className="flex items-start gap-2.5 text-sm text-text2 leading-snug">
+                  <span className="shrink-0 mt-0.5 text-base leading-none">{line.split(' ')[0]}</span>
+                  <span className="text-text3">{line.split(' ').slice(1).join(' ')}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Conviction bar */}
+            {narrative && (
+              <div className="mt-4 pt-3 border-t border-line/15">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-text3">Conviction</span>
+                  <span className={clsx(
+                    'text-[11px] font-black',
+                    narrative.conviction_pct >= 70 ? 'text-green' : narrative.conviction_pct >= 45 ? 'text-amber' : 'text-text3'
+                  )}>
+                    {narrative.conviction_pct.toFixed(0)}%
+                  </span>
+                </div>
+                <div className="h-1.5 rounded-full bg-surface overflow-hidden">
+                  <div
+                    className={clsx(
+                      'h-full rounded-full transition-all duration-700',
+                      narrative.conviction_pct >= 70 ? 'bg-green' : narrative.conviction_pct >= 45 ? 'bg-amber' : 'bg-text3/30'
+                    )}
+                    style={{ width: `${Math.min(100, narrative.conviction_pct)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </motion.div>
+        )
+      })()}
+
       {/* Main content grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
 

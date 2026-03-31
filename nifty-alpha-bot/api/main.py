@@ -483,6 +483,8 @@ async def heartbeat_loop():
                 # Daily regime engine routing (set by bot at market open)
                 "daily_regime": daily_regime_data.get("daily_regime"),
                 "active_engine": daily_regime_data.get("active_engine"),
+                # Bot narrative (powers Story Panel in UI)
+                "narrative": bot_hb.get("narrative") if bot_hb else None,
                 # Position details (if active)
                 "position": pos if pos_state == "ACTIVE" else None,
             }
