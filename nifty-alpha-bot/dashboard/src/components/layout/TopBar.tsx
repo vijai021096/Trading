@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Activity, BarChart2, FlaskConical, Settings, AlertTriangle, WifiOff, Clock, ScrollText, Play, BookOpen, Radar } from 'lucide-react'
 import { useTradingStore } from '../../stores/tradingStore'
+import { NiftyTicker } from '../panels/NiftyTicker'
 import axios from 'axios'
 import clsx from 'clsx'
 
@@ -85,6 +86,9 @@ export function TopBar({ currentPage, onNavigate }: { currentPage: Page; onNavig
 
         {/* Right */}
         <div className="flex items-center gap-3 shrink-0">
+          {/* Live Nifty price */}
+          <NiftyTicker />
+
           <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-surface/60 border border-line/20">
             <Clock size={12} className="text-text3" />
             <span className="font-mono text-sm text-text2 tabular-nums">{clock}</span>

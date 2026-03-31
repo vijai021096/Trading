@@ -92,12 +92,26 @@ export interface MarketState {
   regime_rsi: number | null
 }
 
+export interface RuntimeOverride {
+  max_trades?: number
+  capital?: number
+  lots?: number
+  vix_max?: number
+  strategy_filter?: string
+  paper_mode?: boolean
+  paused?: boolean
+  force_close?: boolean
+  halted?: boolean
+}
+
 export interface BotStatus {
   state: string
   market_status: string
   market_open: boolean
   thinking: string
   nifty_price: number | null
+  nifty_open_price?: number
+  move_from_open_pct?: number
   kite_connected: boolean
   kite_token_saved: boolean
   trades_today: number
@@ -109,17 +123,38 @@ export interface BotStatus {
   drawdown_pct: number
   max_drawdown_pct: number
   halt_active: boolean
+  paused?: boolean
+  force_close_pending?: boolean
   paper_mode: boolean
   trading_engine?: string
   daily_strategy_filter?: string
   consecutive_losses: number
   risk_per_trade_pct: number
   max_daily_loss_pct: number
+  runtime_overrides?: RuntimeOverride
+  daily_regime?: string
+  active_engine?: string
+  narrative?: string
+  // Market intelligence fields (mirrored from HEARTBEAT)
+  trend_state?: string | null
+  trend_direction?: string | null
+  trend_conviction?: number | null
+  risk_multiplier?: number | null
+  strategy_priority?: string[]
+  trend_scores?: Record<string, number>
+  trend_impulse_grade?: string | null
+  regime?: string | null
+  regime_atr_ratio?: number | null
+  regime_adx?: number | null
+  regime_vix?: number | null
+  regime_rsi?: number | null
   last_scan: {
     strategies_evaluated: number
     signals_detected: number
     candidates: Array<{ strategy: string; signal: string; confidence: number }>
-    scans: Array<{ strategy: string; signal: string | null; passed: boolean; confidence: number }>
+    scans: Array<{ strategy: string; signal: string | null; passed: boolean; confidence: number; regime?: string; lots?: number; sl_pct?: number; target_pct?: number }>
+    vix?: number
+    signal_bar_date?: string
   } | null
   position: Position | null
 }
@@ -167,6 +202,7 @@ interface TradingStore {
   marketState: MarketState | null
   botStatus: BotStatus | null
   strategyConfig: StrategyConfig | null
+  runtimeOverride: RuntimeOverride
 
   setConnected: (v: boolean) => void
   setPosition: (p: Position) => void
@@ -179,6 +215,7 @@ interface TradingStore {
   setMarketState: (m: MarketState) => void
   setBotStatus: (b: BotStatus) => void
   setStrategyConfig: (c: StrategyConfig) => void
+  setRuntimeOverride: (r: RuntimeOverride) => void
 }
 
 export const useTradingStore = create<TradingStore>((set) => ({
@@ -193,11 +230,12 @@ export const useTradingStore = create<TradingStore>((set) => ({
   marketState: null,
   botStatus: null,
   strategyConfig: null,
+  runtimeOverride: {},
 
   setConnected: (v) => set({ connected: v }),
   setPosition: (p) => set({ position: p }),
   setTrades: (t) => set({ trades: t }),
-  addEvents: (e) => set((s) => ({ events: [...e, ...s.events].slice(0, 200) })),
+  addEvents: (e) => set((s) => ({ events: [...e, ...s.events].slice(0, 300) })),
   setDailyPnl: (p) => set({ dailyPnl: p }),
   setEmergencyStop: (v) => set({ emergencyStop: v }),
   setLastUpdate: (s) => set({ lastUpdate: s }),
@@ -205,4 +243,5 @@ export const useTradingStore = create<TradingStore>((set) => ({
   setMarketState: (m) => set({ marketState: m }),
   setBotStatus: (b) => set({ botStatus: b }),
   setStrategyConfig: (c) => set({ strategyConfig: c }),
+  setRuntimeOverride: (r) => set({ runtimeOverride: r }),
 }))

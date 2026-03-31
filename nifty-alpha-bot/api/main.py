@@ -432,6 +432,9 @@ async def heartbeat_loop():
                 "market_open": market_open,
                 "thinking": thinking,
                 "nifty_price": nifty_price,
+                "paused": PAUSE_FLAG.exists(),
+                "force_close_pending": FORCE_CLOSE_FLAG.exists(),
+                "runtime_overrides": _read_runtime_override(),
                 "nifty_open_price": _nifty_open,
                 "move_from_open_pct": _move_from_open_pct,
                 "kite_connected": kite_status.get("kite_connected", False),
@@ -1319,12 +1322,6 @@ def get_latest_market_state() -> dict:
         return {"trend": None, "regime": None}
 
 
-@app.get("/api/market-state")
-def market_state_endpoint():
-    """Return current trend state, conviction, regime, risk multiplier for the dashboard."""
-    return get_latest_market_state()
-
-
 # ── Strategy toggle ───────────────────────────────────────────
 STRATEGY_STATE_FILE = _STATE_DIR / "kite_bot_strategy_state.json"
 
@@ -1358,6 +1355,172 @@ def toggle_strategy(body: dict):
             state[key] = bool(body[key])
     STRATEGY_STATE_FILE.write_text(json.dumps(state))
     return state
+
+
+# ── Runtime Override System ──────────────────────────────────────
+RUNTIME_OVERRIDE_FILE = _STATE_DIR / "kite_bot_runtime_override.json"
+PAUSE_FLAG  = _STATE_DIR / "kite_bot_pause.flag"
+FORCE_CLOSE_FLAG = _STATE_DIR / "kite_bot_force_close.flag"
+
+
+def _read_runtime_override() -> dict:
+    if not RUNTIME_OVERRIDE_FILE.exists():
+        return {}
+    try:
+        return json.loads(RUNTIME_OVERRIDE_FILE.read_text())
+    except Exception:
+        return {}
+
+
+@app.get("/api/bot/override")
+def get_runtime_override():
+    """Get current runtime overrides (max_trades, lots, etc.)."""
+    ov = _read_runtime_override()
+    ov["paused"]      = PAUSE_FLAG.exists()
+    ov["force_close"] = FORCE_CLOSE_FLAG.exists()
+    ov["halted"]      = (_STATE_DIR / "kite_bot_halt.flag").exists()
+    return ov
+
+
+@app.post("/api/bot/override")
+def set_runtime_override(body: dict):
+    """Set runtime overrides. Supported keys: max_trades, capital, lots, vix_max, strategy_filter."""
+    ov = _read_runtime_override()
+    allowed = {"max_trades", "capital", "lots", "vix_max", "strategy_filter", "paper_mode"}
+    for k, v in body.items():
+        if k in allowed:
+            ov[k] = v
+    RUNTIME_OVERRIDE_FILE.write_text(json.dumps(ov, indent=2))
+    append_bot_event("RUNTIME_OVERRIDE", {"overrides": ov, "message": "Runtime overrides updated via dashboard"})
+    return {"status": "OK", "overrides": ov}
+
+
+@app.delete("/api/bot/override")
+def clear_runtime_override():
+    """Clear all runtime overrides."""
+    if RUNTIME_OVERRIDE_FILE.exists():
+        RUNTIME_OVERRIDE_FILE.unlink()
+    append_bot_event("RUNTIME_OVERRIDE", {"message": "All overrides cleared"})
+    return {"status": "CLEARED"}
+
+
+@app.post("/api/bot/pause")
+def pause_trading():
+    """Pause trading — bot will not take new entries until resumed."""
+    PAUSE_FLAG.write_text(datetime.now().isoformat())
+    append_bot_event("BOT_PAUSED", {"message": "Trading paused via dashboard", "timestamp": datetime.now().isoformat()})
+    return {"status": "PAUSED", "timestamp": datetime.now().isoformat()}
+
+
+@app.delete("/api/bot/pause")
+def resume_trading():
+    """Resume paused trading."""
+    if PAUSE_FLAG.exists():
+        PAUSE_FLAG.unlink()
+    append_bot_event("BOT_RESUMED", {"message": "Trading resumed via dashboard", "timestamp": datetime.now().isoformat()})
+    return {"status": "RESUMED", "timestamp": datetime.now().isoformat()}
+
+
+@app.post("/api/bot/force-close")
+def force_close_position():
+    """Force-close the current active position. Bot polls this flag and exits."""
+    pos = read_position()
+    if pos.get("state") != "ACTIVE":
+        return {"status": "NO_POSITION", "message": "No active position to close"}
+    FORCE_CLOSE_FLAG.write_text(datetime.now().isoformat())
+    append_bot_event("FORCE_CLOSE_REQUESTED", {"message": "Force close requested via dashboard",
+                                                "position": pos, "timestamp": datetime.now().isoformat()})
+    return {"status": "FORCE_CLOSE_REQUESTED", "position": pos, "timestamp": datetime.now().isoformat()}
+
+
+@app.delete("/api/bot/force-close")
+def clear_force_close():
+    if FORCE_CLOSE_FLAG.exists():
+        FORCE_CLOSE_FLAG.unlink()
+    return {"status": "CLEARED"}
+
+
+@app.get("/api/system/health")
+def system_health():
+    """Comprehensive system health check — safe for frequent polling."""
+    pos = read_position()
+    pnl = daily_pnl_summary()
+    risk_file = _STATE_DIR / "kite_bot_risk_state.json"
+    risk = {}
+    if risk_file.exists():
+        try:
+            risk = json.loads(risk_file.read_text())
+        except Exception:
+            pass
+
+    kite_status = _kite_connection_status()
+    ov = _read_runtime_override()
+
+    now = datetime.now()
+    h, m = now.hour, now.minute
+    is_market_day = now.weekday() < 5
+    market_open = is_market_day and ((h == 9 and m >= 15) or (10 <= h <= 14) or (h == 15 and m <= 30))
+
+    return {
+        "ok": True,
+        "timestamp": now.isoformat(),
+        "market_open": market_open,
+        "position_state": pos.get("state", "IDLE"),
+        "daily_pnl": pnl.get("net_pnl", 0),
+        "trades_today": pnl.get("trades", 0),
+        "kite_connected": kite_status.get("kite_connected", False),
+        "kite_token_saved": kite_status.get("kite_token_saved", False),
+        "halted": (_STATE_DIR / "kite_bot_halt.flag").exists(),
+        "paused": PAUSE_FLAG.exists(),
+        "force_close_pending": FORCE_CLOSE_FLAG.exists(),
+        "current_capital": risk.get("current_capital", settings.capital),
+        "drawdown_pct": round(
+            (risk.get("peak_capital", settings.capital) - risk.get("current_capital", settings.capital))
+            / max(risk.get("peak_capital", settings.capital), 1) * 100, 1
+        ) if risk else 0.0,
+        "consecutive_losses": risk.get("consecutive_losses", 0),
+        "paper_mode": settings.paper_mode,
+        "overrides": ov,
+        "events_log_exists": EVENTS_LOG.exists(),
+        "events_log_lines": sum(1 for _ in open(EVENTS_LOG)) if EVENTS_LOG.exists() else 0,
+    }
+
+
+@app.get("/api/bot/activity")
+def bot_activity():
+    """Recent bot activity summary — last 50 events with important ones highlighted."""
+    events = read_recent_events(100)
+    important_types = {"ENTRY", "EXIT", "TRADE_CLOSED", "BOT_PAUSED", "BOT_RESUMED",
+                       "FORCE_CLOSE_REQUESTED", "EMERGENCY_STOP", "KITE_AUTH",
+                       "DAILY_ADAPTIVE_SCAN", "DAILY_REGIME", "SYSTEM_READY"}
+    highlighted = [e for e in events if e.get("event") in important_types]
+    return {
+        "events": events[:50],
+        "highlighted": highlighted[:20],
+        "total": len(events),
+    }
+
+
+@app.get("/api/market-state")
+def market_state_endpoint():
+    """Current market intelligence — regime, trend, VIX."""
+    mkt = get_latest_market_state()
+    trend = mkt.get("trend") or {}
+    regime = mkt.get("regime") or {}
+    return {
+        "trend_state":      trend.get("state"),
+        "trend_direction":  trend.get("direction"),
+        "trend_conviction": trend.get("conviction"),
+        "risk_multiplier":  trend.get("risk_multiplier"),
+        "strategy_priority":trend.get("strategy_priority", []),
+        "trend_scores":     trend.get("scores", {}),
+        "trend_impulse_grade": trend.get("impulse_grade"),
+        "regime":           regime.get("regime"),
+        "regime_atr_ratio": regime.get("atr_ratio"),
+        "regime_adx":       regime.get("adx_proxy"),
+        "regime_vix":       regime.get("vix"),
+        "regime_rsi":       regime.get("rsi"),
+    }
 
 
 # ── WebSocket ─────────────────────────────────────────────────────

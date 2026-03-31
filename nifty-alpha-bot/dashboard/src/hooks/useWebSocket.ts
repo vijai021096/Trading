@@ -44,6 +44,13 @@ export function useWebSocket() {
     } catch {}
   }
 
+  const fetchOverride = async () => {
+    try {
+      const r = await axios.get(`${API_BASE}/bot/override`)
+      store.setRuntimeOverride(r.data)
+    } catch {}
+  }
+
   const fetchBotStatus = async () => {
     try {
       // /api/bot-status returns the latest HEARTBEAT event — full rich payload with
@@ -79,8 +86,10 @@ export function useWebSocket() {
     fetchMarketState()
     fetchStrategyConfig()
     fetchBotStatus()
+    fetchOverride()
 
-    const statusInterval = setInterval(fetchBotStatus, 10000)
+    const statusInterval = setInterval(fetchBotStatus, 8000)
+    const overrideInterval = setInterval(fetchOverride, 5000)
 
     function connect() {
       const ws = new WebSocket(WS_URL)
@@ -130,6 +139,7 @@ export function useWebSocket() {
     connect()
     return () => {
       clearInterval(statusInterval)
+      clearInterval(overrideInterval)
       wsRef.current?.close()
     }
   }, [])
