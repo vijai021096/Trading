@@ -1440,6 +1440,55 @@ def clear_force_close():
     return {"status": "CLEARED"}
 
 
+@app.post("/api/bot/manual-signal")
+def manual_signal(body: dict):
+    """
+    Write a manual-signal flag file.
+    The bot polls _STATE_DIR/manual_signal.json and uses it as a forced
+    trade candidate on its next scan cycle.
+    Body: { direction: 'CE'|'PE', strategy: str, lots: int, note: str }
+    """
+    allowed_directions = {'CE', 'PE'}
+    direction = str(body.get('direction', 'CE')).upper()
+    if direction not in allowed_directions:
+        return JSONResponse(status_code=422, content={"detail": f"direction must be one of {allowed_directions}"})
+    pos = read_position()
+    if pos.get('state') == 'ACTIVE':
+        return JSONResponse(status_code=409, content={"detail": "Position already active — close it first"})
+    payload = {
+        "direction":  direction,
+        "strategy":   str(body.get('strategy', 'MANUAL')),
+        "lots":       int(body.get('lots', 1)),
+        "note":       str(body.get('note', 'Manual signal from dashboard')),
+        "requested_at": datetime.now().isoformat(),
+    }
+    signal_file = _STATE_DIR / "manual_signal.json"
+    signal_file.write_text(json.dumps(payload, indent=2))
+    append_bot_event("MANUAL_SIGNAL", {**payload, "message": f"Manual {direction} signal queued via dashboard"})
+    return {"status": "SIGNAL_QUEUED", "signal": payload}
+
+
+@app.delete("/api/bot/manual-signal")
+def cancel_manual_signal():
+    """Cancel any pending manual entry signal."""
+    signal_file = _STATE_DIR / "manual_signal.json"
+    if signal_file.exists():
+        signal_file.unlink()
+    return {"status": "CANCELLED"}
+
+
+@app.get("/api/bot/manual-signal")
+def get_manual_signal():
+    """Check if a manual signal is pending."""
+    signal_file = _STATE_DIR / "manual_signal.json"
+    if signal_file.exists():
+        try:
+            return {"pending": True, "signal": json.loads(signal_file.read_text())}
+        except Exception:
+            pass
+    return {"pending": False, "signal": None}
+
+
 @app.get("/api/system/health")
 def system_health():
     """Comprehensive system health check — safe for frequent polling."""

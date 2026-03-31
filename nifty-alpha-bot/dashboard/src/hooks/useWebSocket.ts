@@ -88,35 +88,52 @@ export function useWebSocket() {
     fetchBotStatus()
     fetchOverride()
 
-    const statusInterval = setInterval(fetchBotStatus, 8000)
-    const overrideInterval = setInterval(fetchOverride, 5000)
+    const statusInterval  = setInterval(fetchBotStatus, 8_000)
+    const overrideInterval = setInterval(fetchOverride,  5_000)
+
+    // Exponential backoff state
+    let attempt       = 0
+    let destroyed     = false
+    let reconnTimeout: ReturnType<typeof setTimeout> | null = null
+
+    function backoffMs() {
+      // 2s → 4s → 8s → 16s → 30s (cap)
+      return Math.min(2_000 * Math.pow(2, attempt), 30_000)
+    }
 
     function connect() {
-      const ws = new WebSocket(WS_URL)
+      if (destroyed) return
+      let ws: WebSocket
+      try {
+        ws = new WebSocket(WS_URL)
+      } catch {
+        // URL construction failed (e.g., in tests)
+        return
+      }
       wsRef.current = ws
 
+      let pingInterval: ReturnType<typeof setInterval> | null = null
+
       ws.onopen = () => {
+        attempt = 0            // reset backoff on successful connect
         store.setConnected(true)
-        const ping = setInterval(() => {
+        pingInterval = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) ws.send('ping')
-        }, 30000)
-        ;(ws as any)._ping = ping
+        }, 30_000)
       }
 
       ws.onmessage = (e) => {
+        if (e.data === 'pong') return  // server keepalive
         try {
           const msg = JSON.parse(e.data)
           store.setLastUpdate(new Date().toLocaleTimeString('en-IN'))
 
           if (msg.type === 'INIT' || msg.type === 'POSITION_UPDATE') {
-            if (msg.position) store.setPosition(msg.position)
+            if (msg.position)  store.setPosition(msg.position)
             if (msg.daily_pnl) store.setDailyPnl(msg.daily_pnl)
           }
           if (msg.events?.length) {
             store.addEvents(msg.events)
-            // Don't re-fetch status on INIT — the mount already called fetchBotStatus()
-            // and the INIT events may be stale, causing the API's older heartbeat to
-            // overwrite the fresh data we just loaded.
             if (msg.type !== 'INIT') {
               fetchTrades()
               fetchDailyPnl()
@@ -124,23 +141,34 @@ export function useWebSocket() {
               fetchBotStatus()
             }
           }
-        } catch {}
+        } catch {
+          // Malformed message — ignore, don't crash
+        }
       }
 
       ws.onclose = () => {
         store.setConnected(false)
-        clearInterval((ws as any)._ping)
-        setTimeout(connect, 3000)
+        if (pingInterval) clearInterval(pingInterval)
+        if (!destroyed) {
+          attempt++
+          const delay = backoffMs()
+          reconnTimeout = setTimeout(connect, delay)
+        }
       }
 
-      ws.onerror = () => ws.close()
+      ws.onerror = () => {
+        // onclose fires after onerror, so just close to trigger backoff
+        try { ws.close() } catch { /* ignore */ }
+      }
     }
 
     connect()
     return () => {
+      destroyed = true
+      if (reconnTimeout) clearTimeout(reconnTimeout)
       clearInterval(statusInterval)
       clearInterval(overrideInterval)
-      wsRef.current?.close()
+      try { wsRef.current?.close() } catch { /* ignore */ }
     }
-  }, [])
+  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 }

@@ -2,9 +2,11 @@
  * PositionMonitor — shows active position with live P&L visualization.
  * Displayed as a progress bar from entry → SL / entry → target.
  */
+import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import axios from 'axios'
 import clsx from 'clsx'
-import { TrendingUp, TrendingDown, Target, Shield, Clock, Layers, Activity } from 'lucide-react'
+import { TrendingUp, TrendingDown, Target, Shield, Clock, Layers, Activity, LogOut, Loader2, CheckCircle2 } from 'lucide-react'
 import { useTradingStore } from '../../stores/tradingStore'
 
 function PriceBar({
@@ -71,6 +73,20 @@ function Stat({ label, value, color = 'text-text2' }: { label: string; value: Re
 
 export function PositionMonitor() {
   const { botStatus, position } = useTradingStore()
+  const [closing, setClosing] = useState<'idle'|'loading'|'ok'|'err'>('idle')
+
+  const handleForceClose = async () => {
+    if (!window.confirm('Force-close current position at market? This cannot be undone.')) return
+    setClosing('loading')
+    try {
+      await axios.post('/api/bot/force-close')
+      setClosing('ok')
+      setTimeout(() => setClosing('idle'), 3_000)
+    } catch {
+      setClosing('err')
+      setTimeout(() => setClosing('idle'), 3_000)
+    }
+  }
 
   const pos = botStatus?.position ?? position
   const isActive = pos?.state === 'ACTIVE' || botStatus?.state === 'ACTIVE'
@@ -180,6 +196,23 @@ export function PositionMonitor() {
                 <Shield size={12} /> Break-even activated
               </div>
             )}
+
+            {/* Manual exit button */}
+            <motion.button
+              onClick={handleForceClose}
+              disabled={closing === 'loading'}
+              whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+              className={clsx(
+                'w-full flex items-center justify-center gap-2 py-2 rounded-xl border text-xs font-bold transition-all',
+                closing === 'ok'  ? 'bg-green/12 border-green/25 text-green'
+                : closing === 'err' ? 'bg-red/12 border-red/25 text-red'
+                : 'bg-red/8 border-red/20 text-red hover:bg-red/15'
+              )}
+            >
+              {closing === 'loading' ? <Loader2 size={12} className="animate-spin" /> :
+               closing === 'ok'      ? <CheckCircle2 size={12} /> : <LogOut size={12} />}
+              {closing === 'loading' ? 'Exiting...' : closing === 'ok' ? 'Exit requested' : closing === 'err' ? 'Failed — retry?' : 'Manual Exit Position'}
+            </motion.button>
           </motion.div>
         ) : (
           <motion.div

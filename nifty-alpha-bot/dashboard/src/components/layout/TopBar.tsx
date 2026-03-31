@@ -43,7 +43,7 @@ function MarketChip({ label, value, up, small }: { label: string; value: string;
 }
 
 export function TopBar({ currentPage, onNavigate }: { currentPage: Page; onNavigate: (p: Page) => void }) {
-  const { connected, dailyPnl, emergencyStop, setEmergencyStop, botStatus } = useTradingStore()
+  const { connected, dailyPnl, emergencyStop, setEmergencyStop, botStatus, runtimeOverride } = useTradingStore()
   const [clock, setClock]   = useState('')
   const [nifty, setNifty]   = useState<{ price: number | null; change_pct: number | null }>({ price: null, change_pct: null })
 
@@ -170,10 +170,24 @@ export function TopBar({ currentPage, onNavigate }: { currentPage: Page; onNavig
           </div>
         )}
 
-        {vix != null && (
-          <MarketChip label="VIX" value={Number(vix).toFixed(1)}
-            up={vix < 15 ? true : vix > 20 ? false : null} small />
-        )}
+        {vix != null && (() => {
+          const vixMax  = runtimeOverride.vix_max ?? 18
+          const blocked = vix > vixMax
+          return (
+            <div className={clsx(
+              'hidden xl:flex flex-col items-end px-3 py-1 rounded-lg border',
+              blocked ? 'bg-red/10 border-red/30 animate-pulse' : 'bg-card/60 border-line/40'
+            )}>
+              <div className={clsx('text-[9px] font-bold uppercase tracking-widest', blocked ? 'text-red' : 'text-text3')}>
+                {blocked ? '⚠ VIX BLOCK' : 'VIX'}
+              </div>
+              <div className={clsx('font-mono font-black text-xs stat-val',
+                vix < 15 ? 'text-green' : vix > 20 ? 'text-red-l' : 'text-amber')}>
+                {Number(vix).toFixed(1)}{blocked ? ` / ${vixMax}` : ''}
+              </div>
+            </div>
+          )
+        })()}
 
         {/* IST Clock */}
         <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-line/30 bg-card/50">

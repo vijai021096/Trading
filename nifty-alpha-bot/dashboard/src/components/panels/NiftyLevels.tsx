@@ -19,31 +19,38 @@ interface Level { label: string; value: number; color: string; hint?: string }
 
 function Gauge({ price, open, high, low }: { price: number; open?: number | null; high?: number | null; low?: number | null }) {
   if (!high || !low || high === low) return null
-  const pct = Math.min(100, Math.max(0, ((price - low) / (high - low)) * 100))
+  const toPos = (v: number) => Math.min(100, Math.max(0, ((v - low) / (high - low)) * 100))
+  const pct     = toPos(price)
+  const openPct = open ? toPos(open) : null
   return (
     <div className="mb-4">
       <div className="flex justify-between text-[9px] font-mono text-text3 mb-1">
-        <span>L {low.toFixed(0)}</span>
+        <span className="text-red-l">L {low.toFixed(0)}</span>
         <span className="text-text2">Day Range</span>
-        <span>H {high.toFixed(0)}</span>
+        <span className="text-green">H {high.toFixed(0)}</span>
       </div>
-      <div className="h-2 rounded-full bg-surface relative">
-        <div className="absolute inset-y-0 left-0 right-0 rounded-full overflow-hidden">
-          <div className="h-full rounded-full"
-            style={{ width: '100%', background: 'linear-gradient(to right, rgba(239,68,68,0.3), rgba(245,158,11,0.2), rgba(34,197,94,0.3))' }} />
-        </div>
+      {/* ↓ Must be position:relative for absolute children to work */}
+      <div className="h-3 rounded-full bg-surface relative overflow-hidden">
+        {/* gradient fill */}
+        <div className="absolute inset-0 rounded-full"
+          style={{ background: 'linear-gradient(to right, rgba(239,68,68,0.25), rgba(245,158,11,0.15), rgba(34,197,94,0.25))' }} />
+        {/* open marker */}
+        {openPct != null && (
+          <div className="absolute top-0 bottom-0 w-0.5 bg-accent/70 z-10"
+            style={{ left: `${openPct}%` }} />
+        )}
+        {/* price thumb */}
         <motion.div
-          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-text1 border-2 border-bg"
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-text1 border-2 border-bg z-20 shadow-md"
           animate={{ left: `${pct}%` }}
-          transition={{ duration: 0.5 }}
+          transition={{ duration: 0.6, ease: 'easeOut' }}
         />
       </div>
-      {open && (
-        <motion.div
-          className="absolute top-0 bottom-0 w-0.5 bg-accent/60"
-          style={{ left: `${Math.min(100, Math.max(0, ((open - low) / (high - low)) * 100))}%` }}
-        />
-      )}
+      <div className="flex justify-between text-[9px] font-mono text-text3 mt-0.5">
+        <span>{((price - low)/(high-low)*100).toFixed(0)}% from low</span>
+        {open && <span className="text-accent/70">Open {open.toFixed(0)}</span>}
+        <span>{((high - price)/(high-low)*100).toFixed(0)}% to high</span>
+      </div>
     </div>
   )
 }

@@ -97,7 +97,7 @@ export interface RuntimeOverride {
   capital?: number
   lots?: number
   vix_max?: number
-  strategy_filter?: string
+  strategy_filter?: string  // 'ALL' | 'CE' | 'PE'
   paper_mode?: boolean
   paused?: boolean
   force_close?: boolean
