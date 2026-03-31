@@ -170,6 +170,169 @@ def download_vix_kite(
         return download_india_vix(months=months, force_refresh=force_refresh)
 
 
+def download_nifty_daily_kite(
+    kite_client,
+    months: int = 24,
+    force_refresh: bool = False,
+    instrument_token: int = NIFTY_TOKEN,
+) -> pd.DataFrame:
+    """
+    Download NIFTY 50 **daily** OHLCV from Kite (same venue as live bot).
+
+    Returns DataFrame with columns: ts, open, high, low, close, volume
+    (matches ``download_nifty_daily`` / ``run_daily_backtest`` input).
+    """
+    cache = DATA_DIR / "nifty_daily_kite.parquet"
+
+    if cache.exists() and not force_refresh:
+        df = pd.read_parquet(cache)
+        cutoff = pd.Timestamp.now() - pd.Timedelta(days=months * 31)
+        df["ts"] = pd.to_datetime(df["ts"])
+        df = df[df["ts"] >= cutoff]
+        if len(df) > 60:
+            print(f"[KiteLoader] Loaded {len(df)} daily bars from Kite cache.")
+            return df.sort_values("ts").reset_index(drop=True)
+        print(f"[KiteLoader] Daily cache too small ({len(df)} rows), re-fetching...")
+
+    end_dt = datetime.now().replace(hour=23, minute=59, second=0, microsecond=0)
+    start_limit = end_dt - timedelta(days=months * 31 + 5)
+    chunk_days = 90
+    chunks: list = []
+    cursor = end_dt
+
+    print(f"[KiteLoader] Downloading ~{months}m of NIFTY 50 **daily** from Kite...")
+    while cursor > start_limit:
+        chunk_start = max(start_limit, cursor - timedelta(days=chunk_days))
+        try:
+            raw = kite_client.kite.historical_data(
+                instrument_token=instrument_token,
+                from_date=chunk_start,
+                to_date=cursor,
+                interval="day",
+            )
+            rows = []
+            for c in raw or []:
+                ts = c["date"]
+                if hasattr(ts, "replace") and hasattr(ts, "tzinfo") and ts.tzinfo is not None:
+                    ts = ts.replace(tzinfo=None)
+                rows.append({
+                    "ts": ts,
+                    "open": float(c["open"]),
+                    "high": float(c["high"]),
+                    "low": float(c["low"]),
+                    "close": float(c["close"]),
+                    "volume": float(c.get("volume", 0)),
+                })
+            if rows:
+                chunks.append(pd.DataFrame(rows))
+                print(f"  chunk {chunk_start.date()} → {cursor.date()}: {len(rows)} days")
+        except Exception as e:
+            print(f"  [WARN] Daily chunk {chunk_start.date()} → {cursor.date()}: {e}")
+        cursor = chunk_start
+        time.sleep(0.35)
+
+    if not chunks:
+        raise RuntimeError(
+            "No daily NIFTY data from Kite. Check access_token and NIFTY 50 token "
+            f"({instrument_token})."
+        )
+
+    df = (
+        pd.concat(chunks, ignore_index=True)
+        .drop_duplicates(subset="ts")
+        .sort_values("ts")
+        .reset_index(drop=True)
+    )
+    df["ts"] = pd.to_datetime(df["ts"])
+    df.to_parquet(cache, index=False)
+    print(f"[KiteLoader] Saved {len(df)} daily rows to {cache}")
+    return df
+
+
+def _kite_token_for_backtest() -> Optional[str]:
+    """Env / .env first, then today's cache, then any cached token (historical API may still work)."""
+    import json
+    import os
+
+    from kite_broker.token_manager import TOKEN_CACHE, load_cached_token
+    from shared.config import settings
+
+    for t in (
+        (os.environ.get("KITE_ACCESS_TOKEN") or "").strip(),
+        (settings.kite_access_token or "").strip(),
+    ):
+        if t:
+            return t
+    t = load_cached_token()
+    if t:
+        return t
+    if TOKEN_CACHE.exists():
+        try:
+            data = json.loads(TOKEN_CACHE.read_text())
+            return (data.get("access_token") or "").strip() or None
+        except Exception:
+            return None
+    return None
+
+
+def run_adaptive_daily_kite_backtest(
+    months: int = 24,
+    capital: float = 25_000.0,
+    force_refresh: bool = False,
+    verbose: bool = False,
+    strategy_filter: str = "BOTH",
+) -> dict:
+    """
+    Adaptive Alpha **daily** backtest on Kite-sourced NIFTY daily + India VIX daily.
+    """
+    import json
+
+    from backtest.daily_backtest_engine import DailyBacktestConfig, run_daily_backtest
+    from kite_broker.client import KiteClient
+    from shared.config import settings
+
+    access_token = _kite_token_for_backtest()
+    if not access_token:
+        raise RuntimeError(
+            "No Kite access_token. Set KITE_ACCESS_TOKEN in .env, paste token in dashboard, "
+            "or save today's token to STATE_DIR/kite_token_cache.json"
+        )
+    if not settings.kite_api_key:
+        raise RuntimeError("KITE_API_KEY missing in .env")
+
+    kite = KiteClient(api_key=settings.kite_api_key, access_token=access_token)
+    nifty_df = download_nifty_daily_kite(kite, months=months, force_refresh=force_refresh)
+    vix_df = download_vix_kite(kite, months=months, force_refresh=force_refresh)
+
+    cfg = DailyBacktestConfig(capital=capital)
+    print(
+        f"[AdaptiveKite] {len(nifty_df)} daily bars | {len(vix_df)} VIX days | "
+        f"capital=₹{capital:,.0f} | months≈{months}"
+    )
+    result = run_daily_backtest(
+        nifty_df,
+        vix_df,
+        cfg,
+        verbose=verbose,
+        strategy_filter=strategy_filter,
+    )
+
+    out_path = DATA_DIR.parent / "results" / "adaptive_alpha_kite_25k_summary.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    summary = {
+        "data_source": "kite",
+        "period": (result.get("start_date"), result.get("end_date")),
+        "capital_start": capital,
+        "metrics": result.get("metrics"),
+        "regime_counts": result.get("regime_counts"),
+        "strategy_counts": result.get("strategy_counts"),
+        "skip_reasons": result.get("skip_reasons"),
+    }
+    out_path.write_text(json.dumps(summary, indent=2, default=str))
+    print(f"[AdaptiveKite] Summary written to {out_path}")
+    return result
+
+
 def run_kite_backtest(months: int = 12, verbose: bool = False):
     """
     Entry point: authenticate with saved Kite tokens, fetch data, run backtest.
@@ -242,5 +405,29 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--months", type=int, default=12)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--adaptive-daily",
+        action="store_true",
+        help="Run Adaptive Alpha daily backtest on Kite NIFTY+VIX (real broker history)",
+    )
+    parser.add_argument(
+        "--capital",
+        type=float,
+        default=25_000.0,
+        help="Starting capital for --adaptive-daily (default ₹25k)",
+    )
+    parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Re-download Kite caches instead of using parquet",
+    )
     args = parser.parse_args()
-    run_kite_backtest(months=args.months, verbose=args.verbose)
+    if args.adaptive_daily:
+        run_adaptive_daily_kite_backtest(
+            months=args.months,
+            capital=args.capital,
+            force_refresh=args.force_refresh,
+            verbose=args.verbose,
+        )
+    else:
+        run_kite_backtest(months=args.months, verbose=args.verbose)

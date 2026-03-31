@@ -952,6 +952,9 @@ class KiteORBTrader:
             return
         candle = {"close": spot, "open": spot, "high": spot, "low": spot, "ts": now}
 
+        candles = self._candle_cache or self._refresh_candles(now)
+        q_idx = len(candles) - 1 if candles else None
+
         # ── Best signal selection: score all remaining legs, pick highest ──
         remaining_legs = legs[idx:]
         scored = []
@@ -967,7 +970,13 @@ class KiteORBTrader:
                 l["strategy"], score_direction, stub_regime.regime, stub_trend,
                 dict(l.get("filter_log") or {}), effective_vix,
             )
-            composite = self._compute_composite_score(conf, dict(l.get("filter_log") or {}))
+            composite = self._compute_composite_score(
+                conf,
+                dict(l.get("filter_log") or {}),
+                candles=candles,
+                current_idx=q_idx,
+                direction=l.get("direction"),
+            )
             scored.append((l, conf, composite))
 
         if not scored:
@@ -1080,6 +1089,8 @@ class KiteORBTrader:
 
         # ── Intraday momentum confirmation ────────────────────────────
         # Validate that recent 5m candles still confirm the signal direction.
+        if not candles:
+            candles = self._candle_cache or self._refresh_candles(now)
         momentum_ok, momentum_reason = self._confirm_intraday_momentum(leg["direction"], candles)
         if not momentum_ok:
             if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
