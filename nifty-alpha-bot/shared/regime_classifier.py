@@ -86,17 +86,35 @@ REGIME_DEFS: Dict[str, DailyRegime] = {
     ),
     "BULL_BREAKOUT": DailyRegime(
         name="BULL_BREAKOUT",
-        allowed_direction=None,
-        allowed_strategies=[],
-        otm_offset=0,
-        should_trade=False,
+        allowed_direction="CALL",
+        allowed_strategies=["EMA_PULLBACK", "VWAP_RECLAIM", "MOMENTUM_BREAKOUT"],
+        otm_offset=1,       # 1-OTM: great R:R on a breakout day with volume
+        should_trade=True,  # BREAKOUT DAYS = HIGHEST VALUE DAYS. Don't skip!
+        execution=ExecutionParams(
+            max_trades=3,
+            window_start="09:20",
+            window_end="13:30",
+            risk_pct=0.03,
+            min_quality_score=3,
+            trail_trigger_pct=0.25,
+            trail_lock_step_pct=0.12,
+        ),
     ),
     "BEAR_BREAKOUT": DailyRegime(
         name="BEAR_BREAKOUT",
-        allowed_direction=None,
-        allowed_strategies=[],
-        otm_offset=0,
-        should_trade=False,
+        allowed_direction="PUT",
+        allowed_strategies=["EMA_PULLBACK", "VWAP_RECLAIM", "MOMENTUM_BREAKOUT"],
+        otm_offset=1,       # 1-OTM: great R:R on a breakout day with volume
+        should_trade=True,  # BREAKOUT DAYS = HIGHEST VALUE DAYS. Don't skip!
+        execution=ExecutionParams(
+            max_trades=3,
+            window_start="09:20",
+            window_end="13:30",
+            risk_pct=0.03,
+            min_quality_score=3,
+            trail_trigger_pct=0.25,
+            trail_lock_step_pct=0.12,
+        ),
     ),
     "BULL_PULLBACK": DailyRegime(
         name="BULL_PULLBACK",
