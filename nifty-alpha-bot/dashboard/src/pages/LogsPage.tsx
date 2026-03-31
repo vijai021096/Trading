@@ -1,794 +1,305 @@
+/**
+ * LogsPage — live event browser with smart filtering, search,
+ * expandable detail, and color-coded timeline.
+ */
 import { useEffect, useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import axios from 'axios'
 import clsx from 'clsx'
 import {
-  ScrollText, Filter, Search, ArrowUpRight, ArrowDownRight,
-  CheckCircle2, XCircle, AlertTriangle, Radio, Clock, Zap,
-  ChevronDown, RefreshCw, Loader2, Eye, EyeOff, Key
+  ScrollText, Filter, Search, CheckCircle2, XCircle, AlertTriangle,
+  Clock, Zap, ChevronDown, RefreshCw, Loader2, Eye, EyeOff,
+  ArrowUpRight, ArrowDownRight, Radio, Info,
 } from 'lucide-react'
 
-interface FilterVal {
-  passed?: boolean
-  value?: number | string
-  detail?: string
-}
-
+/* ── Types ──────────────────────────────────────────────────────── */
+interface FilterVal { passed?: boolean; value?: number | string; detail?: string }
 interface LogEntry {
-  ts: string
-  event: string
+  ts: string; event: string
   filters?: Record<string, boolean | FilterVal>
   all_passed?: boolean
   [key: string]: any
 }
 
-const EVENT_TYPES = [
-  { id: 'ALL',                label: 'All',            color: 'text3'  },
-  { id: 'SCAN_CYCLE',        label: 'Scan Cycle',     color: 'accent' },
-  { id: 'DAILY_ADAPTIVE_SCAN', label: 'Daily Adaptive', color: 'cyan' },
-  { id: 'DAILY_REGIME',      label: 'Daily Regime',   color: 'amber' },
-  { id: 'TREND_DETECTED',    label: 'Trend',          color: 'green'  },
-  { id: 'REGIME_DETECTED',   label: 'Regime',         color: 'cyan'   },
-  { id: 'ORB_SCAN',          label: 'ORB',            color: 'amber'  },
-  { id: 'EMA_PULLBACK_SCAN', label: 'EMA Pullback',   color: 'accent' },
-  { id: 'MOMENTUM_SCAN',     label: 'Momentum',       color: 'green'  },
-  { id: 'RECLAIM_SCAN',      label: 'VWAP',           color: 'cyan'   },
-  { id: 'ENTRY',             label: 'Entries',        color: 'green'  },
-  { id: 'TRADE_CLOSED',      label: 'Exits',          color: 'accent' },
-  { id: 'RISK_BLOCKED',      label: 'Risk Blocked',   color: 'red'    },
-  { id: 'SLM_EXECUTED',      label: 'SL-M Fills',     color: 'red'    },
-  { id: 'BROKER_SYNC_CLOSED',label: 'Broker Sync',    color: 'amber'  },
-  { id: 'KITE_AUTH',         label: 'Kite Auth',      color: 'accent' },
-  { id: 'HEARTBEAT',         label: 'Heartbeat',      color: 'text3'  },
-  { id: 'LOOP_ERROR',        label: 'Errors',         color: 'red'    },
-]
-
-type LogTab = 'all' | 'trades' | 'decisions' | 'errors' | 'skipped'
-
-const LOG_TABS: { id: LogTab; label: string; color: string }[] = [
-  { id: 'all',       label: 'All',       color: 'text3'  },
-  { id: 'trades',    label: 'Trades',    color: 'green'  },
-  { id: 'decisions', label: 'Decisions', color: 'cyan'   },
-  { id: 'errors',    label: 'Errors',    color: 'red'    },
-  { id: 'skipped',   label: 'Skipped',   color: 'amber'  },
-]
-
-function matchesTab(log: LogEntry, tab: LogTab): boolean {
-  if (tab === 'all') return true
-  const raw = JSON.stringify(log).toLowerCase()
-  const ev = (log.event ?? '').toUpperCase()
-  if (tab === 'trades') return ['TRADE_CLOSED', 'ENTRY', 'EXIT'].some(k => ev.includes(k)) || raw.includes('"trade"')
-  if (tab === 'decisions') return ['DAILY_REGIME', 'DAILY_ADAPTIVE', 'TREND', 'MOMENTUM', 'SIGNAL', 'CONFIDENCE', 'BEST_SIGNAL', 'A+_FILTER'].some(k => raw.includes(k.toLowerCase()))
-  if (tab === 'errors') return ['ERROR', 'EXCEPTION', 'FAILED', 'WARNING', 'CRITICAL'].some(k => raw.includes(k.toLowerCase()))
-  if (tab === 'skipped') return ['SKIP', 'LOW_QUALITY', 'OVEREXTENDED', 'MOMENTUM SKIP', 'LATE_WINDOW SKIP', 'SKIP_AFTER_LOSS'].some(k => raw.includes(k.toLowerCase()))
-  return true
+/* ── Event type registry ────────────────────────────────────────── */
+const EVENT_META: Record<string, { label: string; color: string; dot: string }> = {
+  HEARTBEAT:           { label: 'Heartbeat',     color: 'text-text3',   dot: 'bg-text3/40'   },
+  DAILY_ADAPTIVE_SCAN: { label: 'Daily Scan',    color: 'text-accent',  dot: 'bg-accent'     },
+  DAILY_REGIME:        { label: 'Regime Lock',   color: 'text-cyan',    dot: 'bg-cyan'       },
+  TREND_DETECTED:      { label: 'Trend',         color: 'text-green',   dot: 'bg-green'      },
+  REGIME_DETECTED:     { label: 'Regime',        color: 'text-cyan',    dot: 'bg-cyan/70'    },
+  ORB_SCAN:            { label: 'ORB',           color: 'text-amber',   dot: 'bg-amber'      },
+  EMA_PULLBACK_SCAN:   { label: 'EMA Pullback',  color: 'text-accent',  dot: 'bg-accent/70'  },
+  MOMENTUM_SCAN:       { label: 'Momentum',      color: 'text-green',   dot: 'bg-green/70'   },
+  RECLAIM_SCAN:        { label: 'VWAP Reclaim',  color: 'text-cyan',    dot: 'bg-cyan/60'    },
+  SCAN_CYCLE:          { label: 'Scan',          color: 'text-text2',   dot: 'bg-text2/30'   },
+  ENTRY:               { label: 'Entry ↗',       color: 'text-green',   dot: 'bg-green'      },
+  TRADE_CLOSED:        { label: 'Exit ↘',        color: 'text-accent',  dot: 'bg-accent'     },
+  RISK_BLOCKED:        { label: 'Risk Block',    color: 'text-red-l',   dot: 'bg-red'        },
+  SLM_EXECUTED:        { label: 'SL-M Hit',      color: 'text-red-l',   dot: 'bg-red'        },
+  BROKER_SYNC_CLOSED:  { label: 'Broker Sync',   color: 'text-amber',   dot: 'bg-amber/70'   },
+  KITE_AUTH:           { label: 'Kite Auth',     color: 'text-green',   dot: 'bg-green'      },
+  RUNTIME_OVERRIDE:    { label: 'Override',      color: 'text-accent',  dot: 'bg-accent'     },
+  EMERGENCY_STOP:      { label: 'E-STOP',        color: 'text-red-l',   dot: 'bg-red'        },
+  LOOP_ERROR:          { label: 'Error',         color: 'text-red-l',   dot: 'bg-red'        },
 }
 
-export function LogsPage() {
-  const [logs, setLogs] = useState<LogEntry[]>([])
-  const [loading, setLoading] = useState(true)
-  const [filter, setFilter] = useState('ALL')
-  const [search, setSearch] = useState('')
-  const [expanded, setExpanded] = useState<string | null>(null)
-  const [rawExpanded, setRawExpanded] = useState<Set<string>>(new Set())
-  const [autoRefresh, setAutoRefresh] = useState(true)
-  const [logTab, setLogTab] = useState<LogTab>('all')
-  const [showHeartbeats, setShowHeartbeats] = useState(false)
+function meta(ev: string) {
+  for (const [k, v] of Object.entries(EVENT_META)) {
+    if (ev.includes(k) || k.includes(ev)) return v
+  }
+  return { label: ev.replace(/_/g, ' '), color: 'text-text2', dot: 'bg-text2/30' }
+}
 
-  const fetchLogs = async () => {
+const TABS = [
+  { id: 'all',       label: 'All',       match: () => true },
+  { id: 'trades',    label: 'Trades',    match: (e: LogEntry) => ['TRADE_CLOSED','ENTRY','EXIT'].some(k => e.event?.includes(k)) },
+  { id: 'decisions', label: 'Decisions', match: (e: LogEntry) => ['DAILY_REGIME','DAILY_ADAPTIVE','TREND','MOMENTUM','SIGNAL','CONFIDENCE','BEST_SIGNAL'].some(k => JSON.stringify(e).toUpperCase().includes(k)) },
+  { id: 'errors',    label: 'Errors',    match: (e: LogEntry) => ['ERROR','EXCEPTION','FAILED','WARNING','CRITICAL'].some(k => JSON.stringify(e).toUpperCase().includes(k)) },
+  { id: 'skipped',   label: 'Skipped',   match: (e: LogEntry) => ['SKIP','LOW_QUALITY','OVEREXTENDED','RISK_BLOCKED'].some(k => JSON.stringify(e).toUpperCase().includes(k)) },
+] as const
+
+type TabId = typeof TABS[number]['id']
+
+/* ── Filter quality pills ───────────────────────────────────────── */
+function FilterPills({ filters }: { filters: Record<string, boolean | FilterVal> }) {
+  const entries = Object.entries(filters)
+  const passed  = entries.filter(([, v]) => v === true || (v as FilterVal)?.passed === true)
+  const failed  = entries.filter(([, v]) => v === false || (v as FilterVal)?.passed === false)
+  return (
+    <div className="mt-2 flex flex-wrap gap-1">
+      {entries.map(([k, v]) => {
+        const ok   = v === true || (v as FilterVal)?.passed === true
+        const fail = v === false || (v as FilterVal)?.passed === false
+        const fv   = typeof v === 'object' ? v as FilterVal : null
+        return (
+          <span key={k} className={clsx(
+            'flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded border',
+            ok ? 'bg-green/8 border-green/20 text-green' : fail ? 'bg-red/8 border-red/20 text-red-l/70' : 'bg-surface border-line/25 text-text3'
+          )}>
+            {ok ? <CheckCircle2 size={8} /> : fail ? <XCircle size={8} /> : <div className="w-1.5 h-1.5 rounded-full bg-text3/40" />}
+            <span className="capitalize">{k.replace(/_/g, ' ')}</span>
+            {fv?.value != null && <span className="font-mono text-cyan/70">={typeof fv.value === 'number' ? fv.value.toFixed(2) : fv.value}</span>}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ── Log entry row ──────────────────────────────────────────────── */
+function LogRow({ entry, idx }: { entry: LogEntry; idx: number }) {
+  const [open, setOpen] = useState(false)
+  const m = meta(entry.event ?? '')
+  const ts = entry.ts ? new Date(entry.ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' }) : ''
+  const date = entry.ts ? new Date(entry.ts).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : ''
+  const hasFilters = !!entry.filters && Object.keys(entry.filters).length > 0
+  const pnl  = entry.pnl ?? entry.net_pnl
+  const state = entry.state
+  const thinking = entry.thinking
+  const msgFields = ['message','reason','error','detail','status','trade_id']
+  const msg  = msgFields.map(f => entry[f]).filter(Boolean).join(' · ')
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: -4 }} animate={{ opacity: 1, x: 0 }}
+      transition={{ delay: Math.min(idx, 20) * 0.015 }}
+      className="flex gap-3 py-3 border-b border-line/10 last:border-0 group"
+    >
+      {/* Timeline dot */}
+      <div className="flex flex-col items-center pt-1 shrink-0">
+        <div className={clsx('w-2 h-2 rounded-full shrink-0', m.dot)} />
+        <div className="flex-1 w-px bg-line/20 mt-1" />
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 min-w-0 pb-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={clsx('text-[10px] font-black uppercase tracking-wider', m.color)}>
+            {m.label}
+          </span>
+          {state && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded border border-line/25 bg-surface text-text3 font-mono">
+              {state}
+            </span>
+          )}
+          {pnl != null && (
+            <span className={clsx('text-[10px] font-mono font-bold', pnl >= 0 ? 'text-green' : 'text-red-l')}>
+              {pnl >= 0 ? '+' : ''}₹{Math.abs(pnl).toFixed(0)}
+            </span>
+          )}
+          <span className="ml-auto font-mono text-[10px] text-text3">
+            {date} {ts}
+          </span>
+        </div>
+
+        {/* Main message */}
+        {msg && <p className="text-[11px] text-text2 mt-0.5 leading-relaxed">{msg}</p>}
+
+        {/* Bot thinking */}
+        {thinking && <p className="text-[10px] text-text3 mt-0.5 italic leading-relaxed">{thinking}</p>}
+
+        {/* Filter pills */}
+        {hasFilters && <FilterPills filters={entry.filters!} />}
+
+        {/* Expandable raw JSON */}
+        {!hasFilters && (
+          <div className="mt-1">
+            <button onClick={() => setOpen(o => !o)}
+              className="text-[9px] text-text3 hover:text-accent flex items-center gap-1 transition-colors">
+              {open ? <ChevronDown size={9} /> : <ChevronDown size={9} className="-rotate-90" />}
+              {open ? 'hide' : 'details'}
+            </button>
+            <AnimatePresence>
+              {open && (
+                <motion.pre
+                  initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="overflow-hidden text-[9px] font-mono text-text3 bg-bg/80 rounded-lg p-2 mt-1 overflow-x-auto max-h-48"
+                >
+                  {JSON.stringify(entry, null, 2)}
+                </motion.pre>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
+      </div>
+    </motion.div>
+  )
+}
+
+/* ── Main export ─────────────────────────────────────────────────── */
+export function LogsPage() {
+  const [logs, setLogs]         = useState<LogEntry[]>([])
+  const [loading, setLoading]   = useState(true)
+  const [search, setSearch]     = useState('')
+  const [tab, setTab]           = useState<TabId>('all')
+  const [eventFilter, setEventFilter] = useState('ALL')
+  const [showHB, setShowHB]     = useState(false)
+  const [autoRefresh, setAutoRefresh] = useState(true)
+
+  const load = async () => {
     try {
       const r = await axios.get('/api/logs', { params: { limit: 500 } })
-      const apiLogs = r.data.logs || []
-      if (apiLogs.length === 0) {
-        const eventsRes = await axios.get('/api/events', { params: { limit: 200 } })
-        const events = eventsRes.data.events || []
-        if (events.length > 0) {
-          setLogs(events)
-        } else {
-          setLogs([])
-        }
-      } else {
-        setLogs(apiLogs)
-      }
-    } catch { }
-    setLoading(false)
+      setLogs((r.data?.logs ?? r.data ?? []).reverse())
+    } catch {}
+    finally { setLoading(false) }
   }
 
   useEffect(() => {
-    fetchLogs()
+    load()
     if (!autoRefresh) return
-    const id = setInterval(fetchLogs, 5000)
+    const id = setInterval(load, 8_000)
     return () => clearInterval(id)
   }, [autoRefresh])
 
+  const tabFn = useMemo(() => TABS.find(t => t.id === tab)?.match ?? (() => true), [tab])
+
   const filtered = useMemo(() => {
-    let items = logs
-    // Hide heartbeats by default (very noisy — now every 60s but still clutters the log)
-    if (!showHeartbeats && filter === 'ALL') items = items.filter(l => l.event !== 'HEARTBEAT')
-    if (filter !== 'ALL') items = items.filter(l => l.event === filter)
-    if (logTab !== 'all') items = items.filter(l => matchesTab(l, logTab))
+    let out = logs
+    if (!showHB) out = out.filter(e => e.event !== 'HEARTBEAT')
+    if (eventFilter !== 'ALL') out = out.filter(e => (e.event ?? '').includes(eventFilter))
+    out = out.filter(tabFn)
     if (search.trim()) {
       const q = search.toLowerCase()
-      items = items.filter(l => JSON.stringify(l).toLowerCase().includes(q))
+      out = out.filter(e => JSON.stringify(e).toLowerCase().includes(q))
     }
-    return items.reverse()
-  }, [logs, filter, logTab, search, showHeartbeats])
+    return out
+  }, [logs, showHB, eventFilter, tab, search, tabFn])
 
-  const scanCount = useMemo(() => {
-    const orb = logs.filter(l => l.event === 'ORB_SCAN').length
-    const vwap = logs.filter(l => l.event === 'RECLAIM_SCAN').length
-    const entries = logs.filter(l => l.event === 'ENTRY').length
-    const dailyScan = logs.filter(l => l.event === 'DAILY_ADAPTIVE_SCAN').length
-    const slmFills = logs.filter(l => l.event === 'SLM_EXECUTED').length
-    const heartbeats = logs.filter(l => l.event === 'HEARTBEAT').length
-    const riskBlocked = logs.filter(l => l.event === 'RISK_BLOCKED').length
-    const scanCycles = logs.filter(l => l.event === 'SCAN_CYCLE').length
-    const multiSignals = logs.filter(l => l.event === 'SCAN_CYCLE' && (l.signals_detected ?? 0) > 1).length
-    const skipped = orb + vwap - entries
-    return { orb, vwap, entries, skipped, slmFills, heartbeats, riskBlocked, scanCycles, multiSignals, dailyScan }
-  }, [logs])
+  const counts = useMemo(() => ({
+    trades:    logs.filter(e => ['TRADE_CLOSED','ENTRY'].some(k => e.event?.includes(k))).length,
+    decisions: logs.filter(e => ['DAILY_REGIME','TREND','SIGNAL'].some(k => JSON.stringify(e).toUpperCase().includes(k))).length,
+    errors:    logs.filter(e => ['ERROR','FAILED'].some(k => JSON.stringify(e).toUpperCase().includes(k))).length,
+    skipped:   logs.filter(e => ['SKIP','RISK_BLOCKED'].some(k => JSON.stringify(e).toUpperCase().includes(k))).length,
+  }), [logs])
 
   return (
-    <div className="px-4 lg:px-6 py-5 max-w-[1640px] mx-auto space-y-4">
-
+    <div className="flex-1 overflow-y-auto p-3 lg:p-4">
       {/* Header */}
-      <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-cyan/10 flex items-center justify-center">
-            <ScrollText size={18} className="text-cyan" />
+          <div className="w-9 h-9 rounded-xl bg-accent/10 flex items-center justify-center">
+            <ScrollText size={18} className="text-accent" />
           </div>
           <div>
-            <h1 className="text-lg font-extrabold text-text1 tracking-tight">Bot Decision Logs</h1>
-            <p className="text-[11px] text-text3">Why trades were taken, why signals were skipped — full transparency</p>
+            <h1 className="text-lg font-black text-text1">Event Log</h1>
+            <p className="text-[11px] text-text3">{logs.length} events loaded</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setShowHeartbeats(!showHeartbeats)}
-            title="Heartbeats are health-check pings every 60s — hide them to reduce noise"
-            className={clsx('flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-semibold border transition-all',
-              showHeartbeats ? 'bg-green/8 border-green/20 text-green' : 'bg-surface border-line/20 text-text3')}>
-            <Radio size={10} /> {showHeartbeats ? 'Heartbeats: ON' : 'Heartbeats: OFF'}
+          <button onClick={() => setShowHB(s => !s)}
+            className={clsx('flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10px] font-bold transition-all',
+              showHB ? 'bg-accent/10 text-accent border-accent/25' : 'text-text3 border-line/30 hover:border-accent/30')}>
+            {showHB ? <Eye size={11} /> : <EyeOff size={11} />} Heartbeats
           </button>
-          <button onClick={() => setAutoRefresh(!autoRefresh)}
-            className={clsx('flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-semibold border transition-all',
-              autoRefresh ? 'bg-green/8 border-green/20 text-green' : 'bg-surface border-line/20 text-text3')}>
-            <Radio size={10} className={autoRefresh ? 'animate-pulse' : ''} /> {autoRefresh ? 'Live' : 'Paused'}
+          <button onClick={() => setAutoRefresh(a => !a)}
+            className={clsx('flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10px] font-bold transition-all',
+              autoRefresh ? 'bg-green/10 text-green border-green/25' : 'text-text3 border-line/30 hover:border-accent/30')}>
+            <Radio size={11} /> {autoRefresh ? 'Live' : 'Paused'}
           </button>
-          <button onClick={() => { setLoading(true); fetchLogs() }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-semibold bg-surface border border-line/20 text-text3 hover:text-text2 transition-all">
-            <RefreshCw size={10} /> Refresh
+          <button onClick={load} disabled={loading}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-line/30 text-[10px] text-text3 hover:text-accent hover:border-accent/30 transition-all">
+            {loading ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
           </button>
         </div>
-      </motion.div>
-
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
-        {[
-          { label: 'ORB Scans', value: scanCount.orb, color: 'amber', icon: Zap },
-          { label: 'VWAP Scans', value: scanCount.vwap, color: 'cyan', icon: Radio },
-          { label: 'Daily Scan', value: scanCount.dailyScan, color: 'cyan', icon: Radio },
-          { label: 'Entries Taken', value: scanCount.entries, color: 'green', icon: ArrowUpRight },
-          { label: 'Signals Skipped', value: scanCount.skipped, color: 'red', icon: XCircle },
-          { label: 'Scan Cycles', value: scanCount.scanCycles, color: 'cyan', icon: Eye },
-          { label: 'Multi-Signal', value: scanCount.multiSignals, color: 'green', icon: Zap },
-          { label: 'Risk Blocked', value: scanCount.riskBlocked, color: 'red', icon: XCircle },
-        ].map(({ label, value, color, icon: Icon }) => {
-          const borderMap = { amber: 'border-l-amber', cyan: 'border-l-cyan', green: 'border-l-green', red: 'border-l-red' } as const
-          const textMap = { amber: 'text-amber', cyan: 'text-cyan', green: 'text-green', red: 'text-red' } as const
-          return (
-          <motion.div key={label} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-            className={clsx('glass-card rounded-xl p-3.5 border-l-[2px]', borderMap[color as keyof typeof borderMap])}>
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[9px] font-bold tracking-[0.15em] uppercase text-text3">{label}</span>
-              <Icon size={11} className={textMap[color as keyof typeof textMap]} />
-            </div>
-            <div className={clsx('text-xl font-extrabold font-mono stat-val', textMap[color as keyof typeof textMap])}>{value}</div>
-          </motion.div>
-        )})}
       </div>
 
-      {/* IMPROVEMENT 6: Log tab filters */}
-      <div className="flex items-center gap-1.5 flex-wrap">
-        {LOG_TABS.map(t => {
-          const activeTabMap: Record<string, string> = {
-            text3: 'bg-text3/12 border-text3/25 text-text3',
-            green: 'bg-green/12 border-green/25 text-green',
-            cyan: 'bg-cyan/12 border-cyan/25 text-cyan',
-            red: 'bg-red/12 border-red/25 text-red',
-            amber: 'bg-amber/12 border-amber/25 text-amber',
-          }
-          return (
-            <button key={t.id} onClick={() => setLogTab(t.id)}
-              className={clsx('px-4 py-1.5 rounded-xl text-[11px] font-bold border transition-all',
-                logTab === t.id ? activeTabMap[t.color] : 'bg-surface/50 border-line/20 text-text3 hover:text-text2')}>
+      {/* Tabs */}
+      <div className="flex items-center gap-1 bg-surface/70 rounded-xl p-0.5 border border-line/30 mb-4 w-fit">
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className={clsx(
+              'relative px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all',
+              tab === t.id ? 'text-bg' : 'text-text3 hover:text-text2'
+            )}>
+            {tab === t.id && (
+              <motion.div layoutId="logs-tab"
+                className="absolute inset-0 rounded-lg bg-accent"
+                transition={{ type: 'spring', stiffness: 500, damping: 35 }} />
+            )}
+            <span className="relative z-10">
               {t.label}
-            </button>
-          )
-        })}
-      </div>
-
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-2">
-        {EVENT_TYPES.map(et => {
-          const activeMap = {
-            text3: 'bg-text3/12 border-text3/25 text-text3',
-            amber: 'bg-amber/12 border-amber/25 text-amber',
-            cyan: 'bg-cyan/12 border-cyan/25 text-cyan',
-            green: 'bg-green/12 border-green/25 text-green',
-            accent: 'bg-accent/12 border-accent/25 text-accent',
-            red: 'bg-red/12 border-red/25 text-red',
-          } as const
-          return (
-          <button key={et.id} onClick={() => setFilter(et.id)}
-            className={clsx('px-3 py-1.5 rounded-xl text-[11px] font-semibold border transition-all',
-              filter === et.id ? activeMap[et.color as keyof typeof activeMap] :
-              'bg-surface/50 border-line/20 text-text3 hover:text-text2')}>
-            {et.label}
+              {t.id !== 'all' && counts[t.id as keyof typeof counts] > 0 && (
+                <span className="ml-1 text-[9px] opacity-70">{counts[t.id as keyof typeof counts]}</span>
+              )}
+            </span>
           </button>
-        )})}
-        <div className="relative ml-auto">
-          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text3" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search logs..."
-            className="bg-surface border border-line/30 rounded-xl pl-7 pr-3 py-1.5 text-[11px] text-text1 focus:border-accent/40 focus:outline-none w-48 transition-colors" />
-        </div>
+        ))}
       </div>
 
-      {/* Log entries */}
-      {loading ? (
-        <div className="glass-card rounded-2xl p-10 text-center">
-          <Loader2 size={20} className="animate-spin text-accent mx-auto mb-2" />
-          <p className="text-text3 text-[12px]">Loading bot logs...</p>
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="glass-card rounded-2xl p-12 text-center">
-          <ScrollText size={28} className="text-text3 mx-auto mb-3" />
-          <p className="text-text1 font-bold text-lg">No Bot Logs Yet</p>
-          <p className="text-text3 text-sm mt-2 max-w-md mx-auto">
-            Logs appear when the trading bot is running during market hours (9:15 AM – 3:30 PM IST).
-            Each scan, signal, entry, and exit is logged with full filter details showing
-            <span className="text-green font-semibold"> why a trade was taken</span> or
-            <span className="text-red font-semibold"> why it was skipped</span>.
-          </p>
-          <div className="mt-6 grid grid-cols-2 gap-3 max-w-sm mx-auto text-left">
-            {[
-              { event: 'ORB_SCAN', desc: 'Every 5-min candle evaluated for breakout', color: 'text-amber' },
-              { event: 'VWAP_SCAN', desc: 'VWAP cross detection with filter results', color: 'text-cyan' },
-              { event: 'ENTRY', desc: 'Trade entry with symbol, price, SL & target', color: 'text-green' },
-              { event: 'TRADE_CLOSED', desc: 'Exit with P&L, reason, and duration', color: 'text-accent' },
-            ].map(({ event, desc, color }) => (
-              <div key={event} className="bg-surface/50 rounded-xl p-3 border border-line/15">
-                <div className={clsx('text-xs font-bold uppercase', color)}>{event}</div>
-                <div className="text-xs text-text3 mt-1">{desc}</div>
-              </div>
+      {/* Search */}
+      <div className="relative mb-4">
+        <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text3" />
+        <input
+          value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Search events, strategies, reasons..."
+          className="w-full bg-surface/60 border border-line/30 rounded-xl pl-9 pr-4 py-2.5 text-sm text-text1 placeholder:text-text3 focus:outline-none focus:border-accent/40 transition-colors"
+        />
+      </div>
+
+      {/* Event feed */}
+      <div className="glass-card rounded-2xl p-4">
+        {loading && filtered.length === 0 ? (
+          <div className="flex items-center justify-center py-12 gap-3 text-text3">
+            <Loader2 size={18} className="animate-spin text-accent" /> Loading events...
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="text-center py-12 text-text3 text-sm">No events match this filter.</div>
+        ) : (
+          <div>
+            <div className="text-[10px] text-text3 mb-3 font-mono">
+              Showing {filtered.length} of {logs.length} events
+            </div>
+            {filtered.slice(0, 200).map((e, i) => (
+              <LogRow key={`${e.ts}-${i}`} entry={e} idx={i} />
             ))}
+            {filtered.length > 200 && (
+              <p className="text-[10px] text-text3 text-center pt-3">Showing first 200 — refine filter to see more</p>
+            )}
           </div>
-        </div>
-      ) : logTab === 'skipped' && filtered.length > 0 ? (
-        /* IMPROVEMENT 6: Special skipped card format */
-        <div className="glass-card rounded-2xl p-4">
-          <div className="text-xs font-bold text-text3 uppercase tracking-wider mb-3">
-            {filtered.length} skipped signal{filtered.length > 1 ? 's' : ''} — reasons why bot passed
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {filtered.slice(0, 30).map((log, i) => {
-              const raw = JSON.stringify(log)
-              const reason = log.skip_reason ?? log.reason ?? (
-                raw.toLowerCase().includes('low_quality') ? 'LOW_QUALITY' :
-                raw.toLowerCase().includes('overextended') ? 'OVEREXTENDED' :
-                raw.toLowerCase().includes('late_window') ? 'LATE_WINDOW' :
-                raw.toLowerCase().includes('momentum skip') ? 'MOMENTUM_SKIP' :
-                raw.toLowerCase().includes('skip_after_loss') ? 'SKIP_AFTER_LOSS' :
-                'FILTERED'
-              )
-              return (
-                <div key={i} className="bg-amber/5 border border-amber/20 rounded-xl p-3">
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <XCircle size={12} className="text-amber shrink-0" />
-                    <span className="text-[11px] font-bold text-text1 truncate">{log.event?.replace(/_/g, ' ')}</span>
-                  </div>
-                  <div className="text-xs font-bold text-amber">{String(reason).replace(/_/g, ' ')}</div>
-                  <div className="text-[9px] text-text3 font-mono mt-1.5">
-                    {new Date(log.ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-                    {log.confidence != null && ` · conf=${Math.round(log.confidence)}`}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      ) : (
-        <div className="glass-card rounded-2xl overflow-hidden">
-          <div className="divide-y divide-line/10 max-h-[calc(100vh-350px)] overflow-y-auto">
-            {filtered.map((log, i) => {
-              const logId = `${log.ts}:${log.event}`
-              const isExp = expanded === logId
-              const isScan = log.event === 'ORB_SCAN' || log.event === 'RECLAIM_SCAN' || log.event === 'EMA_PULLBACK_SCAN' || log.event === 'MOMENTUM_SCAN'
-              const isScanCycle = log.event === 'SCAN_CYCLE'
-              const isEntry = log.event === 'ENTRY'
-              const isTrade = log.event === 'TRADE_CLOSED'
-              const isError = log.event === 'LOOP_ERROR'
-              const isSlm = log.event === 'SLM_EXECUTED'
-              const isHB = log.event === 'HEARTBEAT'
-              const isRiskBlocked = log.event === 'RISK_BLOCKED'
-              const isKiteAuth = log.event === 'KITE_AUTH'
-              const isSystem = log.event === 'SYSTEM_READY'
-              const isStrongTrendOverride = log.event === 'STRONG_TREND_OVERRIDE'
-              const isMissedMove = log.event === 'MISSED_MOVE'
-              const passed = log.all_passed
-              const filters = log.filters || {}
-              const filterEntries = Object.entries(filters) as [string, boolean | FilterVal][]
-              const isFilterPassed = (v: boolean | FilterVal): boolean => v === true || (v !== null && typeof v === 'object' && !!(v as FilterVal).passed)
-              const passedCount = filterEntries.filter(([, v]) => isFilterPassed(v)).length
-              const isRawExp = rawExpanded.has(logId)
-
-              return (
-                <motion.div key={logId} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: Math.min(i * 0.01, 0.3) }}
-                  className={clsx('px-5 py-3 cursor-pointer transition-colors', isExp ? 'bg-card/50' : 'hover:bg-card/30')}
-                  onClick={() => setExpanded(isExp ? null : logId)}>
-
-                  <div className="flex items-start gap-3">
-                    {/* Event type indicator */}
-                    <div className={clsx('w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5',
-                      isScanCycle ? 'bg-accent/10' :
-                      isHB ? 'bg-green/8' :
-                      isSystem ? 'bg-cyan/10' :
-                      isKiteAuth ? 'bg-accent/10' :
-                      isRiskBlocked ? 'bg-red/10' :
-                      isEntry ? 'bg-green/10' :
-                      isTrade ? 'bg-accent/10' :
-                      isSlm ? 'bg-red/10' :
-                      isError ? 'bg-red/10' :
-                      isScan && passed ? 'bg-green/10' :
-                      isScan ? 'bg-amber/10' : 'bg-surface')}>
-                      {isScanCycle ? <Eye size={14} className="text-accent" /> :
-                       isHB ? <Radio size={14} className="text-green" /> :
-                       isSystem ? <Zap size={14} className="text-cyan" /> :
-                       isKiteAuth ? <Key size={14} className="text-accent" /> :
-                       isRiskBlocked ? <XCircle size={14} className="text-red" /> :
-                       isEntry ? <ArrowUpRight size={14} className="text-green" /> :
-                       isTrade ? <CheckCircle2 size={14} className="text-accent" /> :
-                       isSlm ? <AlertTriangle size={14} className="text-red" /> :
-                       isError ? <AlertTriangle size={14} className="text-red" /> :
-                       isScan && passed ? <CheckCircle2 size={14} className="text-green" /> :
-                       <XCircle size={14} className="text-amber" />}
-                    </div>
-
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {/* Event badge */}
-                        <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider',
-                          isHB ? 'bg-green/8 text-green' :
-                          isSystem ? 'bg-cyan/10 text-cyan' :
-                          isKiteAuth ? 'bg-accent/10 text-accent-l' :
-                          isRiskBlocked ? 'bg-red/10 text-red' :
-                          isEntry ? 'bg-green/10 text-green' :
-                          isTrade ? 'bg-accent/10 text-accent-l' :
-                          isSlm ? 'bg-red/10 text-red' :
-                          isError ? 'bg-red/10 text-red' :
-                          log.event === 'ORB_SCAN' ? 'bg-amber/10 text-amber' : 'bg-cyan/10 text-cyan')}>
-                          {log.event.replace(/_/g, ' ')}
-                        </span>
-
-                        {/* Signal indicator */}
-                        {isScan && (
-                          <>
-                            <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold',
-                              passed ? 'bg-green/10 text-green' : 'bg-red/8 text-text3')}>
-                              {passed ? `SIGNAL: ${log.signal || '—'}` : 'NO SIGNAL'}
-                            </span>
-                            {log.confidence != null && (
-                              <span className={clsx('px-1 py-0.5 rounded text-[8px] font-bold font-mono',
-                                log.confidence >= 70 ? 'bg-green/10 text-green' : log.confidence >= 50 ? 'bg-amber/10 text-amber' : 'bg-surface text-text3')}>
-                                conf={Math.round(log.confidence)}
-                              </span>
-                            )}
-                            {log.regime && (
-                              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-surface text-text3">{log.regime}</span>
-                            )}
-                          </>
-                        )}
-
-                        {/* SCAN_CYCLE — aggregated results */}
-                        {isScanCycle && (
-                          <>
-                            <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold',
-                              log.signals_detected > 0 ? 'bg-green/10 text-green' : 'bg-surface text-text3')}>
-                              {log.signals_detected > 0 ? `${log.signals_detected} SIGNAL${log.signals_detected > 1 ? 'S' : ''}` : 'NO SIGNAL'}
-                            </span>
-                            <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-surface text-text3">
-                              {log.strategies_evaluated} scanned · {log.regime} · {log.trend}
-                            </span>
-                            {log.conviction != null && (
-                              <span className={clsx('px-1 py-0.5 rounded text-[8px] font-bold font-mono',
-                                log.conviction >= 0.7 ? 'bg-green/10 text-green' : log.conviction >= 0.4 ? 'bg-amber/10 text-amber' : 'bg-surface text-text3')}>
-                                conv={Math.round(log.conviction * 100)}%
-                              </span>
-                            )}
-                            {log.candidates?.length > 0 && (
-                              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-accent/10 text-accent-l">
-                                BEST: {log.candidates[0].strategy} ({log.candidates[0].signal}, conf={Math.round(log.candidates[0].confidence)})
-                              </span>
-                            )}
-                          </>
-                        )}
-
-                        {isEntry && log.strategy && (
-                          <>
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-accent/10 text-accent-l">
-                              {log.strategy} · {log.signal}
-                            </span>
-                            {log.confidence != null && (
-                              <span className={clsx('px-1 py-0.5 rounded text-[8px] font-bold font-mono',
-                                log.confidence >= 70 ? 'bg-green/10 text-green' : log.confidence >= 50 ? 'bg-amber/10 text-amber' : 'bg-surface text-text3')}>
-                                conf={Math.round(log.confidence)}
-                              </span>
-                            )}
-                            {log.trend && (
-                              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-surface text-text3">{log.trend}</span>
-                            )}
-                            {log.risk_multiplier != null && (
-                              <span className="px-1 py-0.5 rounded text-[8px] font-bold font-mono bg-surface text-text3">
-                                risk×{log.risk_multiplier.toFixed(2)}
-                              </span>
-                            )}
-                          </>
-                        )}
-
-                        {isTrade && (
-                          <>
-                            <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold',
-                              (log.net_pnl ?? 0) >= 0 ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>
-                              {(log.net_pnl ?? 0) >= 0 ? '+' : ''}₹{(log.net_pnl ?? 0).toLocaleString('en-IN')} · {log.exit_reason}
-                            </span>
-                            {log.exit_reason === 'SL_HIT' && log.sl_slippage_pct != null && Math.abs(log.sl_slippage_pct) > 0.01 && (
-                              <span className={clsx('px-1 py-0.5 rounded text-[8px] font-bold',
-                                Math.abs(log.sl_slippage_pct) > 1 ? 'bg-red/10 text-red' : 'bg-amber/10 text-amber')}>
-                                SL slip {Math.abs(log.sl_slippage_pct).toFixed(1)}% (₹{Math.abs(log.sl_extra_loss ?? 0).toFixed(0)})
-                              </span>
-                            )}
-                          </>
-                        )}
-
-                        {isSlm && (
-                          <>
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-red/10 text-red">
-                              Trigger ₹{log.trigger_price?.toFixed(1)} → Fill ₹{log.fill_price?.toFixed(1)}
-                            </span>
-                            <span className={clsx('px-1 py-0.5 rounded text-[8px] font-bold',
-                              Math.abs(log.slm_slippage_pct ?? 0) > 1 ? 'bg-red/10 text-red' : 'bg-amber/10 text-amber')}>
-                              {Math.abs(log.slm_slippage_pct ?? 0).toFixed(1)}% slip · Extra ₹{Math.abs(log.extra_loss_total ?? 0).toFixed(0)}
-                            </span>
-                          </>
-                        )}
-
-                        {isHB && (
-                          <>
-                            <span className={clsx('px-1.5 py-0.5 rounded text-[8px] font-bold',
-                              log.market_status === 'OPEN' ? 'bg-green/10 text-green' :
-                              log.market_status === 'PRE_MARKET' ? 'bg-amber/10 text-amber' :
-                              'bg-surface text-text3')}>
-                              {log.market_status ?? 'CLOSED'} · {log.state ?? 'IDLE'}
-                            </span>
-                            <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-surface text-text2">
-                              {log.trades_today ?? 0}/{log.max_trades ?? 3} trades · ₹{(log.daily_pnl ?? 0) >= 0 ? '+' : ''}{(log.daily_pnl ?? 0).toFixed(0)}
-                            </span>
-                            <span className={clsx('px-1 py-0.5 rounded text-[8px] font-bold',
-                              (log.drawdown_pct ?? 0) > 10 ? 'bg-red/10 text-red' : (log.drawdown_pct ?? 0) > 5 ? 'bg-amber/10 text-amber' : 'bg-green/8 text-green')}>
-                              DD {(log.drawdown_pct ?? 0).toFixed(1)}% · ₹{(log.current_capital ?? 0).toLocaleString('en-IN')}
-                            </span>
-                            {log.kite_connected != null && (
-                              <span className={clsx('px-1 py-0.5 rounded text-[8px] font-bold',
-                                log.kite_connected ? 'bg-green/8 text-green' : 'bg-red/8 text-red')}>
-                                Kite {log.kite_connected ? 'OK' : 'DOWN'}
-                              </span>
-                            )}
-                            {log.nifty_price && (
-                              <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-accent/8 text-accent-l">
-                                NIFTY ₹{Number(log.nifty_price).toLocaleString('en-IN')}
-                              </span>
-                            )}
-                          </>
-                        )}
-
-                        {isKiteAuth && (
-                          <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold',
-                            log.success === false ? 'bg-red/10 text-red' : 'bg-green/10 text-green')}>
-                            {log.method || 'auth'} · {log.message || (log.success ? 'OK' : 'Failed')}
-                          </span>
-                        )}
-
-                        {isSystem && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-cyan/10 text-cyan">
-                            {log.message || 'System event'} · ₹{(log.capital ?? 0).toLocaleString('en-IN')} · {log.paper_mode ? 'PAPER' : 'LIVE'}
-                          </span>
-                        )}
-
-                        {isRiskBlocked && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-red/10 text-red">
-                            {log.reason || 'Risk gate blocked'}
-                          </span>
-                        )}
-
-                        {isStrongTrendOverride && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-green/10 text-green">
-                            VOLATILE + Strong trend — enabling trend strategies
-                          </span>
-                        )}
-
-                        {isMissedMove && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber/10 text-amber">
-                            {log.move_pts?.toFixed(0)}pt move in 30min — skipping late entry
-                          </span>
-                        )}
-
-                        {isError && (
-                          <span className="text-[10px] text-red truncate max-w-[300px]">{log.error}</span>
-                        )}
-
-                        {/* Filter mini-bar */}
-                        {isScan && filterEntries.length > 0 && (
-                          <div className="flex items-center gap-0.5 ml-auto">
-                            {filterEntries.slice(0, 8).map(([k, v], fi) => {
-                              const ok = isFilterPassed(v)
-                              return <div key={fi} className={clsx('w-1 h-3 rounded-full', ok ? 'bg-green' : 'bg-red/50')} />
-                            })}
-                            <span className="text-[9px] font-mono text-text3 ml-1">{passedCount}/{filterEntries.length}</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Heartbeat thinking line */}
-                      {isHB && log.thinking && !isExp && (
-                        <div className="text-[10px] text-text2 mt-1 italic">
-                          {log.thinking}
-                          {log.regime && <span className="not-italic ml-2 text-text3">· Regime: {log.regime} · Trend: {log.trend_state ?? '—'}</span>}
-                        </div>
-                      )}
-
-                      {/* Scan cycle summary — what each strategy found */}
-                      {isScanCycle && !isExp && log.scans?.length > 0 && (
-                        <div className="text-[10px] mt-1 space-y-1">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            {(log.scans as Array<{strategy: string; passed: boolean; confidence: number; waiting_for?: string[]}>).map((s, si) => (
-                              <span key={si} className={clsx('px-1.5 py-0.5 rounded text-[8px] font-bold',
-                                s.passed ? 'bg-green/10 text-green' : 'bg-surface text-text3')}>
-                                {s.strategy.replace(/_/g, ' ')} {s.passed ? '✓' : '✗'} {Math.round(s.confidence)}
-                              </span>
-                            ))}
-                          </div>
-                          {/* Show what conditions are missing for each strategy */}
-                          {(log.scans as Array<{strategy: string; passed: boolean; waiting_for?: string[]}>)
-                            .filter(s => !s.passed && s.waiting_for?.length)
-                            .slice(0, 2)
-                            .map((s, si) => (
-                              <div key={si} className="text-[9px] text-text3 flex items-center gap-1">
-                                <span className="text-amber font-semibold">{s.strategy.replace(/_/g, ' ')}:</span>
-                                <span>waiting for {s.waiting_for?.slice(0, 3).map(w => w.replace(/_/g, ' ')).join(', ')}</span>
-                              </div>
-                            ))}
-                        </div>
-                      )}
-
-                      {/* Scan detail line — show what bot is waiting for */}
-                      {isScan && !isExp && (
-                        <div className="text-[10px] mt-1 flex items-center gap-2 flex-wrap">
-                          {passed ? (
-                            <span className="text-green font-semibold">All conditions met — signal ready</span>
-                          ) : filterEntries.length > 0 ? (
-                            <>
-                              <span className="text-amber font-semibold">Waiting for:</span>
-                              {filterEntries
-                                .filter(([, v]) => !isFilterPassed(v))
-                                .slice(0, 4)
-                                .map(([k, v]) => {
-                                  const detail = (v !== null && typeof v === 'object') ? (v as FilterVal) : null
-                                  return (
-                                    <span key={k} className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-red/8 text-red/70">
-                                      {k.replace(/_/g, ' ')}
-                                      {detail?.value !== undefined && (
-                                        <span className="ml-1 font-mono text-text3">
-                                          {typeof detail.value === 'number' ? detail.value.toFixed(1) : String(detail.value).slice(0, 10)}
-                                        </span>
-                                      )}
-                                    </span>
-                                  )
-                                })}
-                              {filterEntries.filter(([, v]) => !isFilterPassed(v)).length > 4 && (
-                                <span className="text-text3">+{filterEntries.filter(([, v]) => !isFilterPassed(v)).length - 4} more</span>
-                              )}
-                            </>
-                          ) : (
-                            <span className="text-text3">No signal detected</span>
-                          )}
-                          {log.early_session && (
-                            <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-amber/10 text-amber">FAST MODE</span>
-                          )}
-                          {log.strong_trend_override && (
-                            <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-green/10 text-green">TREND OVERRIDE</span>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Entry detail */}
-                      {isEntry && !isExp && (
-                        <div className="text-[10px] text-text3 mt-1 flex items-center gap-1.5 flex-wrap">
-                          <span>{log.symbol} · Entry ₹{log.fill_price?.toFixed(0)} · SL ₹{log.sl?.toFixed(0)} · Target ₹{log.target?.toFixed(0)}</span>
-                          {log.vix && <span>· VIX {log.vix.toFixed(1)}</span>}
-                          {log.entry_latency_ms != null && (
-                            <span className={clsx('px-1 py-0.5 rounded text-[8px] font-bold',
-                              log.entry_latency_ms > 2000 ? 'bg-red/10 text-red' : log.entry_latency_ms > 500 ? 'bg-amber/10 text-amber' : 'bg-green/10 text-green')}>
-                              {log.entry_latency_ms}ms
-                            </span>
-                          )}
-                          {log.slippage_pct != null && (
-                            <span className={clsx('px-1 py-0.5 rounded text-[8px] font-bold',
-                              Math.abs(log.slippage_pct) > 1 ? 'bg-red/10 text-red' : 'bg-amber/10 text-amber')}>
-                              slip {log.slippage_pct.toFixed(1)}%
-                            </span>
-                          )}
-                          {log.order_type && (
-                            <span className="px-1 py-0.5 rounded text-[8px] font-bold bg-accent/10 text-accent-l">{log.order_type}</span>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Timestamp */}
-                      <div className="text-[9px] text-text3 font-mono mt-1 flex items-center gap-1">
-                        <Clock size={8} />
-                        {new Date(log.ts).toLocaleString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', day: 'numeric', month: 'short' })}
-                      </div>
-                    </div>
-
-                    <ChevronDown size={12} className={clsx('text-text3 transition-transform shrink-0 mt-1', isExp && 'rotate-180')} />
-                  </div>
-
-                  {/* Expanded details */}
-                  <AnimatePresence>
-                    {isExp && (
-                      <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }} className="overflow-hidden"
-                        onClick={e => e.stopPropagation()}>
-                        <div className="mt-3 pt-3 border-t border-line/15">
-
-                          {/* Scan cycle expanded detail */}
-                          {isScanCycle && (
-                            <div className="mb-3 space-y-3">
-                              {/* Strategy scan results — what passed, what didn't */}
-                              {log.scans?.length > 0 && (
-                                <div>
-                                  <div className="text-[10px] font-bold text-text3 uppercase tracking-wider mb-2">
-                                    Strategies Scanned — Bot is waiting for:
-                                  </div>
-                                  <div className="space-y-1.5">
-                                    {(log.scans as Array<{strategy: string; passed: boolean; confidence: number; signal?: string; waiting_for?: string[]}>).map((s, si) => (
-                                      <div key={si} className={clsx('px-3 py-2 rounded-lg border text-[10px]',
-                                        s.passed ? 'bg-green/5 border-green/20' : 'bg-surface/30 border-line/15')}>
-                                        <div className="flex items-center justify-between">
-                                          <div className="flex items-center gap-2">
-                                            {s.passed ? <CheckCircle2 size={10} className="text-green" /> : <XCircle size={10} className="text-text3" />}
-                                            <span className="font-bold text-text1">{s.strategy.replace(/_/g, ' ')}</span>
-                                            {s.signal && (
-                                              <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold', s.signal === 'CALL' ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>{s.signal}</span>
-                                            )}
-                                          </div>
-                                          <span className={clsx('font-bold font-mono', s.confidence >= 70 ? 'text-green' : s.confidence >= 50 ? 'text-amber' : 'text-text3')}>
-                                            {Math.round(s.confidence)}
-                                          </span>
-                                        </div>
-                                        {!s.passed && s.waiting_for && s.waiting_for.length > 0 && (
-                                          <div className="mt-1.5 flex items-center gap-1 flex-wrap">
-                                            <span className="text-amber font-semibold">Missing:</span>
-                                            {s.waiting_for.map((w: string) => (
-                                              <span key={w} className="px-1 py-0.5 rounded text-[8px] bg-amber/8 text-amber">{w.replace(/_/g, ' ')}</span>
-                                            ))}
-                                          </div>
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Signal candidates if any fired */}
-                              {log.candidates?.length > 0 && (
-                                <div>
-                                  <div className="text-[10px] font-bold text-text3 uppercase tracking-wider mb-2">Signal Candidates (ranked by confidence)</div>
-                                  <div className="space-y-1.5">
-                                    {(log.candidates as Array<{strategy: string; signal: string; confidence: number}>).map((c, ci) => (
-                                      <div key={ci} className={clsx('flex items-center justify-between px-3 py-2 rounded-lg border',
-                                        ci === 0 ? 'bg-green/5 border-green/20' : 'bg-surface/30 border-line/15')}>
-                                        <div className="flex items-center gap-2">
-                                          <span className={clsx('text-[10px] font-bold', ci === 0 ? 'text-green' : 'text-text3')}>{ci + 1}</span>
-                                          <span className="text-[11px] font-bold text-text1">{c.strategy.replace(/_/g, ' ')}</span>
-                                          <span className={clsx('px-1.5 py-0.5 rounded text-[9px] font-bold', c.signal === 'CALL' ? 'bg-green/10 text-green' : 'bg-red/10 text-red')}>{c.signal}</span>
-                                          {ci === 0 && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-green/10 text-green">SELECTED</span>}
-                                        </div>
-                                        <span className={clsx('text-sm font-bold font-mono', c.confidence >= 70 ? 'text-green' : c.confidence >= 50 ? 'text-amber' : 'text-text3')}>{Math.round(c.confidence)}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Filter breakdown for scans */}
-                          {isScan && filterEntries.length > 0 && (
-                            <div className="mb-3">
-                              <div className="text-[10px] font-bold text-text3 uppercase tracking-wider mb-2">Filter Breakdown — Why {passed ? 'Signal Fired' : 'Signal Skipped'}</div>
-                              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                                {filterEntries.map(([key, v]) => {
-                                  const ok = isFilterPassed(v)
-                                  const detail = (v !== null && typeof v === 'object') ? v as FilterVal : null
-                                  return (
-                                    <div key={key} className={clsx('flex items-center gap-2 px-2 py-1.5 rounded-lg border text-[10px]',
-                                      ok ? 'bg-green/5 border-green/15 text-green' : 'bg-red/5 border-red/12 text-red-l/70')}>
-                                      {ok ? <CheckCircle2 size={10} /> : <XCircle size={10} />}
-                                      <span className="capitalize truncate">{key.replace(/_/g, ' ')}</span>
-                                      {detail?.value !== undefined && (
-                                        <span className="ml-auto font-mono text-[9px] text-text3">
-                                          {typeof detail.value === 'number' ? detail.value.toFixed(1) : String(detail.value)}
-                                        </span>
-                                      )}
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Diagnostic checks for SYSTEM_READY */}
-                          {isSystem && log.checks && Array.isArray(log.checks) && (
-                            <div className="mb-3">
-                              <div className="text-[10px] font-bold text-text3 uppercase tracking-wider mb-2">
-                                Startup Diagnostics — {log.checks_passed ?? 0} passed, {log.checks_warnings ?? 0} warn, {log.checks_failed ?? 0} fail
-                              </div>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
-                                {(log.checks as Array<{name: string; status: string; detail: string}>).map((c: {name: string; status: string; detail: string}, ci: number) => (
-                                  <div key={ci} className={clsx('flex items-center gap-2 px-2 py-1 rounded-lg border text-[10px]',
-                                    c.status === 'PASS' ? 'bg-green/5 border-green/15 text-green' :
-                                    c.status === 'WARN' ? 'bg-amber/5 border-amber/15 text-amber' :
-                                    'bg-red/5 border-red/12 text-red')}>
-                                    {c.status === 'PASS' ? <CheckCircle2 size={10} /> : c.status === 'WARN' ? <AlertTriangle size={10} /> : <XCircle size={10} />}
-                                    <span className="truncate">{c.name}</span>
-                                    {c.detail && <span className="ml-auto font-mono text-[9px] text-text3 truncate max-w-[150px]">{c.detail}</span>}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Raw data */}
-                          <div>
-                            <button
-                              className="text-[10px] text-text3 cursor-pointer hover:text-text2 flex items-center gap-1"
-                              onClick={e => {
-                                e.stopPropagation()
-                                setRawExpanded(prev => {
-                                  const next = new Set(prev)
-                                  if (next.has(logId)) next.delete(logId); else next.add(logId)
-                                  return next
-                                })
-                              }}>
-                              <Eye size={10} /> Raw data {isRawExp ? '▲' : '▼'}
-                            </button>
-                            {isRawExp && (
-                              <pre className="mt-2 text-[9px] font-mono text-text3 bg-surface/50 rounded-lg p-3 overflow-x-auto max-h-[200px]">
-                                {JSON.stringify(log, null, 2)}
-                              </pre>
-                            )}
-                          </div>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </motion.div>
-              )
-            })}
-          </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }

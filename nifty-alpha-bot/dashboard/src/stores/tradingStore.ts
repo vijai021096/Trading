@@ -148,6 +148,13 @@ export interface BotStatus {
   regime_adx?: number | null
   regime_vix?: number | null
   regime_rsi?: number | null
+  // Extra intelligence fields from heartbeat
+  last_trade_pnl?: number | null
+  last_exit_reason?: string | null
+  scan_count_today?: number | null
+  skipped_today?: number | null
+  lots_planning?: number | null
+  strategies?: { active_engine?: string; [k: string]: any }
   last_scan: {
     strategies_evaluated: number
     signals_detected: number

@@ -18,13 +18,16 @@ interface BacktestResult {
 }
 
 const STRATEGY_COLOR_HEX: Record<string, string> = {
-  TREND_CONTINUATION: '#6366f1',
-  BREAKOUT_MOMENTUM: '#8b5cf6',
-  REVERSAL_SNAP: '#10b981',
-  GAP_FADE: '#f59e0b',
-  RANGE_BOUNCE: '#ec4899',
-  INSIDE_BAR_BREAK: '#06b6d4',
-  VWAP_CROSS: '#14b8a6',
+  TREND_CONTINUATION:   '#f59e0b',  // amber
+  BREAKOUT_MOMENTUM:    '#8b5cf6',  // purple
+  REVERSAL_SNAP:        '#22c55e',  // green
+  GAP_FADE:             '#06b6d4',  // cyan
+  RANGE_BOUNCE:         '#ec4899',  // pink
+  INSIDE_BAR_BREAK:     '#22d3ee',  // bright cyan
+  VWAP_CROSS:           '#34d399',  // emerald
+  ORB:                  '#f97316',  // orange-amber
+  EMA_PULLBACK:         '#a78bfa',  // violet
+  VWAP_RECLAIM:         '#10b981',  // teal
 }
 
 function strategyColor(strategy: string): string {
@@ -272,8 +275,8 @@ export function BacktestPage() {
                   <AreaChart data={result.equity_curve}>
                     <defs>
                       <linearGradient id="btGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#6366f1" stopOpacity={0.2} />
-                        <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
+                        <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.2} />
+                        <stop offset="100%" stopColor="#f59e0b" stopOpacity={0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1c2244" />
@@ -282,7 +285,7 @@ export function BacktestPage() {
                       tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} />
                     <Tooltip contentStyle={{ background: '#111631', border: '1px solid #1c2244', borderRadius: '10px', fontSize: 11 }}
                       formatter={(v: number) => [`₹${v.toLocaleString('en-IN')}`, 'Equity']} />
-                    <Area type="monotone" dataKey="equity" stroke="#6366f1" strokeWidth={2} fill="url(#btGrad)" dot={false} />
+                    <Area type="monotone" dataKey="equity" stroke="#f59e0b" strokeWidth={2} fill="url(#btGrad)" dot={false} />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -431,10 +434,10 @@ export function BacktestPage() {
               {(() => {
                 const total = result.trades!.length
                 const regimeColorMap: Record<string, string> = {
-                  STRONG_TREND_UP: '#6366f1', STRONG_TREND_DOWN: '#a855f7',
+                  STRONG_TREND_UP: '#f59e0b', STRONG_TREND_DOWN: '#a855f7',
                   MILD_TREND: '#3b82f6', MEAN_REVERT: '#06b6d4',
                   BREAKOUT: '#f59e0b', VOLATILE: '#ef4444',
-                  TRENDING: '#6366f1', RANGING: '#06b6d4',
+                  TRENDING: '#f59e0b', RANGING: '#06b6d4',
                 }
                 const entries = Object.entries(regimeDist).filter(([, n]) => n > 0).sort(([, a], [, b]) => b - a)
                 return (

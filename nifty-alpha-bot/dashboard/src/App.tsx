@@ -19,15 +19,16 @@ export default function App() {
 
   return (
     <div className="flex flex-col min-h-screen bg-bg text-text1 relative overflow-hidden">
-      {/* Ambient orbs */}
+      {/* Ambient orbs — amber terminal palette */}
       <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
-        <div className="absolute top-[-20%] left-[10%] w-[600px] h-[600px] rounded-full bg-accent/[0.03] blur-[120px]" />
-        <div className="absolute top-[30%] right-[-10%] w-[500px] h-[500px] rounded-full bg-cyan/[0.025] blur-[100px]" />
-        <div className="absolute bottom-[-10%] left-[40%] w-[400px] h-[400px] rounded-full bg-green/[0.02] blur-[100px]" />
+        <div className="absolute top-[-20%] left-[5%] w-[700px] h-[700px] rounded-full bg-accent/[0.04] blur-[140px]" />
+        <div className="absolute top-[25%] right-[-15%] w-[550px] h-[550px] rounded-full bg-cyan/[0.025] blur-[110px]" />
+        <div className="absolute bottom-[-15%] left-[35%] w-[450px] h-[450px] rounded-full bg-green/[0.02] blur-[110px]" />
+        <div className="absolute top-[60%] left-[-5%] w-[300px] h-[300px] rounded-full bg-accent/[0.02] blur-[80px]" />
       </div>
-      {/* Grid pattern */}
-      <div className="fixed inset-0 pointer-events-none z-0 opacity-[0.02]"
-        style={{ backgroundImage: 'linear-gradient(rgba(99,102,241,0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,0.3) 1px, transparent 1px)', backgroundSize: '60px 60px' }}
+      {/* Subtle dot grid */}
+      <div className="fixed inset-0 pointer-events-none z-0"
+        style={{ backgroundImage: 'radial-gradient(circle, rgba(245,158,11,0.08) 1px, transparent 1px)', backgroundSize: '40px 40px' }}
       />
 
       <TopBar currentPage={page} onNavigate={setPage} />
