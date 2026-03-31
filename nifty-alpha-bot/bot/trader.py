@@ -233,11 +233,30 @@ class KiteORBTrader:
         current_idx: Optional[int] = None,
         direction: Optional[str] = None,
     ) -> float:
-        """Composite entry score = confidence * 0.5 + quality * 0.5 + conviction * 20.
-        Returns 0-120 range. Used to rank multiple signal candidates."""
+        """Composite entry score = confidence * 0.5 + quality * 0.5 + conviction * 20 + momentum_bonus.
+        Returns 0-130 range. Used to rank multiple signal candidates.
+        Now directionally aware: if recent candles confirm signal direction, +5 bonus.
+        """
         quality = float((filter_log or {}).get("quality_score", 0.0))
         conviction = self._current_trend.conviction if self._current_trend else 0.0
-        return confidence * 0.5 + quality * 0.5 + conviction * 20
+        base = confidence * 0.5 + quality * 0.5 + conviction * 20
+
+        # Directional momentum bonus from recent completed candles
+        momentum_bonus = 0.0
+        if candles and direction and len(candles) >= 3:
+            last3 = candles[-3:]
+            bull = sum(1 for c in last3 if c.get("close", 0) >= c.get("open", 0))
+            bear = len(last3) - bull
+            if direction == "CALL" and bull >= 2:
+                momentum_bonus = 4.0   # 2+ bullish candles confirm CALL
+            elif direction == "PUT" and bear >= 2:
+                momentum_bonus = 4.0   # 2+ bearish candles confirm PUT
+            elif direction == "CALL" and bear == 3:
+                momentum_bonus = -3.0  # all 3 bearish = CALL signal is going stale
+            elif direction == "PUT" and bull == 3:
+                momentum_bonus = -3.0  # all 3 bullish = PUT signal is going stale
+
+        return base + momentum_bonus
 
     def _resolve_leg_direction(self, leg: dict, candles: list, spot: float) -> Optional[str]:
         """Resolve direction for NEUTRAL legs using live intraday data.
