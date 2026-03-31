@@ -109,20 +109,47 @@ def main() -> None:
     # ── Load data ──────────────────────────────────────────────────
     print("\n[BacktestRunner] Loading data...")
 
-    # 5m Kite data → aggregate to daily (used for 60d and 1y runs)
-    df_5m = pd.read_parquet(DATA_DIR / "nifty_5m_kite.parquet")
+    # 5m data → aggregate to daily (used for 60d and 1y runs)
+    # Try kite-specific file first, fall back to combined
+    _5m_candidates = ["nifty_5m_kite.parquet", "nifty_5m_combined.parquet", "nifty_5m.parquet"]
+    df_5m = None
+    for _fn in _5m_candidates:
+        try:
+            df_5m = pd.read_parquet(DATA_DIR / _fn)
+            print(f"  5m data: {_fn}")
+            break
+        except Exception:
+            continue
+    if df_5m is None:
+        raise RuntimeError("No readable 5m parquet file found in backtest/data/")
     df_5m["ts"] = pd.to_datetime(df_5m["ts"])
     kite_daily = _agg_5m_to_daily(df_5m)
 
-    # VIX from kite (shorter) + fallback to longer file
-    vix_kite = _load_vix(str(DATA_DIR / "india_vix_kite.parquet"))
-    vix_full  = _load_vix(str(DATA_DIR / "india_vix_daily.parquet"))
-    # Merge: kite VIX is more precise (actual daily settle), use for overlap
-    vix_merged = pd.concat([vix_full, vix_kite]).drop_duplicates("date", keep="last") \
+    # VIX — try kite-specific then fallback to 2yr file
+    _vix_candidates = ["india_vix_kite.parquet", "india_vix_daily.parquet", "india_vix_2yr.parquet"]
+    vix_parts = []
+    for _fn in _vix_candidates:
+        try:
+            vix_parts.append(_load_vix(str(DATA_DIR / _fn)))
+        except Exception:
+            pass
+    if not vix_parts:
+        raise RuntimeError("No readable VIX parquet file found in backtest/data/")
+    vix_merged = pd.concat(vix_parts).drop_duplicates("date", keep="last") \
                     .sort_values("date").reset_index(drop=True)
 
     # Daily data for 2-year run (goes further back than kite 5m)
-    nifty_daily_full = pd.read_parquet(DATA_DIR / "nifty_daily.parquet")
+    _daily_candidates = ["nifty_daily.parquet", "nifty_daily_2yr.parquet"]
+    nifty_daily_full = None
+    for _fn in _daily_candidates:
+        try:
+            nifty_daily_full = pd.read_parquet(DATA_DIR / _fn)
+            print(f"  Daily data: {_fn}")
+            break
+        except Exception:
+            continue
+    if nifty_daily_full is None:
+        raise RuntimeError("No readable daily parquet file found in backtest/data/")
     nifty_daily_full["ts"] = pd.to_datetime(nifty_daily_full["ts"])
 
     kite_start = df_5m["ts"].dt.date.min()

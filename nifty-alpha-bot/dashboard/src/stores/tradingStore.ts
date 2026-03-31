@@ -33,6 +33,8 @@ export interface Trade {
   sl_slippage_pct?: number
   sl_extra_loss?: number
   confidence?: number
+  break_even_set?: boolean
+  highest_price_seen?: number
 }
 
 export interface Position {
@@ -45,6 +47,7 @@ export interface Position {
   target_price?: number
   current_sl?: number
   net_pnl?: number
+  gross_pnl?: number
   lots?: number
   strategy?: string
   entry_time?: string

@@ -121,6 +121,7 @@ class KiteORBTrader:
         self._lost_at_times: Dict[str, Any] = {}  # direction -> datetime when last SL hit
         self._last_exit_reason: str = ""
         self._last_trade_pnl: float = 0.0
+        self._last_trade_ts: Optional[str] = None
         self._last_trade_strategy: str = ""
         self._skip_reasons_today: list = []
         self._last_broker_sync: float = 0.0
@@ -371,6 +372,7 @@ class KiteORBTrader:
             self._lost_at_times = {}
             self._last_exit_reason = ""
             self._last_trade_pnl = 0.0
+            self._last_trade_ts = None
             self._last_trade_strategy = ""
             self._reentries_today = 0
             self._fallback_entry_triggered = False
@@ -531,10 +533,19 @@ class KiteORBTrader:
         if pos.state != PositionState.ACTIVE:
             return
 
-        current_price = self.client.get_quote(pos.symbol, "NFO")
+        try:
+            current_price = self.client.get_quote(pos.symbol, "NFO")
+        except Exception as _qe:
+            logger.warning(f"get_quote raised exception for {pos.symbol}: {_qe}")
+            return
         if current_price <= 0:
             logger.warning(f"Could not get quote for {pos.symbol}")
             return
+
+        # Update live unrealized P&L in position so dashboard can display it.
+        pos.gross_pnl = round((current_price - pos.entry_price) * pos.qty, 2)
+        from bot.state_machine import save_position as _save_pos
+        _save_pos(pos)
 
         # Compute adaptive trailing params based on session, impulse and conviction
         _trail_session = get_session(now)
@@ -542,7 +553,10 @@ class KiteORBTrader:
         _trail_conv = self._current_trend.conviction if self._current_trend else 0.5
         _trail_params = compute_trail_params(_trail_impulse, _trail_conv, _trail_session)
 
-        # Update trailing stop
+        # Update trailing stop — save current_sl BEFORE mutating so we can revert
+        # if the Kite order modification fails (prevents showing wrong SL in UI).
+        _prev_sl = self.sm.position.current_sl
+        _prev_break_even = self.sm.position.break_even_set
         trail_event = self.sm.update_trailing_stop(
             current_price,
             trail_trigger_pct=_trail_params.trigger_pct,
@@ -556,8 +570,12 @@ class KiteORBTrader:
             )
             if ok:
                 logger.info(f"SL-M modified: {trail_event} → trigger={self.sm.position.current_sl:.2f}")
+                _save_pos(self.sm.position)
             else:
-                logger.warning(f"SL-M modify failed for trail event: {trail_event}")
+                logger.warning(f"SL-M modify failed for trail event: {trail_event} — reverting local SL to ₹{_prev_sl:.2f}")
+                self.sm.position.current_sl = _prev_sl
+                self.sm.position.break_even_set = _prev_break_even
+                _save_pos(self.sm.position)
 
         # Check exit conditions (target and force-exit handled here;
         # SL is handled by SL-M order at exchange level)
@@ -575,7 +593,11 @@ class KiteORBTrader:
         # After 45 mins with no meaningful momentum, tighten SL to -15%.
         # Prevents theta decay from slowly bleeding the trade to full SL.
         if not exit_reason and pos.entry_time is not None:
-            trade_age_min = (now - pos.entry_time).total_seconds() / 60
+            _entry_time = pos.entry_time
+            if isinstance(_entry_time, str):
+                from datetime import datetime as _dt
+                _entry_time = _dt.fromisoformat(_entry_time)
+            trade_age_min = (now - _entry_time).total_seconds() / 60
             gain_now = (current_price - pos.entry_price) / pos.entry_price if pos.entry_price > 0 else 0
             time_sl_threshold = pos.entry_price * (1 - 0.15)   # -15% time SL
             if (trade_age_min >= 45
@@ -761,6 +783,7 @@ class KiteORBTrader:
             self._lost_directions_today.add(pos.direction)  # hard-block this direction for today
         self._last_exit_reason = exit_reason
         self._last_trade_pnl = net
+        self._last_trade_ts = datetime.now().isoformat()
         self._last_trade_strategy = pos.strategy or ""
         _log_event("TRADE_CLOSED", trade_record)
 
@@ -1673,10 +1696,14 @@ class KiteORBTrader:
         else:
             target_spot_for_strike = spot - target_strike_offset
 
-        opt_info = self.client.select_atm_option(
-            spot=target_spot_for_strike, direction=signal,
-            strike_step=self.cfg.strike_step, expiry=self._current_expiry,
-        )
+        try:
+            opt_info = self.client.select_atm_option(
+                spot=target_spot_for_strike, direction=signal,
+                strike_step=self.cfg.strike_step, expiry=self._current_expiry,
+            )
+        except Exception as _oe:
+            logger.warning(f"select_atm_option raised exception for {signal} at spot={spot}: {_oe}")
+            return
         if not opt_info:
             logger.warning(f"No option found for {signal} signal at spot={spot}")
             return
@@ -1686,8 +1713,8 @@ class KiteORBTrader:
         expiry = opt_info["expiry"]
 
         quote = self.client.get_quote_details(symbol, "NFO")
-        opt_price = quote.get("ltp") or quote.get("mid") or 0
-        spread_pct = quote.get("spread_pct") or 0
+        opt_price = (quote or {}).get("ltp") or (quote or {}).get("mid") or 0
+        spread_pct = (quote or {}).get("spread_pct") or 0
 
         if opt_price < self.cfg.min_option_price:
             logger.warning(f"Option price too low: {opt_price:.2f}")
@@ -2040,7 +2067,9 @@ class KiteORBTrader:
                         "halt_reason": rs.get("halt_reason", ""),
                         "last_exit_reason": self._last_exit_reason,
                         "last_trade_pnl": self._last_trade_pnl,
+                        "last_trade_ts": self._last_trade_ts if hasattr(self, "_last_trade_ts") else None,
                         "last_trade_strategy": self._last_trade_strategy,
+                        "slm_order_active": bool(self._active_slm_order_id),
                         "skip_reasons": self._skip_reasons_today[-5:],
                         "move_from_open_pct": (
                             round((float(candles[-1]["close"]) - float(candles[0]["open"]))
@@ -2124,6 +2153,13 @@ class KiteORBTrader:
                                         "last_price": current_price,
                                     })
                                     self._active_slm_order_id = None
+                                    # Record the exit so trades_today, daily_pnl,
+                                    # last_exit_reason are updated correctly.
+                                    try:
+                                        _pos_snap = self.sm.position
+                                        self._record_exit(_pos_snap, "MANUAL_EXIT", current_price)
+                                    except Exception as _re:
+                                        logger.warning(f"BROKER SYNC: could not record exit: {_re}")
                                     self._notify(
                                         "⚠️ BROKER SYNC: Position closed externally\n"
                                         f"Symbol: {symbol_before_sync}\n"

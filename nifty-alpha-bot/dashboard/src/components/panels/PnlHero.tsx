@@ -79,7 +79,7 @@ export function PnlHero() {
   const wins    = dailyPnl?.wins ?? 0
   const losses  = dailyPnl?.losses ?? 0
   const total   = dailyPnl?.trades ?? 0
-  const wr      = dailyPnl?.win_rate ?? 0
+  const wr      = total > 0 ? (dailyPnl?.win_rate ?? 0) : null
   const maxT    = botStatus?.max_trades ?? 4
   const capital = botStatus?.current_capital ?? botStatus?.starting_capital ?? 0
   const startCap = botStatus?.starting_capital ?? capital
@@ -124,8 +124,8 @@ export function PnlHero() {
       <div className="grid grid-cols-2 gap-2">
         <Metric
           icon={Percent} label="Win Rate" sub={`${wins}W ${losses}L`}
-          value={`${wr.toFixed(0)}%`}
-          color={wr >= 55 ? 'text-green' : wr >= 40 ? 'text-amber' : 'text-red-l'}
+          value={wr !== null ? `${wr.toFixed(0)}%` : '—'}
+          color={wr === null ? 'text-text3' : wr >= 55 ? 'text-green' : wr >= 40 ? 'text-amber' : 'text-red-l'}
         />
         <Metric
           icon={DollarSign} label="Capital"

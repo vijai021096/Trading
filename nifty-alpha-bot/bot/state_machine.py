@@ -11,6 +11,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from loguru import logger
+
 
 class PositionState(str, Enum):
     IDLE = "IDLE"
@@ -125,8 +127,11 @@ class PositionStateMachine:
         filter_log: dict,
         entry_order_id: str = "",
     ) -> None:
-        assert self.position.state == PositionState.IDLE, \
-            f"Cannot enter from state {self.position.state}"
+        if self.position.state != PositionState.IDLE:
+            logger.warning(
+                f"transition_to_entry_pending: expected IDLE, got {self.position.state} — resetting state"
+            )
+            self.position = Position()
         self.position = Position(
             state=PositionState.ENTRY_PENDING,
             symbol=symbol,
@@ -149,7 +154,8 @@ class PositionStateMachine:
         save_position(self.position)
 
     def confirm_entry(self, fill_price: float) -> None:
-        assert self.position.state == PositionState.ENTRY_PENDING
+        if self.position.state != PositionState.ENTRY_PENDING:
+            logger.warning(f"confirm_entry: expected ENTRY_PENDING, got {self.position.state} — proceeding anyway")
         self.position.state = PositionState.ACTIVE
         self.position.entry_price = fill_price
         self.position.highest_price_seen = fill_price
@@ -157,7 +163,8 @@ class PositionStateMachine:
 
     def cancel_entry(self) -> None:
         """Called when entry order is rejected or times out."""
-        assert self.position.state == PositionState.ENTRY_PENDING
+        if self.position.state != PositionState.ENTRY_PENDING:
+            logger.warning(f"cancel_entry: expected ENTRY_PENDING, got {self.position.state} — resetting anyway")
         self.position = reset_position()
 
     def update_trailing_stop(
@@ -206,8 +213,10 @@ class PositionStateMachine:
         exit_order_id: str,
         exit_reason: str,
     ) -> None:
-        assert self.position.state == PositionState.ACTIVE, \
-            f"Cannot exit from state {self.position.state}"
+        if self.position.state != PositionState.ACTIVE:
+            logger.warning(
+                f"transition_to_exit_pending: expected ACTIVE, got {self.position.state} — proceeding anyway"
+            )
         self.position.state = PositionState.EXIT_PENDING
         self.position.exit_order_id = exit_order_id
         self.position.exit_reason = exit_reason
@@ -216,7 +225,8 @@ class PositionStateMachine:
 
     def confirm_exit(self, fill_price: float, charges: float = 0.0) -> Dict[str, Any]:
         """Finalize exit, compute P&L, return trade record."""
-        assert self.position.state == PositionState.EXIT_PENDING
+        if self.position.state != PositionState.EXIT_PENDING:
+            logger.warning(f"confirm_exit: expected EXIT_PENDING, got {self.position.state} — proceeding anyway")
         self.position.state = PositionState.CLOSED
         self.position.exit_price = fill_price
         self.position.gross_pnl = (fill_price - self.position.entry_price) * self.position.qty

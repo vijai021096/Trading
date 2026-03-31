@@ -18,6 +18,8 @@ from datetime import datetime, time as dtime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from loguru import logger
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Session Classification
@@ -178,7 +180,8 @@ def compute_dynamic_lots(
     risk_lots = max(1, int(risk_amount / (risk_per_unit * lot_size))) if risk_per_unit > 0 else 1
 
     # ── Final lots: combine risk-based with multiplier, cap at max_lots
-    raw_lots = int(base_lots * combined)
+    # Use round() not int() so a 1.5x conviction boost on 1 base lot gives 2 lots (not 1)
+    raw_lots = max(1, round(base_lots * combined))
     lots = max(1, min(max_lots, max(risk_lots, raw_lots)))
 
     reasoning = (
@@ -523,6 +526,7 @@ def compute_atm_sl_from_nifty_atr(
     Clamped to [15%, 42%] for sanity. Wider OTM = lower delta = larger SL% needed.
     """
     if len(candles) < atr_period + 1 or opt_price <= 0:
+        logger.warning(f"compute_atm_sl_from_nifty_atr: fallback SL 28% (candles={len(candles)}, opt_price={opt_price})")
         return 0.28, "insufficient candles — fallback 28%"
 
     trs: List[float] = []
@@ -537,6 +541,7 @@ def compute_atm_sl_from_nifty_atr(
         trs.append(tr)
 
     if not trs:
+        logger.warning("compute_atm_sl_from_nifty_atr: no TR data — fallback SL 28%")
         return 0.28, "no TR data — fallback 28%"
 
     atr = sum(trs) / len(trs)

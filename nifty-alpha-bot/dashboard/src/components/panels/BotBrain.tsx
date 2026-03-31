@@ -107,7 +107,7 @@ function ProbabilityGauge({ botStatus }: { botStatus: any }) {
       <div className="flex items-center justify-between mb-1.5">
         <div className="flex items-center gap-1.5">
           <BarChart2 size={10} className={textColor} />
-          <span className="text-[10px] font-bold text-text3">Signal Probability</span>
+          <span className="text-[10px] font-bold text-text3">Setup Quality Score</span>
         </div>
         <span className={clsx('text-[11px] font-black font-mono', textColor)}>
           {halted || paused ? label : `${prob}% · ${label}`}
@@ -205,14 +205,27 @@ function ConditionsCheck({ botStatus }: { botStatus: any }) {
 function LastTrade({ botStatus }: { botStatus: any }) {
   const pnl    = botStatus?.last_trade_pnl
   const reason = botStatus?.last_exit_reason
+  const lastTs = (botStatus as any)?.last_trade_ts ?? null
   if (pnl == null && !reason) return null
   const win = (pnl ?? 0) > 0
+
+  const ago = (() => {
+    if (!lastTs) return null
+    const diffMin = Math.round((Date.now() - new Date(lastTs).getTime()) / 60_000)
+    if (diffMin < 1) return 'just now'
+    if (diffMin < 60) return `${diffMin}m ago`
+    return `${Math.round(diffMin / 60)}h ago`
+  })()
+
   return (
     <div className={clsx('mb-3 p-2.5 rounded-xl border text-[10px]',
       win ? 'bg-green/5 border-green/20' : 'bg-red/5 border-red/20')}>
-      <div className="flex items-center gap-1 mb-1 text-[9px] uppercase tracking-wider font-bold text-text3">
-        {win ? <ThumbsUp size={9} className="text-green" /> : <ThumbsDown size={9} className="text-red" />}
-        Last Trade
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider font-bold text-text3">
+          {win ? <ThumbsUp size={9} className="text-green" /> : <ThumbsDown size={9} className="text-red" />}
+          Last Trade
+        </div>
+        {ago && <span className="text-[9px] text-text3 font-mono">{ago}</span>}
       </div>
       <div className="flex items-center justify-between">
         <span className="text-text2">{reason ?? (win ? 'Target hit' : 'Stop loss')}</span>

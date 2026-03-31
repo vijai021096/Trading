@@ -72,7 +72,7 @@ function Stat({ label, value, color = 'text-text2' }: { label: string; value: Re
 }
 
 export function PositionMonitor() {
-  const { botStatus, position } = useTradingStore()
+  const { botStatus, position, strategyConfig } = useTradingStore()
   const [closing, setClosing] = useState<'idle'|'loading'|'ok'|'err'>('idle')
 
   const handleForceClose = async () => {
@@ -93,12 +93,13 @@ export function PositionMonitor() {
 
   // Derive current option price from position P&L if available
   const entryPx  = pos?.entry_price ?? 0
-  const netPnl   = pos?.net_pnl ?? 0
+  const netPnl   = pos?.net_pnl ?? pos?.gross_pnl ?? 0
   const lots     = pos?.lots ?? 1
-  const lotSize  = 75  // NIFTY lot size
+  const lotSize  = strategyConfig?.nifty_option_lot_size ?? 65  // NIFTY lot size from config
   const currentPx = entryPx && lots
     ? entryPx + netPnl / (lots * lotSize)
     : undefined
+  const slmActive = !!((botStatus as any)?.slm_order_active)
 
   const direction  = (pos?.direction ?? 'CE') as string
   const isCall     = direction.includes('CE') || direction === 'BUY'
@@ -190,12 +191,23 @@ export function PositionMonitor() {
               />
             </div>
 
-            {/* Break-even badge */}
-            {pos.break_even_set && (
-              <div className="flex items-center gap-2 text-xs text-cyan bg-cyan/8 border border-cyan/20 rounded-lg px-3 py-1.5">
-                <Shield size={12} /> Break-even activated
+            {/* Break-even + SL-M badges */}
+            <div className="flex gap-2 flex-wrap">
+              {pos.break_even_set && (
+                <div className="flex items-center gap-2 text-xs text-cyan bg-cyan/8 border border-cyan/20 rounded-lg px-3 py-1.5">
+                  <Shield size={12} /> Break-even activated
+                </div>
+              )}
+              <div className={clsx(
+                'flex items-center gap-1.5 text-xs rounded-lg px-3 py-1.5 border',
+                slmActive
+                  ? 'text-green bg-green/8 border-green/20'
+                  : 'text-text3 bg-surface/50 border-line/20'
+              )}>
+                <Shield size={11} />
+                {slmActive ? 'SL-M active at broker' : 'Soft SL (app-managed)'}
               </div>
-            )}
+            </div>
 
             {/* Manual exit button */}
             <motion.button

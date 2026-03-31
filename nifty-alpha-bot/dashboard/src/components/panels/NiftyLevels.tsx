@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import clsx from 'clsx'
 import axios from 'axios'
 import { TrendingUp, TrendingDown, Minus, Activity, BarChart3, ArrowRight } from 'lucide-react'
+import { useTradingStore } from '../../stores/tradingStore'
 
 interface QuoteData {
   price: number | null
@@ -77,9 +78,11 @@ function LevelRow({ level, price }: { level: Level; price: number }) {
 }
 
 export function NiftyLevels() {
+  const { botStatus } = useTradingStore()
   const [quote, setQuote] = useState<QuoteData>({ price: null })
   const [levels, setLevels] = useState<Level[]>([])
   const [lastTs, setLastTs] = useState<number>(0)
+  const moveFromOpen = botStatus?.move_from_open_pct ?? null
 
   // Fetch quote every 15s
   useEffect(() => {
@@ -129,7 +132,19 @@ export function NiftyLevels() {
           </div>
           <span className="label">Nifty 50</span>
         </div>
-        {stale && <span className="text-[9px] text-amber">stale</span>}
+        <div className="flex items-center gap-1.5">
+          {moveFromOpen != null && (
+            <span className={clsx(
+              'text-[9px] font-bold font-mono px-1.5 py-0.5 rounded border',
+              moveFromOpen >= 0
+                ? 'text-green bg-green/8 border-green/20'
+                : 'text-red-l bg-red/8 border-red/20'
+            )}>
+              {moveFromOpen >= 0 ? '+' : ''}{moveFromOpen.toFixed(2)}% open
+            </span>
+          )}
+          {stale && <span className="text-[9px] text-amber">stale</span>}
+        </div>
       </div>
 
       {/* Big price */}
