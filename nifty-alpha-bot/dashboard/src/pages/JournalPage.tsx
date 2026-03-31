@@ -361,25 +361,27 @@ export function JournalPage() {
   const emptyAfterLoad = !loading && !error && trades.length === 0
 
   return (
-    <div className="px-4 lg:px-6 py-5 max-w-[1640px] mx-auto space-y-4">
-      {/* Header */}
-      <motion.div
-        initial={{ opacity: 0, y: -8 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4"
-      >
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-green/10 flex items-center justify-center">
-            <BookOpen size={18} className="text-green" />
-          </div>
-          <div>
-            <h1 className="text-lg font-extrabold text-text1 tracking-tight">Trade Journal</h1>
-            <p className="text-[11px] text-text3">
-              Live &amp; backtest trade analysis — monthly breakdown, strategy performance, entry narratives &amp; grades
-            </p>
+    <div className="flex-1 overflow-y-auto">
+      {/* ── Gradient hero header ────────────────────────────── */}
+      <div className="relative overflow-hidden bg-gradient-to-br from-green/8 via-bg to-teal-900/10 border-b border-line/20 px-4 lg:px-6 py-5">
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-0 right-16 w-56 h-32 bg-green/5 rounded-full blur-3xl" />
+        </div>
+        <div className="relative flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-green/80 to-teal-600 flex items-center justify-center shadow-lg shadow-green/20">
+              <BookOpen size={20} className="text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-black text-text1 tracking-tight">Trade Journal</h1>
+              <p className="text-[11px] text-text3 mt-0.5">
+                Live &amp; backtest analysis · monthly breakdown · strategy grades
+              </p>
+            </div>
           </div>
         </div>
-      </motion.div>
+      </div>
+      <div className="px-4 lg:px-6 py-5 max-w-[1640px] mx-auto space-y-4">
 
       {/* Load panel */}
       <motion.div
@@ -1014,6 +1016,7 @@ export function JournalPage() {
           )}
         </>
       )}
+      </div>
     </div>
   )
 }

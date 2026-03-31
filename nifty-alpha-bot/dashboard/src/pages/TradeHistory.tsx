@@ -70,21 +70,30 @@ const STRAT_COLORS: Record<string, string> = {
 function stratColor(s: string) { return STRAT_COLORS[s] ?? '#475569' }
 
 /* ── Stat hero card ──────────────────────────────────────────────── */
-function StatCard({ label, value, sub, color = 'text-text1', icon: Icon }:
-  { label: string; value: string | number; sub?: string; color?: string; icon?: typeof Activity }) {
+function StatCard({ label, value, sub, color = 'text-text1', icon: Icon, accent = false }:
+  { label: string; value: string | number; sub?: string; color?: string; icon?: typeof Activity; accent?: boolean }) {
   return (
-    <div className="glass-card rounded-2xl p-4">
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={clsx(
+        'glass-card rounded-2xl p-4 border transition-all hover:scale-[1.02]',
+        accent ? 'border-accent/20 bg-accent/3' : 'border-line/15',
+      )}
+    >
       <div className="flex items-center justify-between mb-2">
-        <span className="label">{label}</span>
-        {Icon && <Icon size={14} className="text-text3" />}
+        <span className="label text-[10px]">{label}</span>
+        {Icon && <div className="w-6 h-6 rounded-lg bg-surface flex items-center justify-center">
+          <Icon size={12} className="text-text3" />
+        </div>}
       </div>
       <div className={clsx('text-2xl font-black font-mono stat-val', color)}>
         {typeof value === 'number' ? (
           <CountUp end={value} duration={0.8} decimals={0} separator="," prefix={color.includes('green') ? '+' : ''} />
         ) : value}
       </div>
-      {sub && <div className="text-[10px] text-text3 mt-1">{sub}</div>}
-    </div>
+      {sub && <div className="text-[10px] text-text3 mt-1.5 flex items-center gap-1">{sub}</div>}
+    </motion.div>
   )
 }
 
@@ -250,27 +259,37 @@ export function TradeHistory() {
   const winRate = trades.length ? (stats.wins / trades.length * 100) : 0
 
   return (
-    <div className="flex-1 overflow-y-auto p-3 lg:p-4">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-5">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-accent/10 flex items-center justify-center">
-            <BarChart3 size={18} className="text-accent" />
-          </div>
-          <div>
-            <h1 className="text-lg font-black text-text1">Trade Performance</h1>
-            <p className="text-[11px] text-text3">{trades.length} trades tracked</p>
-          </div>
+    <div className="flex-1 overflow-y-auto">
+      {/* ── Gradient hero header ─────────────────────────────────── */}
+      <div className="relative overflow-hidden bg-gradient-to-br from-accent/10 via-bg to-purple-900/10 border-b border-line/20 px-4 lg:px-6 py-5">
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-0 left-0 w-64 h-64 bg-accent/5 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2" />
+          <div className="absolute bottom-0 right-0 w-48 h-48 bg-purple-500/5 rounded-full blur-2xl translate-x-1/4 translate-y-1/4" />
         </div>
-        <button onClick={load} disabled={loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-line/30 text-[11px] text-text3 hover:text-accent hover:border-accent/30 transition-all">
-          {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-          Refresh
-        </button>
+        <div className="relative flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-accent to-amber-600 flex items-center justify-center shadow-lg shadow-accent/25">
+              <BarChart3 size={18} className="text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-black text-text1 tracking-tight">Trade Performance</h1>
+              <p className="text-[11px] text-text3 flex items-center gap-1.5 mt-0.5">
+                <Activity size={10} className="text-accent" />
+                {trades.length} trades tracked &bull; full P&amp;L breakdown
+              </p>
+            </div>
+          </div>
+          <button onClick={load} disabled={loading}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-accent/25 bg-accent/8 text-[11px] text-accent hover:bg-accent/15 transition-all font-bold">
+            {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+            Refresh
+          </button>
+        </div>
       </div>
+      <div className="p-3 lg:p-4">
 
       {/* Hero stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3 mb-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3 mb-5 mt-5">
         <StatCard label="Total P&L" icon={Wallet}
           value={Math.round(stats.total)}
           color={stats.total >= 0 ? 'text-green' : 'text-red-l'}
@@ -407,6 +426,7 @@ export function TradeHistory() {
           </div>
         )}
       </div>
+      </div>  {/* end p-3 lg:p-4 */}
     </div>
   )
 }

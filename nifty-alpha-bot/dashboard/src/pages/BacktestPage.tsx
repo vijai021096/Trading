@@ -98,25 +98,32 @@ export function BacktestPage() {
   }, [result?.trades])
 
   return (
-    <div className="px-4 lg:px-6 py-5 max-w-[1640px] mx-auto space-y-4">
-
-      {/* Header */}
-      <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-xl bg-accent/15 flex items-center justify-center">
-            <FlaskConical size={22} className="text-accent" />
+    <div className="flex-1 overflow-y-auto">
+      {/* ── Gradient hero header ─────────────────────────────── */}
+      <div className="relative overflow-hidden bg-gradient-to-br from-accent/8 via-bg to-violet-900/10 border-b border-line/20 px-4 lg:px-6 py-5">
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-0 left-10 w-64 h-40 bg-accent/4 rounded-full blur-3xl" />
+          <div className="absolute bottom-0 right-10 w-48 h-32 bg-violet-500/5 rounded-full blur-2xl" />
+        </div>
+        <div className="relative flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-accent/90 to-violet-600 flex items-center justify-center shadow-lg shadow-accent/25">
+              <FlaskConical size={22} className="text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-black text-text1 tracking-tight">Backtester</h1>
+              <p className="text-[11px] text-text3 mt-0.5">6-regime classifier · 7 strategies · walk-forward simulation</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl font-black text-text1 tracking-tight">Backtester</h1>
-            <p className="text-sm text-text3">Adaptive Alpha — 6-regime classifier, 7 strategies, walk-forward simulation</p>
+          <div className="bg-amber/8 border border-amber/20 rounded-xl px-4 py-2 max-w-sm">
+            <div className="text-[10px] font-bold text-amber flex items-center gap-1">
+              <AlertCircle size={11} /> Data Note
+            </div>
+            <div className="text-[10px] text-text3 mt-0.5">yfinance provides ~60 days max 5-min data for NIFTY. Longer backtests use daily data.</div>
           </div>
         </div>
-        <div className="bg-amber/8 border border-amber/20 rounded-xl px-4 py-2 max-w-sm">
-          <div className="text-xs font-bold text-amber flex items-center gap-1"><AlertCircle size={12} /> Data Note</div>
-          <div className="text-xs text-text3 mt-0.5">yfinance provides max ~60 days of 5-min intraday data for NIFTY. For longer backtests, daily data is used.</div>
-        </div>
-      </motion.div>
+      </div>
+      <div className="px-4 lg:px-6 py-5 max-w-[1640px] mx-auto space-y-4">
 
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
         className="glass-card rounded-2xl p-4 neon-border border-l-[3px] border-l-accent/50">
@@ -555,6 +562,7 @@ export function BacktestPage() {
           )}
         </motion.div>
       )}
+      </div>
     </div>
   )
 }

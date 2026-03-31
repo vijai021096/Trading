@@ -82,19 +82,23 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="px-4 lg:px-6 py-5 max-w-[1640px] mx-auto space-y-4">
-
-      {/* Header */}
-      <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
-        className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
-          <Settings size={18} className="text-accent" />
+    <div className="flex-1 overflow-y-auto">
+      {/* ── Gradient hero header ────────────────────────────── */}
+      <div className="relative overflow-hidden bg-gradient-to-br from-slate-900/60 via-bg to-accent/5 border-b border-line/20 px-4 lg:px-6 py-5">
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-0 left-0 w-72 h-32 bg-accent/4 rounded-full blur-3xl -translate-x-1/4 -translate-y-1/4" />
         </div>
-        <div>
-          <h1 className="text-lg font-extrabold text-text1 tracking-tight">Settings</h1>
-          <p className="text-[11px] text-text3">Authentication, strategy parameters, and system config</p>
+        <div className="relative flex items-center gap-3">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-slate-600 to-accent/70 flex items-center justify-center shadow-lg">
+            <Settings size={20} className="text-white" />
+          </div>
+          <div>
+            <h1 className="text-xl font-black text-text1 tracking-tight">Settings</h1>
+            <p className="text-[11px] text-text3 mt-0.5">Authentication · strategy parameters · system config</p>
+          </div>
         </div>
-      </motion.div>
+      </div>
+      <div className="px-4 lg:px-6 py-5 max-w-[1640px] mx-auto space-y-4">
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
@@ -232,6 +236,7 @@ export function SettingsPage() {
           {/* System info — from API */}
           <SystemInfoPanel />
         </div>
+      </div>
       </div>
     </div>
   )

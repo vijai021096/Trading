@@ -514,22 +514,25 @@ export function TradeReplayPage() {
   }, [trade, isWin])
 
   return (
-    <div className="px-4 lg:px-6 py-5 max-w-[1640px] mx-auto space-y-4">
-      <motion.div
-        initial={{ opacity: 0, y: -8 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between flex-wrap gap-3"
-      >
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
-            <Play size={18} className="text-accent" />
-          </div>
-          <div>
-            <h1 className="text-lg font-extrabold text-text1 tracking-tight">Trade Replay</h1>
-            <p className="text-[11px] text-text3">Step-through playback of live or backtest trades</p>
+    <div className="flex-1 overflow-y-auto">
+      {/* ── Gradient hero header ────────────────────────────── */}
+      <div className="relative overflow-hidden bg-gradient-to-br from-indigo-900/15 via-bg to-accent/5 border-b border-line/20 px-4 lg:px-6 py-5">
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-0 left-1/4 w-72 h-32 bg-indigo-500/5 rounded-full blur-3xl" />
+        </div>
+        <div className="relative flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-600/80 to-accent flex items-center justify-center shadow-lg shadow-indigo-500/20">
+              <Play size={20} className="text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-black text-text1 tracking-tight">Trade Replay</h1>
+              <p className="text-[11px] text-text3 mt-0.5">Step-through playback of live or backtest trades</p>
+            </div>
           </div>
         </div>
-      </motion.div>
+      </div>
+      <div className="px-4 lg:px-6 py-5 max-w-[1640px] mx-auto space-y-4">
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         <div className="lg:col-span-4 space-y-3">
@@ -905,6 +908,7 @@ export function TradeReplayPage() {
             </>
           )}
         </div>
+      </div>
       </div>
     </div>
   )

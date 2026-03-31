@@ -123,6 +123,7 @@ export interface BotStatus {
   drawdown_pct: number
   max_drawdown_pct: number
   halt_active: boolean
+  halt_reason?: string
   paused?: boolean
   force_close_pending?: boolean
   paper_mode: boolean

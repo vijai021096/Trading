@@ -272,16 +272,70 @@ export function LogsPage() {
   const visible = filtered.slice(0, limit)
 
   return (
-    <div className="flex h-[calc(100vh-56px)] overflow-hidden">
+    <div className="flex flex-col h-[calc(100vh-56px)] overflow-hidden">
 
-      {/* ── Left sidebar: filters ─────────────── */}
+      {/* ── Gradient top banner ─────────────────────────────── */}
+      <div className="relative overflow-hidden bg-gradient-to-r from-slate-900/80 via-bg to-cyan/5 border-b border-line/20 px-4 py-3 flex items-center gap-4 shrink-0">
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-0 left-16 w-40 h-20 bg-cyan/5 rounded-full blur-2xl" />
+        </div>
+        <div className="flex items-center gap-2 relative">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-cyan/80 to-accent flex items-center justify-center shadow shadow-cyan/20">
+            <ScrollText size={14} className="text-white" />
+          </div>
+          <div>
+            <span className="text-[13px] font-black text-text1">Event Log</span>
+            <p className="text-[10px] text-text3">{logs.length} events captured</p>
+          </div>
+        </div>
+        {/* Mini stat pills */}
+        <div className="flex items-center gap-2 ml-4 flex-wrap">
+          {counts.trades > 0 && (
+            <div className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-green/10 border border-green/20 text-[10px] font-bold text-green">
+              <TrendingUp size={9} /> {counts.trades} trades
+            </div>
+          )}
+          {counts.errors > 0 && (
+            <div className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red/10 border border-red/20 text-[10px] font-bold text-red">
+              <AlertTriangle size={9} /> {counts.errors} errors
+            </div>
+          )}
+          {counts.scans > 0 && (
+            <div className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber/10 border border-amber/20 text-[10px] font-bold text-amber">
+              <Radio size={9} /> {counts.scans} scans
+            </div>
+          )}
+          {counts.decisions > 0 && (
+            <div className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-cyan/10 border border-cyan/20 text-[10px] font-bold text-cyan">
+              <Layers size={9} /> {counts.decisions} decisions
+            </div>
+          )}
+        </div>
+        <div className="ml-auto flex items-center gap-2 relative">
+          <button onClick={() => setAutoRefresh(a => !a)}
+            className={clsx('flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10px] font-bold transition-all',
+              autoRefresh ? 'bg-green/10 text-green border-green/25' : 'text-text3 border-line/30')}>
+            <Radio size={10} /> {autoRefresh ? 'Live' : 'Paused'}
+          </button>
+          <button onClick={load} disabled={loading}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-line/30 text-[10px] text-text3 hover:text-accent hover:border-accent/30 transition-all">
+            {loading ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* ── Body: sidebar + timeline ────────────────────────────── */}
+      <div className="flex flex-1 overflow-hidden">
+
+      {/* ── Left sidebar: filters ────────────────── */}
       <div className="w-48 shrink-0 border-r border-line/20 flex flex-col bg-bg/60 overflow-y-auto">
         <div className="p-3 border-b border-line/20">
           <div className="flex items-center gap-2">
             <ScrollText size={14} className="text-accent" />
-            <span className="text-[12px] font-bold text-text1">Event Log</span>
+            <span className="text-[12px] font-bold text-text1">Filters</span>
           </div>
-          <p className="text-[10px] text-text3 mt-0.5">{logs.length} events</p>
+          <p className="text-[10px] text-text3 mt-0.5">{filtered.length} matching</p>
         </div>
 
         {/* Tabs */}
@@ -308,21 +362,11 @@ export function LogsPage() {
           })}
         </div>
 
-        <div className="p-2 border-t border-line/20 space-y-2 mt-auto">
+        <div className="p-2 border-t border-line/20 mt-auto">
           <button onClick={() => setShowHB(s => !s)}
             className={clsx('w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10px] font-bold transition-all',
               showHB ? 'bg-accent/10 text-accent border-accent/25' : 'text-text3 border-line/30 hover:border-accent/30')}>
             {showHB ? <Eye size={10} /> : <EyeOff size={10} />} Heartbeats
-          </button>
-          <button onClick={() => setAutoRefresh(a => !a)}
-            className={clsx('w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10px] font-bold transition-all',
-              autoRefresh ? 'bg-green/10 text-green border-green/25' : 'text-text3 border-line/30')}>
-            <Radio size={10} /> {autoRefresh ? 'Live' : 'Paused'}
-          </button>
-          <button onClick={load} disabled={loading}
-            className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-line/30 text-[10px] text-text3 hover:text-accent hover:border-accent/30 transition-all">
-            {loading ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
-            Refresh
           </button>
         </div>
       </div>
@@ -371,6 +415,7 @@ export function LogsPage() {
           )}
         </div>
       </div>
+      </div> {/* body flex */}
     </div>
   )
 }

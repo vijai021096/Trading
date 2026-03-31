@@ -304,28 +304,61 @@ export function WatchPage() {
   const vixColor = (data?.vix ?? 0) < 15 ? 'green' : (data?.vix ?? 0) > 20 ? 'red' : 'amber'
 
   return (
-    <div className="flex-1 overflow-y-auto p-3 lg:p-4">
-      {/* ── Header row ──────────────────────────────────────────── */}
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-accent/10 flex items-center justify-center">
-            <Radar size={18} className="text-accent" />
-          </div>
-          <div>
-            <h1 className="text-lg font-black text-text1">Today's Setup</h1>
-            <p className="text-[11px] text-text3">
-              {data?.trade_session_date ?? new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
-            </p>
-          </div>
+    <div className="flex-1 overflow-y-auto">
+      {/* ── Gradient hero header ─────────────────────────────── */}
+      <div className="relative overflow-hidden bg-gradient-to-br from-cyan/8 via-bg to-accent/5 border-b border-line/20 px-4 lg:px-6 py-5">
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-0 right-0 w-56 h-32 bg-cyan/5 rounded-full blur-3xl translate-x-1/4 -translate-y-1/4" />
         </div>
-        <button onClick={load} disabled={loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-line/30 text-[11px] text-text3 hover:text-accent hover:border-accent/30 transition-all">
-          {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-          Refresh
-        </button>
+        <div className="relative flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-cyan/80 to-accent flex items-center justify-center shadow-lg shadow-cyan/20">
+              <Radar size={18} className="text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-black text-text1 tracking-tight">Today's Setup</h1>
+              <p className="text-[11px] text-text3 flex items-center gap-1.5 mt-0.5">
+                <Clock size={10} className="text-cyan" />
+                {data?.trade_session_date ?? new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
+              </p>
+            </div>
+          </div>
+          {/* Quick regime + VIX strip */}
+          {data && (
+            <div className="flex items-center gap-2">
+              {data.regime && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan/10 border border-cyan/20 text-[11px] font-bold text-cyan">
+                  <Layers size={10} /> {data.regime}
+                </div>
+              )}
+              {data.vix != null && (
+                <div className={clsx(
+                  'flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-[11px] font-bold',
+                  (data.vix < 15) ? 'bg-green/10 border-green/20 text-green'
+                  : (data.vix > 20) ? 'bg-red/10 border-red/20 text-red'
+                  : 'bg-amber/10 border-amber/20 text-amber',
+                )}>
+                  <Activity size={10} /> VIX {data.vix.toFixed(1)}
+                </div>
+              )}
+              <button onClick={load} disabled={loading}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-line/30 text-[11px] text-text3 hover:text-cyan hover:border-cyan/30 transition-all">
+                {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                Refresh
+              </button>
+            </div>
+          )}
+          {!data && (
+            <button onClick={load} disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-line/30 text-[11px] text-text3 hover:text-cyan hover:border-cyan/30 transition-all">
+              {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              Refresh
+            </button>
+          )}
+        </div>
       </div>
-
-      {/* ── Context chips ───────────────────────────────────────── */}
+      <div className="p-3 lg:p-4">
+      {/* ── Context chips ───────────────────────────────── */}
       {data && (
         <div className="flex flex-wrap gap-2 mb-5">
           <Chip label="Regime" value={data.regime} color="cyan" />
@@ -450,6 +483,7 @@ export function WatchPage() {
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }
