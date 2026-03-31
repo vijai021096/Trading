@@ -99,29 +99,61 @@ def realistic_slippage(
     vix: float = 14.0,
     days_to_expiry: int = 5,
     option_price: float = 100.0,
+    lots: int = 1,
 ) -> float:
     """
-    Realistic slippage adjusted for market conditions.
-    Models the Nifty options bid-ask spread empirically.
+    Realistic slippage for Nifty options — includes:
+      1. Base execution slippage (market order vs mid-price)
+      2. Bid-ask spread half-cost (tiered by option price)
+      3. VIX regime scaling (wide spreads in panic markets)
+      4. DTE premium (gamma risk near expiry = wider spreads)
+      5. Market impact (larger orders eat deeper into the book)
+
+    Empirical Nifty ATM spread data:
+      VIX <14, price ₹100-300:  spread ≈ ₹0.50-1.50  (~0.5-1.0%)
+      VIX 14-20, price ₹50-200: spread ≈ ₹1.00-3.00  (~1-2%)
+      VIX >25 (crash):          spread ≈ ₹5-20+       (~5-15%)
     """
     slippage = base_slippage
 
-    if vix > 18.0:
-        slippage += (vix - 18.0) * 0.0015
-    if days_to_expiry <= 0:
-        slippage += 0.010
-    elif days_to_expiry <= 1:
-        slippage += 0.006
-    elif days_to_expiry <= 2:
-        slippage += 0.003
-    if option_price < 30.0:
-        slippage += 0.010
+    # ── 1. Bid-ask spread component (half-spread per side) ────────────
+    if option_price < 20.0:
+        half_spread = 0.030   # deep OTM: 3% half-spread (nearly illiquid)
     elif option_price < 50.0:
-        slippage += 0.005
-    if option_price > 300.0:
-        slippage -= 0.002
+        half_spread = 0.015   # OTM: 1.5%
+    elif option_price < 150.0:
+        half_spread = 0.007   # ATM liquid: 0.7%
+    elif option_price < 300.0:
+        half_spread = 0.005   # slight ITM: 0.5%
+    else:
+        half_spread = 0.003   # deep ITM: 0.3%
+    slippage += half_spread
 
-    return max(0.002, min(slippage, 0.03))
+    # ── 2. VIX regime scaling (panic = illiquid book) ─────────────────
+    if vix > 50.0:
+        slippage += 0.060     # COVID-level crash: extreme spread widening
+    elif vix > 35.0:
+        slippage += 0.030     # Severe stress
+    elif vix > 25.0:
+        slippage += 0.015     # High volatility
+    elif vix > 18.0:
+        slippage += (vix - 18.0) * 0.0020  # Graduated: +0.2% per VIX pt above 18
+
+    # ── 3. DTE premium (gamma risk near expiry) ────────────────────────
+    if days_to_expiry <= 0:
+        slippage += 0.015     # same-day expiry: very wide
+    elif days_to_expiry <= 1:
+        slippage += 0.008
+    elif days_to_expiry <= 2:
+        slippage += 0.004
+
+    # ── 4. Market impact (order size vs book depth) ────────────────────
+    # Nifty ATM options: ~500-2000 contracts per tick on NSE.
+    # Each "lot" = 25-75 contracts. Impact scales with sqrt(lots).
+    if lots > 1:
+        slippage += 0.0020 * (lots ** 0.5 - 1)  # ~0.2% for 4 lots, 0.37% for 9
+
+    return max(0.003, min(slippage, 0.08))  # floor 0.3%, hard cap 8%
 
 
 def charges_estimate(

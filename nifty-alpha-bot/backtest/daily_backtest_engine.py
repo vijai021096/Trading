@@ -1189,7 +1189,7 @@ def _simulate_option_trade(
     if raw_entry < cfg.min_option_premium:
         return None
 
-    entry_slip = realistic_slippage(cfg.slippage_pct, vix, dte, raw_entry)
+    entry_slip = realistic_slippage(cfg.slippage_pct, vix, dte, raw_entry, lots=lots_override or cfg.lots)
     entry_price = raw_entry * (1 + entry_slip)
     sl_price = entry_price * (1 - sl_pct)
     target_price = entry_price * (1 + target_pct)
@@ -1214,9 +1214,9 @@ def _simulate_option_trade(
             and opt_close < time_sl_price):
         exit_price_raw = time_sl_price
         exit_reason = "TIME_SL"
-        exit_slip = realistic_slippage(cfg.slippage_pct, vix, dte, exit_price_raw)
-        exit_price = exit_price_raw * (1 - exit_slip)
         effective_lots = lots_override if lots_override > 0 else cfg.lots
+        exit_slip = realistic_slippage(cfg.slippage_pct, vix, dte, exit_price_raw, lots=effective_lots)
+        exit_price = exit_price_raw * (1 - exit_slip)
         qty = effective_lots * cfg.lot_size
         gross_pnl = (exit_price - entry_price) * qty
         charges = charges_estimate(entry_price, exit_price, qty)
@@ -1261,10 +1261,9 @@ def _simulate_option_trade(
         exit_price_raw = opt_close
         exit_reason = "EOD_EXIT"
 
-    exit_slip = realistic_slippage(cfg.slippage_pct, vix, dte, exit_price_raw)
-    exit_price = exit_price_raw * (1 - exit_slip)
-
     effective_lots = lots_override if lots_override > 0 else cfg.lots
+    exit_slip = realistic_slippage(cfg.slippage_pct, vix, dte, exit_price_raw, lots=effective_lots)
+    exit_price = exit_price_raw * (1 - exit_slip)
     qty = effective_lots * cfg.lot_size
     gross_pnl = (exit_price - entry_price) * qty
     charges = charges_estimate(entry_price, exit_price, qty)
