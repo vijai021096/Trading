@@ -57,16 +57,19 @@ REGIME_DEFS: Dict[str, DailyRegime] = {
     "STRONG_BULL": DailyRegime(
         name="STRONG_BULL",
         allowed_direction="CALL",
-        allowed_strategies=_STRONG_STRATEGIES,
+        # All four high-WR CE strategies enabled on confirmed bull days.
+        # ORB fires in opening window; MOMENTUM on breakout candles;
+        # EMA_PULLBACK / VWAP_RECLAIM for continuation into midday.
+        allowed_strategies=["ORB", "EMA_PULLBACK", "MOMENTUM_BREAKOUT", "VWAP_RECLAIM", "RELAXED_ORB"],
         otm_offset=0,
         execution=ExecutionParams(
-            max_trades=3,
-            window_start="09:30",
-            window_end="14:00",
-            trail_trigger_pct=0.30,
-            trail_lock_step_pct=0.15,
-            risk_pct=0.025,
-            min_quality_score=4,
+            max_trades=4,           # was 3 — extra trade allowed on bull confirmation
+            window_start="09:20",   # start earlier (ORB needs 09:15-09:30 window)
+            window_end="14:30",     # extend — bull markets run into afternoon
+            trail_trigger_pct=0.28, # trail early to lock profits
+            trail_lock_step_pct=0.14,
+            risk_pct=0.030,         # was 0.025 — match BULL_BREAKOUT sizing
+            min_quality_score=3,    # was 4 — confirmed bull = accept score 3/5
         ),
     ),
     "STRONG_BEAR": DailyRegime(
@@ -87,14 +90,15 @@ REGIME_DEFS: Dict[str, DailyRegime] = {
     "BULL_BREAKOUT": DailyRegime(
         name="BULL_BREAKOUT",
         allowed_direction="CALL",
-        allowed_strategies=["EMA_PULLBACK", "VWAP_RECLAIM", "MOMENTUM_BREAKOUT"],
+        # ORB added — opening breakout confirmation is the best entry on breakout days.
+        allowed_strategies=["ORB", "EMA_PULLBACK", "MOMENTUM_BREAKOUT", "VWAP_RECLAIM", "RELAXED_ORB"],
         otm_offset=1,       # 1-OTM: great R:R on a breakout day with volume
         should_trade=True,  # BREAKOUT DAYS = HIGHEST VALUE DAYS. Don't skip!
         execution=ExecutionParams(
-            max_trades=3,
-            window_start="09:20",
+            max_trades=4,           # was 3 — breakout days should swing harder
+            window_start="09:15",   # ORB opens right at market open
             window_end="13:30",
-            risk_pct=0.03,
+            risk_pct=0.035,         # was 0.03 — peak risk day, size up
             min_quality_score=3,
             trail_trigger_pct=0.25,
             trail_lock_step_pct=0.12,
@@ -119,13 +123,14 @@ REGIME_DEFS: Dict[str, DailyRegime] = {
     "BULL_PULLBACK": DailyRegime(
         name="BULL_PULLBACK",
         allowed_direction="CALL",
-        allowed_strategies=_PULLBACK_STRATEGIES,
+        # Momentum breakout of a pullback candle = valid continuation.
+        allowed_strategies=["EMA_PULLBACK", "VWAP_RECLAIM", "MOMENTUM_BREAKOUT"],
         otm_offset=0,
         execution=ExecutionParams(
             max_trades=3,
             window_start="09:30",
             window_end="14:00",
-            risk_pct=0.02,
+            risk_pct=0.022,         # slight bump over old 0.02
             min_quality_score=3,
         ),
     ),

@@ -47,12 +47,21 @@ TREND_RISK_MULTIPLIER = {
 
 # Strategy priority by trend state.
 # Strategies listed first get tried first (within their time windows).
+#
+# STRONG_BULL priority rationale:
+#   EMA_PULLBACK leads (54% WR, PF 3.35) — best all-session bull play.
+#   MOMENTUM_BREAKOUT second (40% WR, PF 1.50) — catches impulse candles.
+#   ORB third — only fires in opening 15-min window (time-gated by engine).
+#   VWAP_RECLAIM fourth — CE reclaim on midday dips.
+#   RELAXED_ORB last — loose version for when ORB window closes.
+#
+# BEAR mirror uses same WR-ordered logic for PUT entries.
 STRATEGY_PRIORITY_BY_TREND: Dict[str, List[str]] = {
-    TrendState.STRONG_BULL: ["ORB", "MOMENTUM_BREAKOUT", "EMA_PULLBACK", "VWAP_RECLAIM", "RELAXED_ORB"],
-    TrendState.BULL:        ["EMA_PULLBACK", "VWAP_RECLAIM", "ORB", "RELAXED_ORB"],
+    TrendState.STRONG_BULL: ["EMA_PULLBACK", "MOMENTUM_BREAKOUT", "ORB", "VWAP_RECLAIM", "RELAXED_ORB"],
+    TrendState.BULL:        ["EMA_PULLBACK", "VWAP_RECLAIM", "MOMENTUM_BREAKOUT", "ORB", "RELAXED_ORB"],
     TrendState.NEUTRAL:     ["VWAP_RECLAIM", "RELAXED_ORB"],
-    TrendState.BEAR:        ["EMA_PULLBACK", "VWAP_RECLAIM", "ORB", "RELAXED_ORB"],
-    TrendState.STRONG_BEAR: ["ORB", "MOMENTUM_BREAKOUT", "EMA_PULLBACK", "VWAP_RECLAIM", "RELAXED_ORB"],
+    TrendState.BEAR:        ["EMA_PULLBACK", "MOMENTUM_BREAKOUT", "ORB", "VWAP_RECLAIM", "RELAXED_ORB"],
+    TrendState.STRONG_BEAR: ["EMA_PULLBACK", "MOMENTUM_BREAKOUT", "ORB", "VWAP_RECLAIM", "RELAXED_ORB"],
 }
 
 # SL / target multipliers per strategy (sl_pct, target_pct)
@@ -243,17 +252,31 @@ def detect_trend(
         else:
             scores["structure"] = 0
 
-    # ── 5b. Bearish confirmation pattern: 3 consecutive lower highs + VWAP rejection
-    # Three straight candles each making a lower high confirms a downtrend structure.
-    # VWAP rejection (high touched VWAP but close below it) adds institutional confirmation.
+    # ── 5b. Pattern confirmation: +2 / -2 for 3-candle structure + VWAP test
+    #
+    # BEAR: 3 consecutive lower highs + VWAP rejection confirms institutional selling.
+    # BULL: 3 consecutive higher lows + VWAP support confirms institutional buying.
+    #
+    # The asymmetric +2/-2 weight mirrors the impulse bonus system and gives
+    # the trend detector decisive power on genuine directional structure days.
     if vwap is not None and len(candles) >= 3:
-        last3 = candles[-3:]
-        h3 = [float(c["high"]) for c in last3]
-        consecutive_lower_highs = h3[2] < h3[1] < h3[0]
+        last3  = candles[-3:]
+        h3     = [float(c["high"]) for c in last3]
+        l3     = [float(c["low"])  for c in last3]
         last_c = last3[-1]
+
+        # Bear: 3 consecutive lower highs + price closed below VWAP
+        consecutive_lower_highs = h3[2] < h3[1] < h3[0]
         vwap_rejection = float(last_c["high"]) >= vwap * 0.9995 and float(last_c["close"]) < vwap
         if consecutive_lower_highs and vwap_rejection:
-            scores["bear_pattern"] = -2   # strengthened: was -1 (structure + institutional)
+            scores["bear_pattern"] = -2   # bearish structure + institutional rejection
+
+        # Bull (symmetric mirror): 3 consecutive higher lows + price closed above VWAP
+        # Higher lows = buyers defending each dip; close above VWAP = institutions absorbing.
+        consecutive_higher_lows = l3[2] > l3[1] > l3[0]
+        vwap_support = float(last_c["low"]) <= vwap * 1.0005 and float(last_c["close"]) > vwap
+        if consecutive_higher_lows and vwap_support:
+            scores["bull_pattern"] = 2    # bullish structure + institutional absorption
 
     # ── Impulse bonus votes ───────────────────────────────────────
     # Add impulse bonus only when impulse direction agrees with slow-path lean.
@@ -284,8 +307,12 @@ def detect_trend(
 
     # ── Aggregate score → state ───────────────────────────────────
     total   = slow_total + impulse_bonus
+    # Conviction = fraction of slow-path signal "weight" that agrees.
+    # Pattern scores (+2/-2) count as one key but contribute 2 units of weight,
+    # so on strong pattern days conviction can approach or reach 1.0 naturally.
+    # Hard-cap at 1.0 to keep downstream multipliers sane.
     n_votes = len(scores)   # denominator stays slow-path only (for conviction purity)
-    conviction = abs(slow_total) / n_votes if n_votes > 0 else 0.0
+    conviction = min(1.0, abs(slow_total) / n_votes) if n_votes > 0 else 0.0
 
     # VIX dampens conviction ONLY when direction is genuinely unclear (NEUTRAL).
     # Bear/bull trend days naturally carry higher VIX — don't penalise them twice.
@@ -445,9 +472,13 @@ def compute_signal_confidence(
     affinity = STRATEGY_REGIME_AFFINITY.get(strategy, {}).get(regime, 0.8)
     score += (affinity - 0.5) * 20  # 1.3 → +16 pts, 0.5 → 0 pts
 
-    # 3. Trend-signal alignment (0-12 pts)
+    # 3. Trend-signal alignment (0-18 pts)
     if trend.direction == signal:
-        score += 8 + trend.conviction * 4  # aligned with trend → big bonus
+        score += 8 + trend.conviction * 4   # aligned with trend → big bonus
+        # Extra bonus for confirmed strong trend states (STRONG_BULL/BEAR)
+        # These are the highest-conviction macro environments — reward them.
+        if trend.state in (TrendState.STRONG_BULL, TrendState.STRONG_BEAR):
+            score += 6   # was implicit 0 — now explicit 6pt strong-trend bonus
     elif trend.direction == "NEUTRAL":
         score += 2  # neutral is ok
     else:
