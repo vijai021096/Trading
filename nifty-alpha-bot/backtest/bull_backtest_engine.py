@@ -122,6 +122,12 @@ class BullBacktestConfig:
     enable_direction_correlation_block: bool = True
     enable_skip_after_loss: bool = True
     vix_max: float = 22.0
+
+    # ── Wednesday pre-expiry filter ─────────────────────────────────────
+    # Nifty expires Thursday → Wednesday is peak theta-decay for call options.
+    # Data (2y): Bull trades on Wed → avg WR=0–27%, -₹33k net across all setups.
+    # CALL options bleed out even when Nifty barely moves on pre-expiry day.
+    skip_wednesday_trades: bool = True
     strike_step: int = 50
     slippage_pct: float = 0.005
     min_option_premium: float = 4.5
@@ -1401,6 +1407,13 @@ def run_bull_backtest(
 
         if vix > cfg.vix_max:
             skip_reasons["vix_too_high"] = skip_reasons.get("vix_too_high", 0) + 1
+            continue
+
+        # ── Wednesday pre-expiry filter ──────────────────────────────────────
+        # CALL options bleed theta fast on Wed (Nifty expiry = Thursday).
+        # Data (2y): all bull strategies on Wednesday → avg WR ≤27%, net -₹33k.
+        if cfg.skip_wednesday_trades and trade_date.weekday() == 2:  # Wednesday
+            skip_reasons["wednesday_theta_skip"] = skip_reasons.get("wednesday_theta_skip", 0) + 1
             continue
 
         peak_equity = max(peak_equity, capital)

@@ -172,6 +172,12 @@ class DailyBacktestConfig:
     # run_combined_backtest() can route those days to bull_backtest_engine.
     skip_strong_trend_up: bool = False  # default False for standalone bear run
 
+    # ── Wednesday pre-expiry filter ─────────────────────────────────────
+    # Nifty weekly options expire Thursday. Wednesday = maximum theta-decay day.
+    # Data (2y): MEAN_REVERT on Wed → 14.3% WR, -₹37k. Skip it entirely.
+    # STRONG_TREND_DOWN on Wed still fires (has its own strong override logic).
+    skip_mean_revert_on_wednesday: bool = True
+
     # ── Conviction-based day cap (mirrors live bot logic) ──
     # On strong trend days (high ADX), allow up to strong_trend_max_trades
     enable_conviction_day_cap: bool = True
@@ -1403,6 +1409,19 @@ def run_daily_backtest(
                 regime = "STRONG_TREND_UP"
                 skip_reasons["hard_override_bull"] = skip_reasons.get("hard_override_bull", 0) + 1
 
+        # ── Wednesday pre-expiry MEAN_REVERT skip ──────────────────────────
+        # Nifty expires Thursday → Wednesday is peak theta-decay day.
+        # MEAN_REVERT + Wed options = underlying barely moves, option bleeds out.
+        # STRONG_TREND_DOWN and STRONG_TREND_UP still trade (hard overrides fire).
+        if (
+            cfg.skip_mean_revert_on_wednesday
+            and trade_date.weekday() == 2  # Wednesday
+            and regime == "MEAN_REVERT"
+        ):
+            skip_reasons["wednesday_mean_revert"] = skip_reasons.get("wednesday_mean_revert", 0) + 1
+            regime_counts[regime] = regime_counts.get(regime, 0) + 1
+            continue
+
         # ── Combined runner: yield STRONG_BULL days to bull engine ──────────
         if cfg.skip_strong_trend_up and regime == "STRONG_TREND_UP":
             skip_reasons["routed_to_bull_engine"] = skip_reasons.get("routed_to_bull_engine", 0) + 1
@@ -1446,9 +1465,16 @@ def run_daily_backtest(
             scan_order = scan_order + list(extra)
             day_trade_cap = max(day_trade_cap, min(cfg.volatile_override_max_cap, cfg.max_trades_per_day))
 
-        # Per-regime strategy block: BM on MILD_TREND has 29% WR (-₹47k on 21 trades)
-        # because ambiguous direction in mild trend = wrong-way breakout entries
-        _blocked_today: set = {"BREAKOUT_MOMENTUM"} if regime == "MILD_TREND" else set()
+        # Per-regime strategy block (data-driven, 2-year analysis):
+        #   MILD_TREND:   BM 29% WR (-₹47k, 21 trades) — wrong-way breakout in ambiguous direction
+        #   MEAN_REVERT:  BM 27% WR (-₹7k, 37 trades)  — BM needs direction; MEAN_REVERT has none
+        #                 BR 16.7% WR (-₹22k, 6 trades) — market is reverting, not rejecting
+        #   Only TREND_CONTINUATION survives MEAN_REVERT (54.5% WR, +₹13k)
+        _blocked_today: set = set()
+        if regime == "MILD_TREND":
+            _blocked_today.add("BREAKOUT_MOMENTUM")
+        elif regime == "MEAN_REVERT":
+            _blocked_today |= {"BREAKOUT_MOMENTUM", "BOUNCE_REJECTION"}
 
         for strat_name in scan_order:
             if strat_name in _blocked_today:
