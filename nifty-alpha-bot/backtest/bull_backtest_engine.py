@@ -101,8 +101,8 @@ class BullBacktestConfig:
 
     # ── Quality gates ──
     enable_quality_gate: bool = True
-    min_quality_score: float = 58.0       # matches bear engine; 58 balances quality vs frequency
-    strong_bull_quality_discount: float = 8.0  # STRONG_BULL discount: 58-8=50 floor
+    min_quality_score: float = 55.0       # lowered 58→55: confirmed bull = accept more setups
+    strong_bull_quality_discount: float = 14.0 # was 8: STRONG_BULL floor = 55-14=41 (matches live min_quality_score=3/5)
     skip_after_loss_min_quality: float = 65.0  # after a loss: demand better setup
 
     # ── Re-entry: disabled for bull (direction persistence less reliable) ──
@@ -110,12 +110,12 @@ class BullBacktestConfig:
 
     # ── Regime thresholds ──
     adx_strong_bull: float = 0.28
-    vix_strong_bull_max: float = 20.0
-    vix_mild_bull_max: float = 22.0   # raised from 20 — early bull recovery after a bear period often has VIX 20-23 while EMA8 is already crossing EMA21
+    vix_strong_bull_max: float = 22.0  # was 20 — confirmed STRONG_BULL can trade up to VIX 22 (matches live)
+    vix_mild_bull_max: float = 24.0    # raised from 22 — early bull recovery often has VIX 22-24
     rsi_mild_bull_min: float = 50.0
 
     # ── Risk ──
-    max_trades_per_day: int = 2   # bull days: 1-2 entries max (trend is smooth)
+    max_trades_per_day: int = 3   # was 2 — matches live STRONG_BULL max_trades=4; 3 in backtest (conservative)
     max_consecutive_losses: int = 5
     max_daily_loss_pct: float = 0.03
     enable_daily_loss_cap: bool = True
