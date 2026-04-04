@@ -463,7 +463,11 @@ async def heartbeat_loop():
                 "trend_direction": trend_ev.get("direction"),
                 "trend_conviction": trend_ev.get("conviction"),
                 "risk_multiplier": trend_ev.get("risk_multiplier"),
-                "strategy_priority": trend_ev.get("strategy_priority", []),
+                "strategy_priority": (lambda: (
+                    __import__('backtest.daily_backtest_engine', fromlist=['STRATEGY_PRIORITY']).STRATEGY_PRIORITY.get(
+                        (_get_latest_event("DAILY_ADAPTIVE_SCAN") or {}).get("regime", ""), []
+                    ) or trend_ev.get("strategy_priority", [])
+                ) if settings.trading_engine == "daily_adaptive" else trend_ev.get("strategy_priority", []))(),
                 "trend_scores": trend_ev.get("scores", {}),
                 # impulse_grade_live is written by bot to HEARTBEAT; TREND_DETECTED uses impulse_grade
                 "trend_impulse_grade": (bot_hb.get("impulse_grade_live") if bot_hb else None) or trend_ev.get("impulse_grade"),
@@ -686,10 +690,20 @@ def bot_status_rest():
         ev["trend_direction"] = trend_ev.get("direction")
         ev["trend_conviction"]= trend_ev.get("conviction")
         ev["risk_multiplier"] = trend_ev.get("risk_multiplier")
-        ev["strategy_priority"]   = trend_ev.get("strategy_priority", [])
         ev["trend_scores"]    = trend_ev.get("scores", {})
         ev["trend_impulse_grade"] = trend_ev.get("impulse_grade")
         ev["_trend_ts"]       = trend_ev.get("ts")  # stale-data timestamp for UI
+        # For daily_adaptive engine use daily regime strategy priority, not intraday
+        if settings.trading_engine == "daily_adaptive":
+            try:
+                from backtest.daily_backtest_engine import STRATEGY_PRIORITY as _DAILY_PRIO
+                _da_scan_regime = (_get_latest_event("DAILY_ADAPTIVE_SCAN") or {}).get("regime", "")
+                _da_prio = _DAILY_PRIO.get(_da_scan_regime, [])
+                ev["strategy_priority"] = _da_prio if _da_prio else trend_ev.get("strategy_priority", [])
+            except Exception:
+                ev["strategy_priority"] = trend_ev.get("strategy_priority", [])
+        else:
+            ev["strategy_priority"] = trend_ev.get("strategy_priority", [])
 
     # Enrich regime fields if missing
     if not ev.get("regime") and regime_ev:
@@ -725,13 +739,16 @@ def bot_status_rest():
             ev["_daily_regime_ts"] = dr_ev.get("ts")
 
     # Enrich last_scan from DAILY_ADAPTIVE_SCAN if missing
+    da_scan = _get_latest_event("DAILY_ADAPTIVE_SCAN") or {}
     if not ev.get("last_scan"):
-        da_scan = _get_latest_event("DAILY_ADAPTIVE_SCAN") or {}
         if da_scan:
             legs = da_scan.get("executable_legs") or []
             def _leg_conf(lg):
-                fl = lg.get("filter_log") or {}
-                qs = fl.get("quality_score")
+                # quality_score may be at top-level of leg or inside filter_log
+                qs = lg.get("quality_score")
+                if qs is None:
+                    fl = lg.get("filter_log") or {}
+                    qs = fl.get("quality_score")
                 return round(float(qs), 1) if isinstance(qs, (int, float)) else 0.0
             ev["last_scan"] = {
                 "strategies_evaluated": len(legs),

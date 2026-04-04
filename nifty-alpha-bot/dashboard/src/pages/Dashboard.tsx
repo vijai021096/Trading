@@ -653,15 +653,22 @@ export function Dashboard() {
                   </div>
                 </div>
 
-                {/* Fix 6: Strategy cards with priority */}
+                {/* Strategy cards — 13 daily strategies */}
                 <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
                   {(isDailyEngine ? [
-                    { name: 'TREND CONT.', desc: 'EMA pullback in established trend', time: '9:16–13:00', icon: TrendingUp, color: 'text-green', stratKey: 'TREND_CONTINUATION', priority: 'HIGH' },
-                    { name: 'BREAKOUT MOM.', desc: 'N-candle range breakout + volume', time: '9:16–13:00', icon: Zap, color: 'text-accent', stratKey: 'BREAKOUT_MOMENTUM', priority: 'HIGH' },
-                    { name: 'REVERSAL SNAP', desc: 'RSI exhaustion + reversal candle', time: '9:16–13:00', icon: Target, color: 'text-red', stratKey: 'REVERSAL_SNAP', priority: 'HIGH' },
-                    { name: 'GAP FADE', desc: 'Fade opening gap fills (enabled)', time: '9:16–10:30', icon: BarChart3, color: 'text-amber', stratKey: 'GAP_FADE', priority: 'MEDIUM' },
-                    { name: 'INSIDE BAR BRK', desc: 'Inside bar compression breakout', time: '9:16–13:00', icon: Layers, color: 'text-cyan', stratKey: 'INSIDE_BAR_BREAK', priority: 'MEDIUM' },
-                    { name: 'VWAP CROSS', desc: 'VWAP cross with prior deviation', time: '9:16–13:30', icon: Activity, color: 'text-accent', stratKey: 'VWAP_CROSS', priority: 'MEDIUM' },
+                    { name: 'TREND CONT.',  desc: 'Pullback entry in strong trend',        time: '9:16–13:00', icon: TrendingUp, color: 'text-green',   stratKey: 'TREND_CONTINUATION',   priority: 'HIGH' },
+                    { name: 'BREAKOUT',     desc: 'N-candle range breakout + volume',      time: '9:16–11:30', icon: Zap,        color: 'text-accent',  stratKey: 'BREAKOUT_MOMENTUM',    priority: 'HIGH' },
+                    { name: 'EMA FAN',      desc: 'EMA fan alignment with momentum',       time: '9:16–13:00', icon: TrendingUp, color: 'text-green',   stratKey: 'EMA_FAN',              priority: 'HIGH' },
+                    { name: 'PREV DAY BRK', desc: 'Prev-day high/low level breakout',      time: '9:16–11:00', icon: Layers,     color: 'text-amber',   stratKey: 'PREV_DAY_BREAK',       priority: 'HIGH' },
+                    { name: 'LIQUIDITY',    desc: 'Sweep prior range then reverse',        time: '9:16–13:00', icon: Activity,   color: 'text-cyan',    stratKey: 'LIQUIDITY_SWEEP',      priority: 'HIGH' },
+                    { name: 'GAP MOM.',     desc: 'Gap open — momentum follow-through',    time: '9:16–10:30', icon: Zap,        color: 'text-accent',  stratKey: 'GAP_MOMENTUM',         priority: 'MEDIUM' },
+                    { name: 'VOLUME THRUST',desc: 'Volume surge directional thrust',       time: '9:16–13:00', icon: BarChart3,  color: 'text-green',   stratKey: 'VOLUME_THRUST',        priority: 'MEDIUM' },
+                    { name: 'MACD MOM.',    desc: 'MACD signal cross + trend aligned',     time: '9:16–13:00', icon: Waves,      color: 'text-amber',   stratKey: 'MACD_MOMENTUM',        priority: 'MEDIUM' },
+                    { name: 'HAMMER REV.',  desc: 'Hammer/Doji candle reversal',           time: '9:16–13:00', icon: Target,     color: 'text-red',     stratKey: 'HAMMER_REVERSAL',      priority: 'MEDIUM' },
+                    { name: 'CONSEC. MOM.', desc: '3+ same-direction candles streak',      time: '9:16–13:00', icon: TrendingUp, color: 'text-accent',  stratKey: 'CONSECUTIVE_MOMENTUM', priority: 'MEDIUM' },
+                    { name: 'BB BREAKOUT',  desc: 'Bollinger Band squeeze breakout',       time: '9:16–11:30', icon: Zap,        color: 'text-red',     stratKey: 'BB_BREAKOUT',          priority: 'MEDIUM' },
+                    { name: 'REVERSAL SNP', desc: 'RSI exhaustion + reversal candle',      time: '9:16–13:00', icon: Target,     color: 'text-red',     stratKey: 'REVERSAL_SNAP',        priority: 'MEDIUM' },
+                    { name: 'EXPIRY DAY',   desc: 'Thursday expiry theta acceleration',    time: '9:16–13:00', icon: Layers,     color: 'text-accent',  stratKey: 'EXPIRY_DAY',           priority: 'HIGH' },
                   ] : [
                     { name: 'ORB', desc: 'Opening range breakout', time: '9:15–10:00', icon: Zap, color: 'text-amber', stratKey: 'ORB', priority: 'HIGH' },
                     { name: 'EMA PULLBACK', desc: 'Pullback to EMA21 with trend', time: '9:30–13:00', icon: TrendingUp, color: 'text-green', stratKey: 'EMA_PULLBACK', priority: 'HIGH' },
@@ -1349,16 +1356,31 @@ const REGIME_META: Record<string, { color: string; bg: string }> = {
 }
 
 const STRAT_COLORS: Record<string, string> = {
-  // Daily-adaptive engine strategy names
-  TREND_CONTINUATION: 'text-green',
-  BREAKOUT_MOMENTUM:  'text-accent',
-  EMA_FRESH_CROSS:    'text-green',
-  REVERSAL_SNAP:      'text-red',
-  GAP_FADE:           'text-amber',
-  RANGE_BOUNCE:       'text-cyan',
-  INSIDE_BAR_BREAK:   'text-purple-400',
-  VWAP_CROSS:         'text-blue-400',
-  // Intraday engine strategy names (shown in strategy_priority from trend_detector)
+  // Daily-adaptive engine strategies
+  TREND_CONTINUATION:   'text-green',
+  BREAKOUT_MOMENTUM:    'text-accent',
+  REVERSAL_SNAP:        'text-red',
+  BOUNCE_REJECTION:     'text-cyan',
+  EXPIRY_DAY:           'text-accent',
+  EMA_FAN:              'text-green',
+  PREV_DAY_BREAK:       'text-amber',
+  LIQUIDITY_SWEEP:      'text-cyan',
+  GAP_MOMENTUM:         'text-accent',
+  VOLUME_THRUST:        'text-green',
+  MACD_MOMENTUM:        'text-amber',
+  HAMMER_REVERSAL:      'text-red',
+  CONSECUTIVE_MOMENTUM: 'text-accent',
+  BB_BREAKOUT:          'text-red',
+  INTRADAY_REVERSAL:    'text-cyan',
+  VOLATILE_ORB:         'text-amber',
+  VOLATILE_REVERSAL:    'text-red',
+  VOLATILE_TREND_FOLLOW:'text-green',
+  EMA_FRESH_CROSS:      'text-green',
+  GAP_FADE:             'text-amber',
+  RANGE_BOUNCE:         'text-cyan',
+  INSIDE_BAR_BREAK:     'text-purple-400',
+  VWAP_CROSS:           'text-blue-400',
+  // Intraday engine strategies
   ORB:               'text-amber',
   RELAXED_ORB:       'text-amber',
   EMA_PULLBACK:      'text-green',
@@ -1367,10 +1389,27 @@ const STRAT_COLORS: Record<string, string> = {
 }
 
 const STRAT_WINDOWS: Record<string, string> = {
-  TREND_CONTINUATION: '9:16–13:00',
-  BREAKOUT_MOMENTUM:  '9:16–13:00',
+  // Daily strategies — all trigger at daily bar close (signal bar = prev day)
+  TREND_CONTINUATION:   '9:16–13:00',
+  BREAKOUT_MOMENTUM:    '9:16–11:30',
+  REVERSAL_SNAP:        '9:16–13:00',
+  BOUNCE_REJECTION:     '9:16–13:00',
+  EXPIRY_DAY:           '9:16–13:00',
+  EMA_FAN:              '9:16–13:00',
+  PREV_DAY_BREAK:       '9:16–11:00',
+  LIQUIDITY_SWEEP:      '9:16–13:00',
+  GAP_MOMENTUM:         '9:16–10:30',
+  VOLUME_THRUST:        '9:16–13:00',
+  MACD_MOMENTUM:        '9:16–13:00',
+  HAMMER_REVERSAL:      '9:16–13:00',
+  CONSECUTIVE_MOMENTUM: '9:16–13:00',
+  BB_BREAKOUT:          '9:16–11:30',
+  INTRADAY_REVERSAL:    '11:00–14:00',
+  VOLATILE_ORB:         '9:16–10:00',
+  VOLATILE_REVERSAL:    '9:30–11:00',
+  VOLATILE_TREND_FOLLOW:'9:16–13:00',
+  // Legacy intraday windows
   EMA_FRESH_CROSS:    '9:16–13:00',
-  REVERSAL_SNAP:      '9:16–13:00',
   GAP_FADE:           '9:16–10:30',
   RANGE_BOUNCE:       '9:16–13:00',
   INSIDE_BAR_BREAK:   '9:16–13:00',
