@@ -211,26 +211,49 @@ class KiteClient:
         exchange: str = "NFO",
         product: str = "MIS",
         limit_price: Optional[float] = None,
+        ltp: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Place market or limit order for entry."""
+        """Place limit order for entry/exit. If no limit_price given but ltp is provided,
+        uses an aggressive limit (buy: ltp+1%, sell: ltp-1%) for market-like fills
+        without requiring exchange market-protection. Pure market orders are blocked
+        on F&O by NSE so we always use LIMIT."""
         tx = self.kite.TRANSACTION_TYPE_BUY if side == "BUY" else self.kite.TRANSACTION_TYPE_SELL
-        order_type = self.kite.ORDER_TYPE_LIMIT if limit_price else self.kite.ORDER_TYPE_MARKET
-        validity = self.kite.VALIDITY_DAY
+        tick = 0.05
 
-        kwargs: Dict[str, Any] = dict(
+        if limit_price:
+            effective_limit = round(float(limit_price) / tick) * tick
+        elif ltp:
+            # Aggressive limit: sell 1% below LTP (ensures fill, avoids market order)
+            if side == "SELL":
+                effective_limit = round(float(ltp) * 0.99 / tick) * tick
+            else:
+                effective_limit = round(float(ltp) * 1.01 / tick) * tick
+        else:
+            # Fallback: try market order (may fail on some F&O contracts)
+            kwargs: Dict[str, Any] = dict(
+                variety=self.kite.VARIETY_REGULAR,
+                exchange=exchange,
+                tradingsymbol=symbol,
+                transaction_type=tx,
+                quantity=qty,
+                product=product,
+                order_type=self.kite.ORDER_TYPE_MARKET,
+                validity=self.kite.VALIDITY_DAY,
+            )
+            order_id = self._call(self.kite.place_order, **kwargs)
+            return {"order_id": order_id, "status": "PENDING", "placed_at": time.time()}
+
+        kwargs = dict(
             variety=self.kite.VARIETY_REGULAR,
             exchange=exchange,
             tradingsymbol=symbol,
             transaction_type=tx,
             quantity=qty,
             product=product,
-            order_type=order_type,
-            validity=validity,
+            order_type=self.kite.ORDER_TYPE_LIMIT,
+            validity=self.kite.VALIDITY_DAY,
+            price=effective_limit,
         )
-        if limit_price:
-            tick = 0.05
-            kwargs["price"] = round(float(limit_price) / tick) * tick
-
         order_id = self._call(self.kite.place_order, **kwargs)
         return {"order_id": order_id, "status": "PENDING", "placed_at": time.time()}
 
@@ -243,28 +266,37 @@ class KiteClient:
         product: str = "MIS",
     ) -> Dict[str, Any]:
         """Place SL (Stop Loss Limit) order for exit protection.
-        Zerodha discontinued SL-M for F&O; using SL with limit price 1.5% below trigger.
-        Triggers a limit sell at price when price drops to trigger_price."""
+        Zerodha discontinued SL-M for F&O; using SL with limit price below trigger.
+        Retries with progressively tighter limits if Zerodha rejects the first attempt.
+        Waits 600ms after fill before placing so Zerodha registers the position first."""
+        time.sleep(0.6)  # Let Zerodha register the position before placing SL
         tick = 0.05
         trigger = round(float(trigger_price) / tick) * tick
-        # Limit price 1.5% below trigger — gives buffer for fill in fast-moving options
-        limit_px = round(trigger * 0.985 / tick) * tick
 
-        kwargs: Dict[str, Any] = dict(
-            variety=self.kite.VARIETY_REGULAR,
-            exchange=exchange,
-            tradingsymbol=symbol,
-            transaction_type=self.kite.TRANSACTION_TYPE_SELL,
-            quantity=qty,
-            product=product,
-            order_type=self.kite.ORDER_TYPE_SL,
-            validity=self.kite.VALIDITY_DAY,
-            trigger_price=trigger,
-            price=limit_px,
-        )
-
-        order_id = self._call(self.kite.place_order, **kwargs)
-        return {"order_id": order_id, "status": "SL_PLACED", "trigger_price": trigger, "limit_price": limit_px}
+        last_err = None
+        # Try progressively tighter limit prices: 1%, 0.5%, 0.1% below trigger
+        for discount in (0.010, 0.005, 0.001):
+            limit_px = round(trigger * (1 - discount) / tick) * tick
+            kwargs: Dict[str, Any] = dict(
+                variety=self.kite.VARIETY_REGULAR,
+                exchange=exchange,
+                tradingsymbol=symbol,
+                transaction_type=self.kite.TRANSACTION_TYPE_SELL,
+                quantity=qty,
+                product=product,
+                order_type=self.kite.ORDER_TYPE_SL,
+                validity=self.kite.VALIDITY_DAY,
+                trigger_price=trigger,
+                price=limit_px,
+            )
+            try:
+                order_id = self._call(self.kite.place_order, **kwargs)
+                return {"order_id": order_id, "status": "SL_PLACED", "trigger_price": trigger, "limit_price": limit_px}
+            except Exception as e:
+                last_err = e
+                time.sleep(0.3)
+                continue
+        raise last_err
 
     def modify_slm_order(
         self,

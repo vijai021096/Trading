@@ -100,6 +100,7 @@ def realistic_slippage(
     days_to_expiry: int = 5,
     option_price: float = 100.0,
     lots: int = 1,
+    **_kwargs,  # absorb any extra kwargs for forward/backward compatibility
 ) -> float:
     """
     Realistic slippage for Nifty options — includes:

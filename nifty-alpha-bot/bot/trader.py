@@ -71,6 +71,18 @@ except ImportError:
 _STATE_DIR = Path(_os.environ.get("STATE_DIR", "/tmp"))
 EVENTS_LOG = _STATE_DIR / "kite_bot_events.jsonl"
 NIFTY_TOKEN_FILE = _STATE_DIR / "nifty_instrument_token.txt"
+_RUNTIME_OVERRIDE_FILE = _STATE_DIR / "kite_bot_runtime_override.json"
+_TOKEN_CACHE_FILE = _STATE_DIR / "kite_token_cache.json"
+
+
+def _read_runtime_override() -> dict:
+    try:
+        if _RUNTIME_OVERRIDE_FILE.exists():
+            import json as _json
+            return _json.loads(_RUNTIME_OVERRIDE_FILE.read_text()) or {}
+    except Exception:
+        pass
+    return {}
 
 
 def _log_event(event_type: str, payload: dict) -> None:
@@ -134,6 +146,7 @@ class KiteORBTrader:
         self._last_entry_confidence: float = 0.0   # track confidence of last entry (for re-entry gate)
         self._reentries_today: int = 0             # Change 3: max 1 re-entry per day
         self._fallback_entry_triggered: bool = False  # Change 2: anti-miss fallback (once per day)
+        self._emergency_halt: bool = False         # Set True if SL+exit both fail — blocks further entries
 
         # Restore SL-M order ID from persisted state (survives restarts)
         self._active_slm_order_id: Optional[str] = self.sm.position.slm_order_id or None
@@ -152,6 +165,30 @@ class KiteORBTrader:
     def _market_active(self, now: datetime) -> bool:
         t = now.time()
         return self._t("09:15") <= t <= self._t(self.cfg.force_exit_time)
+
+    # ── Token hot-reload on auth failure ─────────────────────────
+
+    def _try_reload_token(self, err: Exception) -> bool:
+        """If Kite returns an auth error, reload the token from the cache file.
+        Returns True if the token was successfully reloaded."""
+        if "api_key" not in str(err) and "access_token" not in str(err):
+            return False
+        import json as _json
+        try:
+            data = _json.loads(_TOKEN_CACHE_FILE.read_text())
+            from datetime import date as _date
+            if data.get("date") != _date.today().isoformat():
+                logger.warning("[TokenReload] Cache token is from a previous day — cannot auto-reload")
+                return False
+            new_token = data.get("access_token", "")
+            if not new_token:
+                return False
+            self.client.kite.set_access_token(new_token)
+            logger.info("[TokenReload] Reloaded today's token from cache — auth error resolved")
+            return True
+        except Exception as reload_err:
+            logger.warning(f"[TokenReload] Failed: {reload_err}")
+            return False
 
     # ── Candle management ─────────────────────────────────────────
 
@@ -174,7 +211,15 @@ class KiteORBTrader:
                 self._last_candle_date = today
                 logger.info(f"New trading day: {today}")
         except Exception as e:
-            logger.warning(f"Candle fetch failed: {e}")
+            if self._try_reload_token(e):
+                try:
+                    self._candle_cache = self.client.get_candles(
+                        self._nifty_token, from_dt, to_dt, "5minute"
+                    )
+                except Exception as e2:
+                    logger.warning(f"Candle fetch failed after token reload: {e2}")
+            else:
+                logger.warning(f"Candle fetch failed: {e}")
 
         return self._candle_cache
 
@@ -194,7 +239,14 @@ class KiteORBTrader:
                 return None
             return pd.DataFrame(candles)
         except Exception as e:
-            logger.warning(f"Daily NIFTY fetch failed: {e}")
+            if self._try_reload_token(e):
+                try:
+                    candles = self.client.get_candles(self._nifty_token, from_dt, to_dt, "day")
+                    return pd.DataFrame(candles) if candles else None
+                except Exception as e2:
+                    logger.warning(f"Daily NIFTY fetch failed after token reload: {e2}")
+            else:
+                logger.warning(f"Daily NIFTY fetch failed: {e}")
             return None
 
     def _confirm_intraday_momentum(self, direction: str, candles: List[Dict]) -> tuple[bool, str]:
@@ -271,14 +323,29 @@ class KiteORBTrader:
         # Already has a direction (non-NEUTRAL, non-None)
         direction = leg.get("direction")
         if direction not in (None, "NEUTRAL"):
-            # Bias rejection for weak-biased directional legs
-            if (self._current_trend and strength < 0.75):
+            if self._current_trend:
                 trend_dir = self._current_trend.direction
                 conviction = self._current_trend.conviction
-                if (direction == "CALL" and trend_dir == "BEAR" and conviction >= 0.75):
-                    return None  # weak bullish bias vs confirmed bear trend → skip
-                if (direction == "PUT" and trend_dir == "BULL" and conviction >= 0.75):
-                    return None  # weak bearish bias vs confirmed bull trend → skip
+                plan_regime = str((self._daily_adaptive_plan or {}).get("regime", ""))
+                # VOLATILE regime: daily bar direction is uncertain — let strong live trend decide.
+                # Exception: GAP_REVERSAL legs are intentional fade trades — don't override with trend.
+                if ("VOLATILE" in plan_regime
+                        and setup_type != "GAP_REVERSAL"
+                        and conviction >= 0.55
+                        and self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR")):
+                    live_dir = "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
+                    if live_dir != direction:
+                        logger.info(
+                            f"VOLATILE_DIR_OVERRIDE: daily plan={direction} → live trend={live_dir} "
+                            f"(conviction={conviction:.2f}, regime={plan_regime}, setup={setup_type})"
+                        )
+                        return live_dir
+                # Bias rejection for weak-biased directional legs (non-VOLATILE)
+                if strength < 0.75:
+                    if (direction == "CALL" and trend_dir == "BEAR" and conviction >= 0.75):
+                        return None  # weak bullish bias vs confirmed bear trend → skip
+                    if (direction == "PUT" and trend_dir == "BULL" and conviction >= 0.75):
+                        return None  # weak bearish bias vs confirmed bull trend → skip
             return direction
 
         # NEUTRAL: resolve from intraday data
@@ -320,6 +387,25 @@ class KiteORBTrader:
                 if open_px < prev_low - margin:
                     return "PUT"
             if trend_conviction >= 0.5:
+                return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
+            return None
+
+        elif setup_type == "ORB_GAP":  # VOLATILE_ORB — follow gap if >= 1%
+            if abs(gap_pct) >= 0.010:
+                return "CALL" if gap_pct > 0 else "PUT"
+            if trend_conviction >= 0.6:
+                return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
+            return None
+
+        elif setup_type == "GAP_REVERSAL":  # VOLATILE_REVERSAL — fade large gap
+            if gap_pct >= 0.015:
+                return "PUT"   # gap up ≥1.5% → fade = PUT
+            if gap_pct <= -0.015:
+                return "CALL"  # gap down ≥1.5% → fade = CALL
+            return None
+
+        elif setup_type == "VOLATILE_TREND":  # VOLATILE_TREND_FOLLOW — live trend confirmation
+            if trend_conviction >= 0.55:
                 return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
             return None
 
@@ -552,6 +638,12 @@ class KiteORBTrader:
         _trail_impulse = str(self._current_impulse.grade) if self._current_impulse else "NONE"
         _trail_conv = self._current_trend.conviction if self._current_trend else 0.5
         _trail_params = compute_trail_params(_trail_impulse, _trail_conv, _trail_session)
+
+        # Volatile days: wider break-even trigger to avoid whipsaw exits.
+        # Normal 7-8% BE is too tight — volatile options can spike 15%+ then retrace to target.
+        _volatile_regime = (self._daily_regime and self._daily_regime.name == "SKIP_VOLATILE")
+        if _volatile_regime:
+            _trail_params.break_even_pct = max(_trail_params.break_even_pct, 0.15)
 
         # Update trailing stop — save current_sl BEFORE mutating so we can revert
         # if the Kite order modification fails (prevents showing wrong SL in UI).
@@ -796,11 +888,15 @@ class KiteORBTrader:
             # Lift the direction block so it can be re-evaluated by should_allow_reentry
             self._lost_directions_today.discard(pos.direction)
 
+        # Volatile days: require much higher conviction for re-entry to avoid chasing losses
+        _volatile_day_reentry = (self._daily_regime and self._daily_regime.name == "SKIP_VOLATILE")
+        _reentry_conf_threshold = 75.0 if _volatile_day_reentry else 58.0
+
         if (
             exit_reason == "SL_HIT"
             and net < 0
             and self._daily_adaptive_plan is not None
-            and self._last_entry_confidence >= 58.0
+            and self._last_entry_confidence >= _reentry_conf_threshold
         ):
             _allow_reentry, _reentry_reason = should_allow_reentry(
                 direction=pos.direction,
@@ -894,6 +990,9 @@ class KiteORBTrader:
 
     def _scan_entry_daily_adaptive(self, now: datetime, vix: Optional[float]) -> None:
         """Same rules as daily backtest: last completed daily bar + live VIX, multi-leg day plan."""
+        if self._emergency_halt:
+            logger.warning("EMERGENCY HALT active — entries blocked. Restart bot after checking Kite.")
+            return
         can_trade, reason = self.risk.can_trade()
         if not can_trade:
             if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
@@ -913,7 +1012,17 @@ class KiteORBTrader:
         if not self._in_daily_adaptive_window(now):
             return
 
-        # Intraday "SKIP" day classifier does not block daily_adaptive (different model).
+        # Block daily_adaptive on SKIP_VOLATILE regime — too risky on high-VIX/gap days.
+        # User can override via dashboard by setting max_trades > 0 in runtime override.
+        if self._daily_regime and self._daily_regime.name == "SKIP_VOLATILE":
+            _ov = _read_runtime_override()
+            _ov_max = _ov.get("max_trades")
+            if _ov_max is None or int(_ov_max) <= 0:
+                if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
+                    logger.info("DAILY_ADAPTIVE blocked: regime=SKIP_VOLATILE (set override max_trades>0 to force)")
+                return
+            logger.info(f"DAILY_ADAPTIVE: SKIP_VOLATILE override active (max_trades={_ov_max})")
+
         effective_vix = float(vix if vix is not None else self._get_vix() or 14.0)
 
         # ── Late trend entry: if morning scan found no signal but strong trend emerges 10-12am ──
@@ -991,6 +1100,22 @@ class KiteORBTrader:
             )
 
         idx = int(self.risk.status().get("trades_today", 0))
+
+        # If override max_trades allows more trades than the plan has legs, extend dynamically
+        _ov_max = int(_read_runtime_override().get("max_trades") or 0)
+        if _ov_max > len(legs) and legs:
+            import copy as _copy
+            extra = _ov_max - len(legs)
+            plan["executable_legs"] = list(legs) + [_copy.deepcopy(legs[-1]) for _ in range(extra)]
+            plan["day_trade_cap"] = _ov_max
+            legs = plan["executable_legs"]
+            day_cap = _ov_max
+            if not plan.get("_override_extended") or plan.get("_last_ov_max") != _ov_max:
+                plan["_override_extended"] = True
+                plan["_last_ov_max"] = _ov_max
+                logger.info(f"PLAN_EXTENDED: override max_trades={_ov_max} → total legs={len(legs)}")
+                _log_event("DAILY_ADAPTIVE_SCAN", {**plan, "anchor_ym": None, "_extended_by_override": True})
+
         if idx >= len(legs) or idx >= day_cap:
             return
 
@@ -1209,7 +1334,10 @@ class KiteORBTrader:
         is_late = now.time() >= self._t(self.cfg.late_window_start)
         if is_late:
             # VIX must be calm — exception: very strong trend day with A+ score ≥ 75
-            if effective_vix > self.cfg.late_window_vix_max:
+            # Runtime override vix_max also raises late window ceiling
+            _ov_vix = _read_runtime_override().get("vix_max")
+            _late_vix_max = max(self.cfg.late_window_vix_max, float(_ov_vix)) if _ov_vix else self.cfg.late_window_vix_max
+            if effective_vix > _late_vix_max:
                 conviction = self._current_trend.conviction if self._current_trend else 0.0
                 # Directional move check: price must have moved ≥ 0.8% from open in leg direction
                 intraday_move_ok = False
@@ -1223,7 +1351,7 @@ class KiteORBTrader:
                 if (is_strong_trend and conviction >= 0.8
                         and best_conf >= 75 and intraday_move_ok):
                     logger.info(
-                        f"LATE_VIX_OVERRIDE: VIX {effective_vix:.1f} > {self.cfg.late_window_vix_max} "
+                        f"LATE_VIX_OVERRIDE: VIX {effective_vix:.1f} > {_late_vix_max} "
                         f"BUT strong trend conviction={conviction:.2f}, conf={best_conf:.0f}≥75, "
                         f"directional move≥0.8% — allowing entry"
                     )
@@ -1234,12 +1362,12 @@ class KiteORBTrader:
                     })
                 else:
                     logger.info(
-                        f"LATE_WINDOW SKIP: VIX {effective_vix:.1f} > {self.cfg.late_window_vix_max} "
+                        f"LATE_WINDOW SKIP: VIX {effective_vix:.1f} > {_late_vix_max} "
                         f"(conviction={conviction:.2f}, conf={best_conf:.0f}, move_ok={intraday_move_ok})"
                     )
                     self._skip_reasons_today.append({
                         "strategy": leg["strategy"], "direction": leg.get("direction", ""),
-                        "reason": f"Late window — VIX {effective_vix:.1f} > {self.cfg.late_window_vix_max}",
+                        "reason": f"Late window — VIX {effective_vix:.1f} > {_late_vix_max}",
                         "conf": round(best_conf, 1),
                     })
                     return
@@ -1887,16 +2015,19 @@ class KiteORBTrader:
                 logger.error(f"SL placement failed: {e} — exiting position immediately for safety")
                 _log_event("SL_PLACEMENT_FAILED", {"symbol": symbol, "error": str(e), "action": "emergency_exit"})
                 try:
+                    # Use LTP-based limit sell (market orders blocked on F&O by NSE)
                     exit_resp = self.client.place_order(
                         symbol=symbol, qty=qty, side="SELL",
                         exchange="NFO", product="MIS",
+                        ltp=opt_price,
                     )
                     self.client.confirm_fill(exit_resp.get("order_id", ""), timeout_seconds=15)
-                    logger.info("Emergency exit placed after SL placement failure")
+                    logger.info("Emergency exit (limit) placed after SL placement failure")
                 except Exception as exit_err:
-                    logger.error(f"EMERGENCY EXIT FAILED: {exit_err} — CHECK KITE MANUALLY!")
+                    logger.error(f"EMERGENCY EXIT FAILED: {exit_err} — HALTING BOT ENTRIES. CHECK KITE NOW!")
                     _log_event("EMERGENCY_EXIT_FAILED", {"symbol": symbol, "error": str(exit_err)})
                     self._notify(f"🚨 EMERGENCY: SL failed AND exit failed for {symbol}. CHECK KITE NOW!")
+                    self._emergency_halt = True  # Block all further entries until bot restart
                 # Record trade so trades_today is incremented — prevents re-entry loop on next scan
                 self.risk.record_trade(0.0)
                 return
@@ -2035,6 +2166,14 @@ class KiteORBTrader:
                     time.sleep(self.cfg.poll_seconds)
                     continue
 
+                # Apply runtime overrides from dashboard (paused / halted / max_trades)
+                _ov = _read_runtime_override()
+                if _ov.get("paused") or _ov.get("halted"):
+                    if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
+                        logger.info(f"BOT PAUSED via runtime override: {_ov}")
+                    time.sleep(self.cfg.poll_seconds)
+                    continue
+
                 self._roll_day(now)
                 candles = self._refresh_candles(now)
                 vix = self._get_vix()
@@ -2114,7 +2253,15 @@ class KiteORBTrader:
                             max_trades=self.cfg.max_trades_per_day,
                             vix=float(vix or 15.0),
                         )
-                        hb_data["narrative"] = _narrative
+                        # Dashboard expects a plain string — extract lines list from dict
+                        if isinstance(_narrative, dict):
+                            _lines = _narrative.get("narrative", [])
+                            if isinstance(_lines, list):
+                                hb_data["narrative"] = " · ".join(str(l) for l in _lines if l)
+                            else:
+                                hb_data["narrative"] = str(_lines)
+                        else:
+                            hb_data["narrative"] = str(_narrative) if _narrative else ""
                     except Exception as _ne:
                         logger.debug(f"Narrative gen failed: {_ne}")
                     logger.info(

@@ -291,7 +291,7 @@ def confirm_momentum_adaptive(
     """
     completed = [c for c in candles if c.get("ts") is not None][-4:-1]  # last 3 completed
     if len(completed) < 1:
-        return True, "insufficient candles — skipping check"
+        return False, "insufficient candles — waiting for 9:20 candle"
 
     bull_count = sum(1 for c in completed if float(c["close"]) >= float(c["open"]))
     bear_count = len(completed) - bull_count

@@ -196,6 +196,28 @@ class DailyBacktestConfig:
     volatile_override_quality_min: float = 72.0      # High bar (was 55) — only A+ setups
     volatile_override_sl_mult: float = 0.70          # Very tight SL (70% of normal) — take profit fast
 
+    # ── Volatile-day dedicated strategies ──────────────────────────────────
+    enable_volatile_orb: bool = True           # Opening Range Breakout on gap days
+    enable_volatile_reversal: bool = True      # Gap fade/reversal on large gaps
+    enable_volatile_trend_follow: bool = True  # Trend follow when volatile day is directional
+
+    # VOLATILE_ORB params
+    vorb_gap_min_pct: float = 0.010           # Min gap 1.0% to trigger ORB setup
+    vorb_vix_min: float = 20.0               # VIX must be elevated (not normal day)
+    vorb_vix_max: float = 35.0              # VIX cap — beyond = unmanageable
+
+    # VOLATILE_REVERSAL params
+    vrev_gap_min_pct: float = 0.015          # Min gap 1.5% for fade setup
+    vrev_rsi_gap_up_max: float = 72.0        # RSI cap for gap-up fade (PUT)
+    vrev_rsi_gap_down_min: float = 28.0      # RSI floor for gap-down fade (CALL)
+
+    # VOLATILE_TREND_FOLLOW params
+    vtf_move_min_pct: float = 0.004          # Min intraday move 0.4% (below hard_override threshold)
+    vtf_vix_min: float = 20.0               # Must be elevated VIX day
+
+    # Quality gate for volatile strategies (slightly higher than normal 58.0)
+    volatile_strategy_min_quality: float = 60.0
+
     # ── Hard trend override threshold ──
     # If daily move ≥ this %, override VOLATILE/MILD → STRONG_TREND_DOWN/UP
     hard_override_min_pct: float = 0.005             # 0.5% (was implicit 0.7%) — catch moderate volatile trend days
@@ -421,7 +443,7 @@ STRATEGY_PRIORITY = {
     "MILD_TREND":        ["BOUNCE_REJECTION", "EMA_FRESH_CROSS", "TREND_CONTINUATION", "VWAP_CROSS", "REVERSAL_SNAP"],
     "MEAN_REVERT":       ["RANGE_BOUNCE", "GAP_FADE", "REVERSAL_SNAP", "VWAP_CROSS", "INSIDE_BAR_BREAK"],
     "BREAKOUT":          ["BREAKOUT_MOMENTUM", "EMA_FRESH_CROSS", "INSIDE_BAR_BREAK", "TREND_CONTINUATION", "GAP_FADE"],
-    "VOLATILE":          [],  # No strategies on choppy high-VIX days (25% WR); strong moves override to STRONG_TREND
+    "VOLATILE":          ["VOLATILE_ORB", "VOLATILE_REVERSAL", "VOLATILE_TREND_FOLLOW"],
 }
 
 # Regime-adaptive SL/target multipliers: (sl_mult, tgt_mult)
@@ -445,6 +467,9 @@ SL_TARGET_MAP = {
     "EMA_FRESH_CROSS":    ("sl_pct_efc", "target_pct_efc"),
     "FALLBACK_EMA_CROSS": ("sl_pct_fb", "target_pct_fb"),
     "BOUNCE_REJECTION":   ("sl_pct_br", "target_pct_br"),
+    "VOLATILE_ORB":          ("sl_pct_br",   "target_pct_br"),   # reuse BREAKOUT_MOMENTUM values (0.25/0.70) but with regime mult
+    "VOLATILE_REVERSAL":     ("sl_pct_rs",   "target_pct_rs"),   # reuse REVERSAL_SNAP values (0.20/0.55)
+    "VOLATILE_TREND_FOLLOW": ("sl_pct_tc",   "target_pct_tc"),   # reuse TREND_CONTINUATION values (0.30/0.80)
 }
 
 ALL_STRATEGIES = set(SL_TARGET_MAP.keys())
@@ -956,6 +981,153 @@ def _check_bounce_rejection(
     return "PUT", "BOUNCE_REJECTION", fl
 
 
+def _check_volatile_orb(
+    i: int, closes: list, opens: list, rsi: float, vix: float, cfg: "DailyBacktestConfig",
+    ema_fast_vals: Optional[list] = None, ema_slow_vals: Optional[list] = None,
+) -> Optional[Tuple[str, str, dict]]:
+    """VOLATILE_ORB — Opening Range Breakout on gap days (daily bar proxy).
+    Only fires when gap aligns with EMA trend direction — avoids counter-trend entries.
+    """
+    if i < 2:
+        return None
+    prev_close = closes[i - 1]
+    today_open = opens[i]
+    if prev_close <= 0:
+        return None
+    gap_pct = (today_open - prev_close) / prev_close
+    gap_magnitude = abs(gap_pct)
+
+    if gap_magnitude < cfg.vorb_gap_min_pct:
+        return None
+    if not (cfg.vorb_vix_min <= vix <= cfg.vorb_vix_max):
+        return None
+    if gap_pct > 0 and rsi > 75.0:
+        return None
+    if gap_pct < 0 and rsi < 25.0:
+        return None
+
+    # EMA alignment: only follow the gap when it aligns with established trend
+    # Counter-trend gaps (gap up vs bearish EMA) are better handled by VOLATILE_REVERSAL
+    if ema_fast_vals is not None and ema_slow_vals is not None:
+        ema_f = ema_fast_vals[i]
+        ema_s = ema_slow_vals[i]
+        if gap_pct > 0 and ema_f < ema_s:
+            return None   # Gap up but EMA bearish → skip ORB
+        if gap_pct < 0 and ema_f > ema_s:
+            return None   # Gap down but EMA bullish → skip ORB
+
+    direction = "CALL" if gap_pct > 0 else "PUT"
+    bias = "BULLISH" if direction == "CALL" else "BEARISH"
+    return (direction, "VOLATILE_ORB", {
+        "gap_pct": round(gap_pct * 100, 3),
+        "prev_close": round(prev_close, 2),
+        "bias": bias,
+        "bias_strength": 0.80,
+        "setup_type": "ORB_GAP",
+        "gap_ok": {"passed": True, "detail": f"Gap {gap_pct*100:.2f}%"},
+        "vix_zone": {"passed": True, "detail": f"VIX {vix:.1f}"},
+        "rsi_ok": {"passed": True, "detail": f"RSI {rsi:.1f}"},
+    })
+
+
+def _check_volatile_reversal(
+    i: int, closes: list, opens: list, rsi: float, vix: float, cfg: "DailyBacktestConfig",
+) -> Optional[Tuple[str, str, dict]]:
+    """VOLATILE_REVERSAL — Fade large gaps that statistically partially reverse."""
+    if i < 3:
+        return None
+    prev_close = closes[i - 1]
+    today_open = opens[i]
+    if prev_close <= 0:
+        return None
+    gap_pct = (today_open - prev_close) / prev_close
+    gap_magnitude = abs(gap_pct)
+
+    if gap_magnitude < cfg.vrev_gap_min_pct:
+        return None
+
+    if gap_pct > 0:
+        if rsi > cfg.vrev_rsi_gap_up_max:
+            return None
+        direction = "PUT"
+        bias = "BEARISH"
+    else:
+        if rsi < cfg.vrev_rsi_gap_down_min:
+            return None
+        direction = "CALL"
+        bias = "BULLISH"
+
+    # Prior 3-day move should confirm the gap was an extension (not random)
+    if closes[i - 3] <= 0:
+        return None
+    prior_move = (closes[i - 1] - closes[i - 3]) / closes[i - 3]
+    if gap_pct > 0 and prior_move < 0.003:
+        return None
+    if gap_pct < 0 and prior_move > -0.003:
+        return None
+
+    return (direction, "VOLATILE_REVERSAL", {
+        "gap_pct": round(gap_pct * 100, 3),
+        "prev_close": round(prev_close, 2),
+        "prior_move_pct": round(prior_move * 100, 3),
+        "bias": bias,
+        "bias_strength": 0.75,
+        "setup_type": "GAP_REVERSAL",
+        "gap_ok": {"passed": True, "detail": f"Large gap {gap_pct*100:.2f}%"},
+        "rsi_ok": {"passed": True, "detail": f"RSI {rsi:.1f}"},
+        "prior_move": {"passed": True, "detail": f"Prior 3d {prior_move*100:.2f}%"},
+    })
+
+
+def _check_volatile_trend_follow(
+    i: int, closes: list, opens: list,
+    ema_fast_vals: list, ema_slow_vals: list, ema_trend_vals: list,
+    rsi: float, vix: float, cfg: "DailyBacktestConfig",
+) -> Optional[Tuple[str, str, dict]]:
+    """VOLATILE_TREND_FOLLOW — When volatile day commits to a direction with EMA confirmation."""
+    if i < 3:
+        return None
+    today_close = closes[i]
+    today_open = opens[i]
+    if today_open <= 0:
+        return None
+    intraday_move = (today_close - today_open) / today_open
+
+    if vix < cfg.vtf_vix_min:
+        return None
+    if abs(intraday_move) < cfg.vtf_move_min_pct:
+        return None
+
+    ema_f = ema_fast_vals[i]
+    ema_s = ema_slow_vals[i]
+    ema_t = ema_trend_vals[i]
+
+    if intraday_move > 0:
+        if not (ema_f > ema_s):
+            return None
+        if rsi > 80.0 or rsi < 40.0:
+            return None
+        direction = "CALL"
+        bias = "BULLISH"
+    else:
+        if not (ema_f < ema_s):
+            return None
+        if rsi < 18.0 or rsi > 62.0:
+            return None
+        direction = "PUT"
+        bias = "BEARISH"
+
+    return (direction, "VOLATILE_TREND_FOLLOW", {
+        "intraday_move_pct": round(intraday_move * 100, 3),
+        "bias": bias,
+        "bias_strength": 0.85,
+        "setup_type": "VOLATILE_TREND",
+        "move_ok": {"passed": True, "detail": f"Move {intraday_move*100:.2f}%"},
+        "ema_align": {"passed": True, "detail": f"EMA8={ema_f:.0f} EMA21={ema_s:.0f}"},
+        "rsi_ok": {"passed": True, "detail": f"RSI {rsi:.1f}"},
+    })
+
+
 # ═══════════════════════════════════════════════════════════════════
 # A+ QUALITY SCORING
 # ═══════════════════════════════════════════════════════════════════
@@ -980,6 +1152,9 @@ _STRATEGY_TIER: Dict[str, int] = {
     "RANGE_BOUNCE":         5,
     "EMA_FRESH_CROSS":      0,   # Structurally losing — blocked by quality gate
     "FALLBACK_EMA_CROSS":   2,
+    "VOLATILE_ORB":           15,
+    "VOLATILE_REVERSAL":      13,
+    "VOLATILE_TREND_FOLLOW":  11,
 }
 
 # Regime edge scores based on actual backtested WR:
@@ -988,7 +1163,7 @@ _STRATEGY_TIER: Dict[str, int] = {
 #   MEAN_REVERT:        WR=44%  (below average)
 #   STRONG_TREND_UP:    WR=8%   (trap — CALL trades fail badly in strong up-trends)
 _REGIME_QUALITY: Dict[str, int] = {
-    "VOLATILE":           -10,  # Penalty: 25% WR, no strategies run here (choppy high-VIX)
+    "VOLATILE":           10,   # Elevated: dedicated volatile strategies now available
     "MILD_TREND":         20,
     "MEAN_REVERT":        10,
     "STRONG_TREND_DOWN":  18,
@@ -1399,7 +1574,8 @@ def run_daily_backtest(
         # ── Hard trend override ─────────────────────────────────────────────
         # If intraday move ≥ hard_override_min_pct, declare a trend day.
         # Lowered to 0.5% (was 0.7%) so moderate volatile trend days are captured.
-        if opens[i] > 0:
+        # VOLATILE days are NOT overridden — VOLATILE_TREND_FOLLOW handles directional moves.
+        if opens[i] > 0 and regime != "VOLATILE":
             _day_move_pct = (closes[i] - opens[i]) / opens[i]
             if _day_move_pct <= -cfg.hard_override_min_pct and regime not in ("STRONG_TREND_DOWN",):
                 regime = "STRONG_TREND_DOWN"
@@ -1440,6 +1616,10 @@ def run_daily_backtest(
             day_trade_cap = min(day_trade_cap, 2)
         elif vix > 17.0:
             day_trade_cap = min(day_trade_cap, 3)
+
+        # Volatile days: max 1 trade — don't chain losses
+        if regime == "VOLATILE":
+            day_trade_cap = min(day_trade_cap, 1)
 
         # Conviction-based day cap: strong trend (ADX proxy) → allow 3 trades
         if cfg.enable_conviction_day_cap and adx_vals[i] >= cfg.strong_trend_adx_thresh:
@@ -1522,6 +1702,20 @@ def run_daily_backtest(
                         i, highs, lows, closes, opens,
                         ema_fast_vals, ema_slow_vals, ema_trend_vals,
                         rsi, vwap_vals, cfg)
+            elif strat_name == "VOLATILE_ORB":
+                if cfg.enable_volatile_orb and regime == "VOLATILE":
+                    signal_result = _check_volatile_orb(
+                        i, closes, opens, rsi, vix, cfg, ema_fast_vals, ema_slow_vals)
+            elif strat_name == "VOLATILE_REVERSAL":
+                if cfg.enable_volatile_reversal and regime == "VOLATILE":
+                    signal_result = _check_volatile_reversal(
+                        i, closes, opens, rsi, vix, cfg)
+            elif strat_name == "VOLATILE_TREND_FOLLOW":
+                if cfg.enable_volatile_trend_follow and regime == "VOLATILE":
+                    signal_result = _check_volatile_trend_follow(
+                        i, closes, opens,
+                        ema_fast_vals, ema_slow_vals, ema_trend_vals,
+                        rsi, vix, cfg)
 
             if signal_result is not None:
                 sig, sn, fl = signal_result
@@ -1627,6 +1821,9 @@ def run_daily_backtest(
                 effective_min_quality = cfg.min_quality_score - cfg.strong_trend_quality_discount
             elif regime == "MILD_TREND":
                 effective_min_quality = cfg.min_quality_score - 5.0
+            elif regime == "VOLATILE":
+                # VOLATILE strategies have their own regime-specific guards; lower the bar
+                effective_min_quality = cfg.min_quality_score - 10.0
             else:
                 effective_min_quality = cfg.min_quality_score
             if cfg.enable_quality_gate and quality < effective_min_quality:
@@ -1942,6 +2139,21 @@ def collect_strategy_matches_for_index(
                     i, highs, lows, closes, opens,
                     ema_fast_vals, ema_slow_vals, ema_trend_vals,
                     rsi, vwap_vals, cfg)
+        elif strat_name == "VOLATILE_ORB":
+            if cfg.enable_volatile_orb and regime == "VOLATILE":
+                signal_result = _check_volatile_orb(
+                    i, closes, opens, rsi, vix, cfg,
+                    series.get("ema_fast_vals"), series.get("ema_slow_vals"))
+        elif strat_name == "VOLATILE_REVERSAL":
+            if cfg.enable_volatile_reversal and regime == "VOLATILE":
+                signal_result = _check_volatile_reversal(
+                    i, closes, opens, rsi, vix, cfg)
+        elif strat_name == "VOLATILE_TREND_FOLLOW":
+            if cfg.enable_volatile_trend_follow and regime == "VOLATILE":
+                signal_result = _check_volatile_trend_follow(
+                    i, closes, opens,
+                    ema_fast_vals, ema_slow_vals, ema_trend_vals,
+                    rsi, vix, cfg)
 
         if signal_result is not None:
             sig, sn, fl = signal_result

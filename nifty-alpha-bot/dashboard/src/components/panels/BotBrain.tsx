@@ -256,13 +256,14 @@ export function BotBrain() {
 
   // Parse thinking into readable bullets
   const bullets = useMemo(() => {
-    const source = narrative || thinking
+    const raw = narrative || thinking
+    if (!raw) return []
+    const source = typeof raw === 'string' ? raw : Object.values(raw as Record<string, unknown>).filter(Boolean).join(' · ')
     if (!source) return []
-    // Split on em-dash, pipe, bullet chars, or sentence endings
     return source
       .split(/\s*[—·|•]\s*|(?<=\.)\s+(?=[A-Z])/)
-      .map(s => s.trim())
-      .filter(s => s.length > 3)
+      .map((s: string) => s.trim())
+      .filter((s: string) => s.length > 3)
       .slice(0, 5)
   }, [thinking, narrative])
 

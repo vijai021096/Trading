@@ -486,8 +486,11 @@ async def heartbeat_loop():
                 # Daily regime engine routing (set by bot at market open)
                 "daily_regime": daily_regime_data.get("daily_regime"),
                 "active_engine": daily_regime_data.get("active_engine"),
-                # Bot narrative (powers Story Panel in UI)
-                "narrative": bot_hb.get("narrative") if bot_hb else None,
+                # Bot narrative (powers Story Panel in UI) — always send as string
+                "narrative": (lambda n: (
+                    " · ".join(str(l) for l in n.get("narrative", []) if l)
+                    if isinstance(n, dict) else str(n)
+                ) if n else None)(bot_hb.get("narrative") if bot_hb else None),
                 # Position details (if active)
                 "position": pos if pos_state == "ACTIVE" else None,
             }
@@ -752,6 +755,13 @@ def bot_status_rest():
             }
 
     if ev:
+        # Normalize narrative to string — bot may write it as a dict
+        _n = ev.get("narrative")
+        if isinstance(_n, dict):
+            _lines = _n.get("narrative", [])
+            ev["narrative"] = " · ".join(str(l) for l in _lines if l) if isinstance(_lines, list) else str(_lines)
+        elif _n is not None and not isinstance(_n, str):
+            ev["narrative"] = str(_n)
         return ev
 
     # Fallback when bot has never started
@@ -1216,6 +1226,7 @@ async def run_backtest_api(body: dict):
 def _run_backtest_sync(months: int, capital: float, strategy: str = "BOTH",
                        start_date_str: Optional[str] = None,
                        end_date_str: Optional[str] = None) -> dict:
+    import pandas as pd
     from backtest.data_downloader import download_nifty_daily, download_india_vix
     from backtest.combined_runner import CombinedBacktestConfig, run_combined_backtest
     from backtest.daily_backtest_engine import DailyBacktestConfig
@@ -1235,11 +1246,41 @@ def _run_backtest_sync(months: int, capital: float, strategy: str = "BOTH",
         diff_months = months
 
     # Use cached data — no force_refresh (yfinance may be blocked on this server)
-    nifty_df = download_nifty_daily(months=max(diff_months, 6), force_refresh=False)
-    vix_df = download_india_vix(months=max(diff_months, 6), force_refresh=False)
+    nifty_df = None
+    vix_df = None
+    try:
+        nifty_df = download_nifty_daily(months=max(diff_months, 6), force_refresh=False)
+        vix_df = download_india_vix(months=max(diff_months, 6), force_refresh=False)
+    except Exception as dl_err:
+        print(f"[BacktestAPI] Download failed ({dl_err}), trying 2yr parquet fallback...")
+
+    # Fallback: load pre-downloaded parquet files directly (2yr versions are most reliable)
+    _data_dir = Path(__file__).parent.parent / "backtest" / "data"
+    if nifty_df is None or len(nifty_df) < 20:
+        for _fname in ["nifty_daily_2yr.parquet", "nifty_daily.parquet", "nifty_historical.parquet"]:
+            _fp = _data_dir / _fname
+            if _fp.exists():
+                try:
+                    nifty_df = pd.read_parquet(_fp)
+                    nifty_df["ts"] = pd.to_datetime(nifty_df["ts"])
+                    print(f"[BacktestAPI] Loaded {len(nifty_df)} Nifty rows from {_fname}")
+                    break
+                except Exception:
+                    continue
+    if vix_df is None or len(vix_df) < 5:
+        for _fname in ["india_vix_2yr.parquet", "india_vix_daily.parquet", "vix_historical.parquet"]:
+            _fp = _data_dir / _fname
+            if _fp.exists():
+                try:
+                    vix_df = pd.read_parquet(_fp)
+                    vix_df["date"] = pd.to_datetime(vix_df["date"]).dt.date
+                    print(f"[BacktestAPI] Loaded {len(vix_df)} VIX rows from {_fname}")
+                    break
+                except Exception:
+                    continue
 
     if nifty_df is None or len(nifty_df) < 20:
-        raise ValueError("No daily data available. Data cache may be empty.")
+        raise ValueError("No daily data available. Upload backtest/data/*.parquet files or check internet.")
 
     cfg = CombinedBacktestConfig(
         bear_cfg=DailyBacktestConfig(capital=capital),

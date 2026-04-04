@@ -189,9 +189,11 @@ class PositionStateMachine:
 
         changed = None
 
-        # Break-even
+        # Break-even — lock in half the trigger gain so we capture real profit.
+        # e.g. trigger=15% → SL moves to entry+7.5%, not just entry+0.5%.
         if not self.position.break_even_set and gain_pct >= break_even_trigger_pct:
-            new_sl = entry * 1.005
+            lock_profit_pct = max(0.03, break_even_trigger_pct * 0.5)
+            new_sl = entry * (1 + lock_profit_pct)
             if new_sl > self.position.current_sl:
                 self.position.current_sl = new_sl
                 self.position.break_even_set = True
