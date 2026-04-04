@@ -25,9 +25,23 @@ const STRATEGY_COLOR_HEX: Record<string, string> = {
   RANGE_BOUNCE:         '#ec4899',  // pink
   INSIDE_BAR_BREAK:     '#22d3ee',  // bright cyan
   VWAP_CROSS:           '#34d399',  // emerald
-  ORB:                  '#f97316',  // orange-amber
-  EMA_PULLBACK:         '#a78bfa',  // violet
-  VWAP_RECLAIM:         '#10b981',  // teal
+  BOUNCE_REJECTION:     '#f97316',  // orange
+  EMA_FRESH_CROSS:      '#a78bfa',  // violet
+  // Aggressive daily-entry strategies
+  EMA_FAN:              '#fbbf24',  // yellow-amber
+  PREV_DAY_BREAK:       '#60a5fa',  // blue
+  LIQUIDITY_SWEEP:      '#c084fc',  // light purple
+  GAP_MOMENTUM:         '#4ade80',  // light green
+  VOLUME_THRUST:        '#fb923c',  // orange-red
+  MACD_MOMENTUM:        '#38bdf8',  // sky blue
+  HAMMER_REVERSAL:      '#f472b6',  // pink
+  CONSECUTIVE_MOMENTUM: '#a3e635',  // lime
+  BB_BREAKOUT:          '#e879f9',  // fuchsia
+  EXPIRY_DAY:           '#fd853a',  // warm orange
+  // Legacy
+  VOLATILE_ORB:         '#ef4444',  // red
+  VOLATILE_REVERSAL:    '#f87171',  // light red
+  VOLATILE_TREND_FOLLOW:'#fca5a5',  // pale red
 }
 
 function strategyColor(strategy: string): string {
@@ -154,10 +168,10 @@ export function BacktestPage() {
             <label className="block text-[10px] font-bold text-text3 uppercase tracking-wider mb-1.5">Strategy</label>
             <select value={strategy} onChange={e => setStrategy(e.target.value)}
               className="w-full bg-surface border border-line/30 rounded-xl px-3 py-2.5 text-[12px] text-text1 focus:border-accent/40 focus:outline-none transition-colors font-semibold appearance-none cursor-pointer">
-              <option value="BOTH">ALL — Adaptive Alpha (7 Strategies)</option>
-              <option value="TREND">Trend — Continuation + Breakout</option>
-              <option value="REVERSAL">Reversal — Snap + Range Bounce</option>
-              <option value="GAP">Gap Fade — Opening Gap Fill</option>
+              <option value="BOTH">ALL — Adaptive Alpha (13 Strategies)</option>
+              <option value="TREND">Trend — EMA Fan, MACD, Continuation, Breakout</option>
+              <option value="REVERSAL">Reversal — Snap, Hammer, Liquidity Sweep</option>
+              <option value="GAP">Gap — Gap Momentum + Gap Fade</option>
               <option value="VWAP">VWAP Cross — Institutional Flow</option>
             </select>
           </div>
@@ -199,7 +213,7 @@ export function BacktestPage() {
             className="glass-card rounded-2xl p-10 text-center">
             <Loader2 size={28} className="animate-spin text-accent mx-auto mb-3" />
             <p className="text-text1 font-semibold">Running Adaptive Alpha backtest...</p>
-            <p className="text-text3 text-[11px] mt-1">6-regime classification → 7-strategy scan → options simulation with realistic pricing</p>
+            <p className="text-text3 text-[11px] mt-1">6-regime classification → 13-strategy scan → options simulation with realistic pricing</p>
             <div className="mt-4 h-1 rounded-full bg-surface max-w-xs mx-auto overflow-hidden">
               <motion.div className="h-full bg-accent rounded-full" animate={{ x: ['-100%', '100%'] }}
                 transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }} style={{ width: '40%' }} />

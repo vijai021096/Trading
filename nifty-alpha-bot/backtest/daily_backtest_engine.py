@@ -297,6 +297,23 @@ class DailyBacktestConfig:
     sl_pct_vt: float = 0.15
     target_pct_vt: float = 0.35
 
+    # ── 4 more winning strategies ─────────────────────────────────────────
+    enable_macd_momentum: bool = True
+    sl_pct_mm: float = 0.15
+    target_pct_mm: float = 0.32
+
+    enable_hammer_reversal: bool = True
+    sl_pct_hr: float = 0.16
+    target_pct_hr: float = 0.38
+
+    enable_consecutive_momentum: bool = True
+    sl_pct_cm: float = 0.14
+    target_pct_cm: float = 0.32
+
+    enable_bb_breakout: bool = True
+    sl_pct_bb: float = 0.15
+    target_pct_bb: float = 0.35
+
     # ── EXPIRY_DAY strategy (Thursday weekly expiry) ──────────────────────
     enable_expiry_day: bool = True
     sl_pct_expiry: float = 0.18       # Tighter SL — theta decay limits holding time
@@ -360,6 +377,16 @@ def _rsi(closes: list, period: int = 14) -> list:
         rs = avg_gain / avg_loss if avg_loss > 0 else 100.0
         result.append(100.0 - 100.0 / (1.0 + rs))
     return result
+
+
+def _macd(closes: list, fast: int = 12, slow: int = 26, signal: int = 9) -> Tuple[list, list, list]:
+    """Returns (macd_line, signal_line, histogram) lists aligned with closes."""
+    ema_fast = _ema(closes, fast)
+    ema_slow = _ema(closes, slow)
+    macd_line = [f - s for f, s in zip(ema_fast, ema_slow)]
+    signal_line = _ema(macd_line, signal)
+    histogram = [m - s for m, s in zip(macd_line, signal_line)]
+    return macd_line, signal_line, histogram
 
 
 def _atr(highs: list, lows: list, closes: list, period: int = 14) -> list:
@@ -466,13 +493,11 @@ def _classify_regime(
 # ═══════════════════════════════════════════════════════════════════
 
 STRATEGY_PRIORITY = {
-    "STRONG_TREND_UP":   ["EXPIRY_DAY", "TREND_CONTINUATION", "EMA_FAN", "BREAKOUT_MOMENTUM", "PREV_DAY_BREAK", "GAP_MOMENTUM", "VOLUME_THRUST", "REVERSAL_SNAP", "EMA_FRESH_CROSS"],
-    "STRONG_TREND_DOWN": ["EXPIRY_DAY", "TREND_CONTINUATION", "BOUNCE_REJECTION", "EMA_FAN", "BREAKOUT_MOMENTUM", "PREV_DAY_BREAK", "GAP_MOMENTUM", "VOLUME_THRUST", "EMA_FRESH_CROSS"],
-    # BM removed from MILD_TREND: 29% WR (-₹47k on 21 trades) — ambiguous direction in mild trend kills edge
-    # BOUNCE_REJECTION added: bearish MILD_TREND (EMA8<EMA21) with failed bounce is reliable PUT signal
-    "MILD_TREND":        ["EXPIRY_DAY", "BOUNCE_REJECTION", "EMA_FAN", "TREND_CONTINUATION", "PREV_DAY_BREAK", "LIQUIDITY_SWEEP", "VWAP_CROSS", "GAP_MOMENTUM", "REVERSAL_SNAP", "EMA_FRESH_CROSS"],
-    "MEAN_REVERT":       ["EXPIRY_DAY", "LIQUIDITY_SWEEP", "TREND_CONTINUATION", "EMA_FAN", "PREV_DAY_BREAK", "REVERSAL_SNAP", "VOLUME_THRUST", "VWAP_CROSS", "GAP_MOMENTUM", "RANGE_BOUNCE", "GAP_FADE", "INSIDE_BAR_BREAK"],
-    "BREAKOUT":          ["EXPIRY_DAY", "BREAKOUT_MOMENTUM", "PREV_DAY_BREAK", "GAP_MOMENTUM", "EMA_FAN", "EMA_FRESH_CROSS", "INSIDE_BAR_BREAK", "TREND_CONTINUATION", "GAP_FADE"],
+    "STRONG_TREND_UP":   ["EXPIRY_DAY", "TREND_CONTINUATION", "EMA_FAN", "MACD_MOMENTUM", "CONSECUTIVE_MOMENTUM", "BREAKOUT_MOMENTUM", "BB_BREAKOUT", "PREV_DAY_BREAK", "GAP_MOMENTUM", "VOLUME_THRUST", "REVERSAL_SNAP", "EMA_FRESH_CROSS"],
+    "STRONG_TREND_DOWN": ["EXPIRY_DAY", "TREND_CONTINUATION", "BOUNCE_REJECTION", "EMA_FAN", "MACD_MOMENTUM", "CONSECUTIVE_MOMENTUM", "BREAKOUT_MOMENTUM", "BB_BREAKOUT", "PREV_DAY_BREAK", "GAP_MOMENTUM", "VOLUME_THRUST", "EMA_FRESH_CROSS"],
+    "MILD_TREND":        ["EXPIRY_DAY", "BOUNCE_REJECTION", "EMA_FAN", "MACD_MOMENTUM", "TREND_CONTINUATION", "PREV_DAY_BREAK", "LIQUIDITY_SWEEP", "CONSECUTIVE_MOMENTUM", "VWAP_CROSS", "GAP_MOMENTUM", "REVERSAL_SNAP", "HAMMER_REVERSAL", "EMA_FRESH_CROSS"],
+    "MEAN_REVERT":       ["EXPIRY_DAY", "LIQUIDITY_SWEEP", "HAMMER_REVERSAL", "TREND_CONTINUATION", "EMA_FAN", "PREV_DAY_BREAK", "REVERSAL_SNAP", "MACD_MOMENTUM", "VOLUME_THRUST", "VWAP_CROSS", "GAP_MOMENTUM", "RANGE_BOUNCE", "GAP_FADE", "INSIDE_BAR_BREAK"],
+    "BREAKOUT":          ["EXPIRY_DAY", "BREAKOUT_MOMENTUM", "BB_BREAKOUT", "PREV_DAY_BREAK", "GAP_MOMENTUM", "EMA_FAN", "CONSECUTIVE_MOMENTUM", "EMA_FRESH_CROSS", "INSIDE_BAR_BREAK", "TREND_CONTINUATION", "GAP_FADE"],
     "VOLATILE":          ["VOLATILE_ORB", "VOLATILE_REVERSAL", "VOLATILE_TREND_FOLLOW"],
 }
 
@@ -503,6 +528,10 @@ SL_TARGET_MAP = {
     "LIQUIDITY_SWEEP":  ("sl_pct_ls",  "target_pct_ls"),
     "GAP_MOMENTUM":     ("sl_pct_gm",  "target_pct_gm"),
     "VOLUME_THRUST":    ("sl_pct_vt",  "target_pct_vt"),
+    "MACD_MOMENTUM":        ("sl_pct_mm", "target_pct_mm"),
+    "HAMMER_REVERSAL":      ("sl_pct_hr", "target_pct_hr"),
+    "CONSECUTIVE_MOMENTUM": ("sl_pct_cm", "target_pct_cm"),
+    "BB_BREAKOUT":          ("sl_pct_bb", "target_pct_bb"),
     "VOLATILE_ORB":          ("sl_pct_br",   "target_pct_br"),   # reuse BREAKOUT_MOMENTUM values (0.25/0.70) but with regime mult
     "VOLATILE_REVERSAL":     ("sl_pct_rs",   "target_pct_rs"),   # reuse REVERSAL_SNAP values (0.20/0.55)
     "VOLATILE_TREND_FOLLOW": ("sl_pct_tc",   "target_pct_tc"),   # reuse TREND_CONTINUATION values (0.30/0.80)
@@ -847,6 +876,195 @@ def _check_vwap_cross(
                 "confirm": {"passed": True, "detail": f"Red body {body_ratio:.0%}, EMA aligned"},
                 "bias": "BEARISH", "bias_strength": 0.70, "setup_type": "TREND",
             })
+
+    return None
+
+
+def _check_macd_momentum(
+    i: int, closes: list, opens: list, highs: list, lows: list,
+    ema_fast_vals: list, ema_slow_vals: list,
+    macd_line: list, signal_line: list, histogram: list,
+    rsi: float, cfg: DailyBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """MACD momentum: MACD line freshly crosses signal line, confirmed by EMA direction."""
+    if i < 3:
+        return None
+    today_close, today_open = closes[i], opens[i]
+    today_range = highs[i] - lows[i]
+    body_ratio = abs(today_close - today_open) / today_range if today_range > 0 else 0
+    ema_f, ema_s = ema_fast_vals[i], ema_slow_vals[i]
+
+    macd_now = macd_line[i]
+    sig_now  = signal_line[i]
+    hist_now = histogram[i]
+    hist_prev = histogram[i - 1] if i > 0 else 0
+
+    # Bullish: MACD > signal (or just crossed above) + histogram expanding + EMA bull
+    if (macd_now > sig_now
+            and hist_now > 0
+            and hist_now > hist_prev  # histogram growing = acceleration
+            and ema_f > ema_s
+            and today_close > today_open
+            and body_ratio >= 0.30
+            and 42.0 <= rsi <= 76.0):
+        return ("CALL", "MACD_MOMENTUM", {
+            "macd": {"passed": True, "detail": f"MACD {macd_now:.1f} > signal {sig_now:.1f}, hist growing"},
+            "bias": "BULLISH", "bias_strength": 0.72, "setup_type": "TREND",
+        })
+
+    # Bearish: MACD < signal + histogram shrinking (more negative) + EMA bear
+    if (macd_now < sig_now
+            and hist_now < 0
+            and hist_now < hist_prev  # histogram more negative = acceleration
+            and ema_f < ema_s
+            and today_close < today_open
+            and body_ratio >= 0.30
+            and 24.0 <= rsi <= 58.0):
+        return ("PUT", "MACD_MOMENTUM", {
+            "macd": {"passed": True, "detail": f"MACD {macd_now:.1f} < signal {sig_now:.1f}, hist expanding"},
+            "bias": "BEARISH", "bias_strength": 0.72, "setup_type": "TREND",
+        })
+
+    return None
+
+
+def _check_hammer_reversal(
+    i: int, closes: list, opens: list, highs: list, lows: list,
+    ema_fast_vals: list, ema_slow_vals: list, vwap_vals: list,
+    rsi: float, cfg: DailyBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """Hammer / Shooting-star candlestick reversal.
+
+    Hammer (bull): small real body near top of range + long lower shadow (>= 2x body).
+      Signals buying pressure after a downmove — look for CALL.
+    Shooting star (bear): small real body near bottom of range + long upper shadow.
+      Signals rejection of highs — look for PUT.
+    """
+    if i < 2:
+        return None
+    today_close, today_open = closes[i], opens[i]
+    today_high, today_low = highs[i], lows[i]
+    today_range = today_high - today_low
+    if today_range <= 0:
+        return None
+    body = abs(today_close - today_open)
+    body_ratio = body / today_range
+    ema_f, ema_s = ema_fast_vals[i], ema_slow_vals[i]
+
+    body_top    = max(today_close, today_open)
+    body_bottom = min(today_close, today_open)
+    upper_shadow = today_high - body_top
+    lower_shadow = body_bottom - today_low
+
+    # Hammer: small body (≤35%), long lower shadow (≥2x body), body in upper half
+    if (body_ratio <= 0.35
+            and lower_shadow >= 2.0 * max(body, 1)
+            and upper_shadow <= body * 1.2
+            and body_top >= today_low + today_range * 0.55  # body in upper half
+            and 30.0 <= rsi <= 62.0):
+        return ("CALL", "HAMMER_REVERSAL", {
+            "pattern": {"passed": True, "detail": f"Hammer: lower shadow {lower_shadow:.0f} >= 2x body {body:.0f}"},
+            "bias": "BULLISH", "bias_strength": 0.74, "setup_type": "REVERSAL",
+        })
+
+    # Shooting star: small body (≤35%), long upper shadow (≥2x body), body in lower half
+    if (body_ratio <= 0.35
+            and upper_shadow >= 2.0 * max(body, 1)
+            and lower_shadow <= body * 1.2
+            and body_bottom <= today_low + today_range * 0.45  # body in lower half
+            and 38.0 <= rsi <= 70.0):
+        return ("PUT", "HAMMER_REVERSAL", {
+            "pattern": {"passed": True, "detail": f"Shooting star: upper shadow {upper_shadow:.0f} >= 2x body {body:.0f}"},
+            "bias": "BEARISH", "bias_strength": 0.74, "setup_type": "REVERSAL",
+        })
+
+    return None
+
+
+def _check_consecutive_momentum(
+    i: int, closes: list, opens: list, highs: list, lows: list,
+    ema_fast_vals: list, ema_slow_vals: list,
+    rsi: float, cfg: DailyBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """3+ consecutive same-direction closes = sustained momentum.
+    Each close must be higher (bull) or lower (bear) than the previous.
+    Combined with EMA alignment for confirmation.
+    """
+    if i < 3:
+        return None
+    ema_f, ema_s = ema_fast_vals[i], ema_slow_vals[i]
+    today_close, today_open = closes[i], opens[i]
+    today_range = highs[i] - lows[i]
+    body_ratio = abs(today_close - today_open) / today_range if today_range > 0 else 0
+
+    # Bull: 3 consecutive higher closes
+    if (closes[i] > closes[i-1] > closes[i-2] > closes[i-3]
+            and ema_f > ema_s
+            and today_close > today_open
+            and body_ratio >= 0.30
+            and 45.0 <= rsi <= 78.0):
+        return ("CALL", "CONSECUTIVE_MOMENTUM", {
+            "streak": {"passed": True, "detail": f"4 consecutive higher closes"},
+            "bias": "BULLISH", "bias_strength": 0.71, "setup_type": "TREND",
+        })
+
+    # Bear: 3 consecutive lower closes
+    if (closes[i] < closes[i-1] < closes[i-2] < closes[i-3]
+            and ema_f < ema_s
+            and today_close < today_open
+            and body_ratio >= 0.30
+            and 22.0 <= rsi <= 55.0):
+        return ("PUT", "CONSECUTIVE_MOMENTUM", {
+            "streak": {"passed": True, "detail": f"4 consecutive lower closes"},
+            "bias": "BEARISH", "bias_strength": 0.71, "setup_type": "TREND",
+        })
+
+    return None
+
+
+def _check_bb_breakout(
+    i: int, closes: list, opens: list, highs: list, lows: list,
+    ema_fast_vals: list, ema_slow_vals: list,
+    bb_upper: list, bb_lower: list,
+    rsi: float, cfg: DailyBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """Bollinger Band breakout: close outside bands with EMA confirmation.
+    Strong trend day — options often make big moves when BB is breached.
+    """
+    if i < 2 or not bb_upper or not bb_lower:
+        return None
+    if i >= len(bb_upper) or i >= len(bb_lower):
+        return None
+    today_close, today_open = closes[i], opens[i]
+    today_range = highs[i] - lows[i]
+    body_ratio = abs(today_close - today_open) / today_range if today_range > 0 else 0
+    ema_f, ema_s = ema_fast_vals[i], ema_slow_vals[i]
+
+    # Bull breakout: close above upper BB + EMA aligned bull
+    if (today_close > bb_upper[i]
+            and ema_f > ema_s
+            and today_close > today_open
+            and body_ratio >= 0.35
+            and 50.0 <= rsi <= 80.0):
+        deviation = (today_close - bb_upper[i]) / bb_upper[i] if bb_upper[i] > 0 else 0
+        return ("CALL", "BB_BREAKOUT", {
+            "bb": {"passed": True, "detail": f"Close {today_close:.0f} > upper BB {bb_upper[i]:.0f}"},
+            "deviation_pct": round(deviation * 100, 2),
+            "bias": "BULLISH", "bias_strength": 0.73, "setup_type": "BREAKOUT",
+        })
+
+    # Bear breakout: close below lower BB + EMA aligned bear
+    if (today_close < bb_lower[i]
+            and ema_f < ema_s
+            and today_close < today_open
+            and body_ratio >= 0.35
+            and 20.0 <= rsi <= 50.0):
+        deviation = (bb_lower[i] - today_close) / bb_lower[i] if bb_lower[i] > 0 else 0
+        return ("PUT", "BB_BREAKOUT", {
+            "bb": {"passed": True, "detail": f"Close {today_close:.0f} < lower BB {bb_lower[i]:.0f}"},
+            "deviation_pct": round(deviation * 100, 2),
+            "bias": "BEARISH", "bias_strength": 0.73, "setup_type": "BREAKOUT",
+        })
 
     return None
 
@@ -1462,6 +1680,10 @@ _STRATEGY_TIER: Dict[str, int] = {
     "GAP_MOMENTUM":     11,
     "VOLUME_THRUST":    14,
     "EXPIRY_DAY":       13,
+    "MACD_MOMENTUM":         14,
+    "HAMMER_REVERSAL":       15,   # Candlestick patterns have decent edge
+    "CONSECUTIVE_MOMENTUM":  13,
+    "BB_BREAKOUT":           14,
 }
 
 # Regime edge scores based on actual backtested WR:
@@ -1827,6 +2049,22 @@ def run_daily_backtest(
     df["vwap"] = df["tp_vol"].rolling(cfg.vwap_lookback, min_periods=1).sum() / df["vol_sum"]
     vwap_vals = df["vwap"].tolist()
 
+    # MACD
+    _macd_line, _macd_signal, _macd_hist = _macd(closes)
+
+    # Bollinger upper/lower bands
+    _bb_upper: list = []
+    _bb_lower: list = []
+    _bb_period = cfg.bb_period
+    _bb_std = cfg.bb_std
+    for _j in range(len(closes)):
+        _window = closes[max(0, _j - _bb_period + 1):_j + 1]
+        _mean = sum(_window) / len(_window)
+        _variance = sum((x - _mean) ** 2 for x in _window) / len(_window)
+        _std = _variance ** 0.5
+        _bb_upper.append(_mean + _bb_std * _std)
+        _bb_lower.append(_mean - _bb_std * _std)
+
     warmup = max(cfg.ema_trend + 1, cfg.rsi_period + 1, atr_sma_period + 1, cfg.bb_period + 1, 5)
     if start_date:
         start_idx = next((j for j, d in enumerate(dates) if d >= start_date), 0)
@@ -2034,6 +2272,32 @@ def run_daily_backtest(
                         i, closes, opens, highs, lows,
                         ema_fast_vals, ema_slow_vals, rsi,
                         volumes, cfg)
+            elif strat_name == "MACD_MOMENTUM":
+                if cfg.enable_macd_momentum:
+                    signal_result = _check_macd_momentum(
+                        i, closes, opens, highs, lows,
+                        ema_fast_vals, ema_slow_vals,
+                        _macd_line, _macd_signal, _macd_hist,
+                        rsi, cfg)
+            elif strat_name == "HAMMER_REVERSAL":
+                if cfg.enable_hammer_reversal:
+                    signal_result = _check_hammer_reversal(
+                        i, closes, opens, highs, lows,
+                        ema_fast_vals, ema_slow_vals, vwap_vals,
+                        rsi, cfg)
+            elif strat_name == "CONSECUTIVE_MOMENTUM":
+                if cfg.enable_consecutive_momentum:
+                    signal_result = _check_consecutive_momentum(
+                        i, closes, opens, highs, lows,
+                        ema_fast_vals, ema_slow_vals,
+                        rsi, cfg)
+            elif strat_name == "BB_BREAKOUT":
+                if cfg.enable_bb_breakout:
+                    signal_result = _check_bb_breakout(
+                        i, closes, opens, highs, lows,
+                        ema_fast_vals, ema_slow_vals,
+                        _bb_upper, _bb_lower,
+                        rsi, cfg)
             elif strat_name == "EXPIRY_DAY":
                 if cfg.enable_expiry_day and regime != "VOLATILE":
                     signal_result = _check_expiry_day(
@@ -2424,6 +2688,19 @@ def collect_strategy_matches_for_index(
         vix, cfg,
     )
     rsi = rsi_vals[i]
+
+    # Compute MACD and BB upper/lower for new strategies
+    _c_macd_line, _c_macd_signal, _c_macd_hist = _macd(closes)
+    _c_bb_upper: list = []
+    _c_bb_lower: list = []
+    for _j in range(len(closes)):
+        _window = closes[max(0, _j - cfg.bb_period + 1):_j + 1]
+        _mean = sum(_window) / len(_window)
+        _variance = sum((x - _mean) ** 2 for x in _window) / len(_window)
+        _std = _variance ** 0.5
+        _c_bb_upper.append(_mean + cfg.bb_std * _std)
+        _c_bb_lower.append(_mean - cfg.bb_std * _std)
+
     adx_vals = series["adx_vals"]
     scan_order = _strategies_scan_order(regime, allowed)
     matches: List[Tuple[str, str, dict]] = []
@@ -2513,6 +2790,32 @@ def collect_strategy_matches_for_index(
                     i, closes, opens, highs, lows,
                     ema_fast_vals, ema_slow_vals, rsi,
                     volumes, cfg)
+        elif strat_name == "MACD_MOMENTUM":
+            if cfg.enable_macd_momentum:
+                signal_result = _check_macd_momentum(
+                    i, closes, opens, highs, lows,
+                    ema_fast_vals, ema_slow_vals,
+                    _c_macd_line, _c_macd_signal, _c_macd_hist,
+                    rsi, cfg)
+        elif strat_name == "HAMMER_REVERSAL":
+            if cfg.enable_hammer_reversal:
+                signal_result = _check_hammer_reversal(
+                    i, closes, opens, highs, lows,
+                    ema_fast_vals, ema_slow_vals, vwap_vals,
+                    rsi, cfg)
+        elif strat_name == "CONSECUTIVE_MOMENTUM":
+            if cfg.enable_consecutive_momentum:
+                signal_result = _check_consecutive_momentum(
+                    i, closes, opens, highs, lows,
+                    ema_fast_vals, ema_slow_vals,
+                    rsi, cfg)
+        elif strat_name == "BB_BREAKOUT":
+            if cfg.enable_bb_breakout:
+                signal_result = _check_bb_breakout(
+                    i, closes, opens, highs, lows,
+                    ema_fast_vals, ema_slow_vals,
+                    _c_bb_upper, _c_bb_lower,
+                    rsi, cfg)
         elif strat_name == "EXPIRY_DAY":
             if cfg.enable_expiry_day and regime != "VOLATILE":
                 _ed_date = trade_date if trade_date is not None else date.today()

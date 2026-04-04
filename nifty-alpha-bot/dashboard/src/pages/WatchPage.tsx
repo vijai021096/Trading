@@ -40,7 +40,7 @@ function Chip({ label, value, color = 'surface' }: { label: string; value?: stri
   const cls: Record<string, string> = {
     cyan:    'bg-cyan/10 text-cyan border-cyan/20',
     green:   'bg-green/10 text-green border-green/20',
-    red:     'bg-red/10 text-red-l borded/20',
+    red:     'bg-red/10 text-red-l border-red/20',
     amber:   'bg-amber/10 text-amber border-amber/20',
     accent:  'bg-accent/10 text-accent border-accent/20',
     surface: 'bg-surface text-text2 border-line/30',

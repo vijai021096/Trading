@@ -356,7 +356,7 @@ export function JournalPage() {
   // Auto-load live trades on mount
   useEffect(() => {
     if (source === 'live') loadJournal()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [source]) // re-load when source changes (live vs backtest)
 
   const emptyAfterLoad = !loading && !error && trades.length === 0
 

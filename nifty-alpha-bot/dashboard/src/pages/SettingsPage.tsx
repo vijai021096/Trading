@@ -459,10 +459,10 @@ function SystemInfoPanel() {
   useEffect(() => { axios.get('/api/strategy/config').then(r => setCfg(r.data)).catch(() => {}) }, [])
 
   const items = cfg ? [
-    ['Bot Version', cfg.bot_version ?? 'v3.1.0'],
+    ['Bot Version', cfg.bot_version ?? 'v4.0.0'],
     ['Trading engine', String(cfg.trading_engine || '—').replace(/_/g, ' ')],
     ['API', 'FastAPI + WebSocket'],
-    ['Exchange', 'NSE / NFO'],
+    ['Exchange', cfg.exchange ?? 'NSE / NFO'],
     ['Instrument', 'NIFTY Index Options'],
     ['Entry Order', cfg.use_limit_orders ? 'Aggressive Limit' : 'Market'],
     ['SL Protection', cfg.use_slm_exit ? 'SL-M (Exchange)' : 'Software SL'],
