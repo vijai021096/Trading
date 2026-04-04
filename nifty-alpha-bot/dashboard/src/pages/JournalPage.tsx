@@ -75,6 +75,18 @@ const KNOWN_STRATEGIES = [
   'TREND_CONTINUATION',
   'BREAKOUT_MOMENTUM',
   'REVERSAL_SNAP',
+  'BOUNCE_REJECTION',
+  'EXPIRY_DAY',
+  'EMA_FAN',
+  'PREV_DAY_BREAK',
+  'LIQUIDITY_SWEEP',
+  'GAP_MOMENTUM',
+  'VOLUME_THRUST',
+  'MACD_MOMENTUM',
+  'HAMMER_REVERSAL',
+  'CONSECUTIVE_MOMENTUM',
+  'BB_BREAKOUT',
+  'INTRADAY_REVERSAL',
   'GAP_FADE',
   'INSIDE_BAR_BREAK',
   'VWAP_CROSS',
@@ -252,13 +264,18 @@ function gradeStyles(grade: 'A' | 'B' | 'C' | 'D') {
 function strategyChipClass(strategy?: string): string {
   const s = strategy || ''
   if (s.includes('TREND_CONTINUATION')) return 'bg-green/10 text-green border-green/20'
-  if (s.includes('BREAKOUT')) return 'bg-accent/10 text-accent-l border-accent/20'
-  if (s.includes('REVERSAL')) return 'bg-red/10 text-red-l border-red/20'
-  if (s.includes('GAP')) return 'bg-amber/10 text-amber border-amber/20'
+  if (s.includes('BREAKOUT') || s.includes('BB_BREAKOUT')) return 'bg-accent/10 text-accent-l border-accent/20'
+  if (s.includes('REVERSAL') || s.includes('HAMMER')) return 'bg-red/10 text-red-l border-red/20'
+  if (s.includes('GAP') || s.includes('PREV_DAY')) return 'bg-amber/10 text-amber border-amber/20'
+  if (s.includes('LIQUIDITY') || s.includes('VOLUME')) return 'bg-cyan/10 text-cyan border-cyan/20'
+  if (s.includes('MACD') || s.includes('CONSECUTIVE')) return 'bg-amber/8 text-amber border-amber/15'
+  if (s.includes('EXPIRY')) return 'bg-accent/8 text-accent border-accent/15'
+  if (s.includes('BOUNCE')) return 'bg-cyan/10 text-cyan border-cyan/20'
   if (s.includes('INSIDE')) return 'bg-cyan/10 text-cyan border-cyan/20'
   if (s.includes('VWAP')) return 'bg-cyan/10 text-cyan border-cyan/20'
   if (s.includes('ORB')) return 'bg-amber/10 text-amber border-amber/20'
   if (s.includes('EMA')) return 'bg-green/8 text-green border-green/15'
+  if (s.includes('INTRADAY')) return 'bg-cyan/10 text-cyan border-cyan/20'
   return 'bg-surface text-text2 border-line/25'
 }
 

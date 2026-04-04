@@ -983,6 +983,26 @@ def clear_emergency_stop():
     return {"status": "CLEARED"}
 
 
+# All 13+ daily backtest strategies with their SL/target defaults
+_DAILY_SL_TARGET: dict = {
+    "TREND_CONTINUATION":    {"sl_pct": 0.30, "target_pct": 0.80},
+    "BREAKOUT_MOMENTUM":     {"sl_pct": 0.25, "target_pct": 0.70},
+    "REVERSAL_SNAP":         {"sl_pct": 0.20, "target_pct": 0.55},
+    "BOUNCE_REJECTION":      {"sl_pct": 0.22, "target_pct": 0.55},
+    "EXPIRY_DAY":            {"sl_pct": 0.18, "target_pct": 0.40},
+    "EMA_FAN":               {"sl_pct": 0.15, "target_pct": 0.30},
+    "PREV_DAY_BREAK":        {"sl_pct": 0.15, "target_pct": 0.35},
+    "LIQUIDITY_SWEEP":       {"sl_pct": 0.18, "target_pct": 0.45},
+    "GAP_MOMENTUM":          {"sl_pct": 0.12, "target_pct": 0.28},
+    "VOLUME_THRUST":         {"sl_pct": 0.15, "target_pct": 0.35},
+    "MACD_MOMENTUM":         {"sl_pct": 0.15, "target_pct": 0.32},
+    "HAMMER_REVERSAL":       {"sl_pct": 0.16, "target_pct": 0.38},
+    "CONSECUTIVE_MOMENTUM":  {"sl_pct": 0.14, "target_pct": 0.32},
+    "BB_BREAKOUT":           {"sl_pct": 0.15, "target_pct": 0.35},
+    "INTRADAY_REVERSAL":     {"sl_pct": 0.21, "target_pct": 0.42},
+}
+
+
 @app.get("/api/strategy/config")
 def get_config():
     try:
@@ -990,8 +1010,14 @@ def get_config():
             SL_TARGET_BY_STRATEGY, STRATEGY_PRIORITY_BY_TREND,
             STRATEGY_BACKTEST_WR, STRATEGY_BACKTEST_PF,
         )
+        # Merge: daily strategies take precedence, intraday appended after
+        merged_sl_target = {**_DAILY_SL_TARGET}
+        for k, v in SL_TARGET_BY_STRATEGY.items():
+            if k not in merged_sl_target:
+                merged_sl_target[k] = {"sl_pct": v[0], "target_pct": v[1]}
+
         return {
-            "bot_version": "v3.1.0",
+            "bot_version": "v4.0.0",
             "capital": settings.capital,
             "lot_size": settings.lot_size,
             "vix_max": settings.vix_max,
@@ -1024,16 +1050,14 @@ def get_config():
             "daily_base_lots": settings.daily_base_lots,
             "daily_adaptive_window_start": settings.daily_adaptive_window_start,
             "daily_adaptive_window_end": settings.daily_adaptive_window_end,
-            "sl_target_by_strategy": {
-                k: {"sl_pct": v[0], "target_pct": v[1]} for k, v in SL_TARGET_BY_STRATEGY.items()
-            },
+            "sl_target_by_strategy": merged_sl_target,
             "strategy_priority_by_trend": {
                 k.value if hasattr(k, "value") else k: v
                 for k, v in STRATEGY_PRIORITY_BY_TREND.items()
             },
             "backtest_stats": {
                 s: {"win_rate": STRATEGY_BACKTEST_WR.get(s, 0), "profit_factor": STRATEGY_BACKTEST_PF.get(s, 0)}
-                for s in SL_TARGET_BY_STRATEGY
+                for s in merged_sl_target
             },
         }
     except Exception as e:

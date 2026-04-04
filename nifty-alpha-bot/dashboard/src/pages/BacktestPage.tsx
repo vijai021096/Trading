@@ -126,7 +126,7 @@ export function BacktestPage() {
             </div>
             <div>
               <h1 className="text-xl font-black text-text1 tracking-tight">Backtester</h1>
-              <p className="text-[11px] text-text3 mt-0.5">6-regime classifier · 7 strategies · walk-forward simulation</p>
+              <p className="text-[11px] text-text3 mt-0.5">6-regime classifier · 13 strategies · walk-forward simulation</p>
             </div>
           </div>
           <div className="bg-amber/8 border border-amber/20 rounded-xl px-4 py-2 max-w-sm">
@@ -148,9 +148,10 @@ export function BacktestPage() {
           <div>
             <div className="text-[11px] font-bold tracking-[0.12em] uppercase text-text2">Execution Realism</div>
             <p className="text-[12px] text-text3 mt-1 leading-relaxed">
-              6-regime market classifier adapts SL/target per market state. 7 strategies: Trend Continuation, Breakout Momentum,
-              Reversal Snap, Gap Fade, Range Bounce, Inside Bar Break, VWAP Cross. First calendar month uses 1-lot / ~₹25k-style sizing only;
-              peak drawdown guard scales down size (target max DD ~15%). IV smile + crush, dynamic slippage.
+              6-regime market classifier adapts SL/target per market state. 13 strategies: Trend Continuation, Breakout Momentum,
+              EMA Fan, Prev Day Break, Liquidity Sweep, Gap Momentum, Volume Thrust, MACD Momentum, Hammer Reversal, Consecutive Momentum,
+              BB Breakout, Reversal Snap, Expiry Day. First calendar month uses 1-lot sizing only; peak drawdown guard scales size.
+              IV smile + crush, dynamic slippage, best-of-cluster selection (same direction → only highest quality fires).
             </p>
           </div>
         </div>

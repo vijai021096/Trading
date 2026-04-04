@@ -5,7 +5,8 @@ import axios from 'axios'
 import {
   Settings, Key, Shield, CheckCircle2, XCircle, AlertCircle, Copy, Eye, EyeOff,
   RefreshCw, Loader2, BookOpen, Terminal, Globe, Lock, Zap, Clock, BarChart3,
-  ChevronRight, Layers, SlidersHorizontal,   Radio, Radar
+  ChevronRight, Layers, SlidersHorizontal, Radio, Radar,
+  TrendingUp, TrendingDown, Calendar, Activity
 } from 'lucide-react'
 
 export function SettingsPage() {
@@ -314,11 +315,28 @@ function StrategyParamsPanel() {
   const backtest = cfg.backtest_stats || {}
 
   const STRAT_ICONS: Record<string, { icon: any; color: string }> = {
-    ORB:               { icon: Zap,   color: 'text-amber' },
-    RELAXED_ORB:       { icon: Zap,   color: 'text-amber' },
+    // Daily backtest strategies
+    TREND_CONTINUATION:   { icon: TrendingUp,  color: 'text-green' },
+    BREAKOUT_MOMENTUM:    { icon: Zap,          color: 'text-amber' },
+    REVERSAL_SNAP:        { icon: TrendingDown, color: 'text-red' },
+    BOUNCE_REJECTION:     { icon: Shield,       color: 'text-cyan' },
+    EXPIRY_DAY:           { icon: Calendar,     color: 'text-accent' },
+    EMA_FAN:              { icon: BarChart3,    color: 'text-green' },
+    PREV_DAY_BREAK:       { icon: Layers,       color: 'text-amber' },
+    LIQUIDITY_SWEEP:      { icon: Activity,     color: 'text-cyan' },
+    GAP_MOMENTUM:         { icon: Zap,          color: 'text-accent' },
+    VOLUME_THRUST:        { icon: Activity,     color: 'text-green' },
+    MACD_MOMENTUM:        { icon: BarChart3,    color: 'text-amber' },
+    HAMMER_REVERSAL:      { icon: TrendingDown, color: 'text-cyan' },
+    CONSECUTIVE_MOMENTUM: { icon: TrendingUp,   color: 'text-accent' },
+    BB_BREAKOUT:          { icon: Zap,          color: 'text-red' },
+    INTRADAY_REVERSAL:    { icon: TrendingUp,   color: 'text-cyan' },
+    // Intraday strategies
+    ORB:               { icon: Zap,       color: 'text-amber' },
+    RELAXED_ORB:       { icon: Zap,       color: 'text-amber' },
     EMA_PULLBACK:      { icon: BarChart3, color: 'text-accent' },
     VWAP_RECLAIM:      { icon: BarChart3, color: 'text-cyan' },
-    MOMENTUM_BREAKOUT: { icon: Zap,   color: 'text-green' },
+    MOMENTUM_BREAKOUT: { icon: Zap,       color: 'text-green' },
   }
 
   return (
@@ -330,6 +348,7 @@ function StrategyParamsPanel() {
         </div>
         <span className="text-[12px] font-bold text-text1">Strategy Parameters</span>
         <span className="text-[9px] font-bold text-text3 bg-surface px-2 py-0.5 rounded-lg border border-line/20 uppercase tracking-wider">Live Config</span>
+        <span className="text-[9px] font-bold text-cyan bg-cyan/10 px-2 py-0.5 rounded-lg border border-cyan/20 uppercase tracking-wider">{Object.keys(slTarget).length} Strategies</span>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {Object.entries(slTarget).map(([name, params]: [string, any]) => {
