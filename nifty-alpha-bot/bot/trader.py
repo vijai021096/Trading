@@ -147,6 +147,8 @@ class KiteORBTrader:
         self._reentries_today: int = 0             # Change 3: max 1 re-entry per day
         self._fallback_entry_triggered: bool = False  # Change 2: anti-miss fallback (once per day)
         self._emergency_halt: bool = False         # Set True if SL+exit both fail — blocks further entries
+        self._reversal_entry_done: bool = False    # One counter-trend reversal entry per day max
+        self._plan_direction: str = ""             # Direction of today's plan (PUT/CALL)
 
         # Restore SL-M order ID from persisted state (survives restarts)
         self._active_slm_order_id: Optional[str] = self.sm.position.slm_order_id or None
@@ -462,6 +464,8 @@ class KiteORBTrader:
             self._last_trade_strategy = ""
             self._reentries_today = 0
             self._fallback_entry_triggered = False
+            self._reversal_entry_done = False
+            self._plan_direction = ""
             self._current_expiry = self.client.get_nearest_expiry("NIFTY")
             logger.info(f"Day rolled: {today} | Expiry: {self._current_expiry}")
 
@@ -1071,6 +1075,10 @@ class KiteORBTrader:
                 return
 
             self._daily_adaptive_plan = ev
+            # Capture plan direction from first leg for reversal detection
+            _first_legs = ev.get("executable_legs") or []
+            if _first_legs and not self._plan_direction:
+                self._plan_direction = _first_legs[0].get("direction") or ""
             _log_event(
                 "DAILY_ADAPTIVE_SCAN",
                 {**ev, "anchor_ym": list(anchor) if anchor else None},
@@ -1117,6 +1125,7 @@ class KiteORBTrader:
                 _log_event("DAILY_ADAPTIVE_SCAN", {**plan, "anchor_ym": None, "_extended_by_override": True})
 
         if idx >= len(legs) or idx >= day_cap:
+            self._maybe_reversal_entry(now, effective_vix, plan)
             return
 
         bw = plan.get("breakout_watch") or {}
@@ -1422,6 +1431,116 @@ class KiteORBTrader:
             target_pct_override=target_pct,
             risk_multiplier=1.0,
             fixed_option_lots=int(leg["lots"]),
+        )
+
+    def _maybe_reversal_entry(self, now: datetime, effective_vix: float, plan: Dict) -> None:
+        """
+        One counter-direction entry per day when the plan is exhausted but the live trend
+        has strongly reversed (e.g., plan was PUT all day, but market turned STRONG_BULL).
+
+        Requirements:
+          - Not already done today (_reversal_entry_done)
+          - State machine is IDLE (no open position)
+          - Risk allows another trade
+          - Time window: 11:00 – 14:00
+          - Live trend is STRONG_BULL or STRONG_BEAR with conviction >= 0.72
+          - Reversal direction is OPPOSITE to _plan_direction
+          - Intraday momentum confirms the new direction
+        """
+        if self._reversal_entry_done:
+            return
+        if not self.sm.is_idle:
+            return
+        can_trade, _ = self.risk.can_trade()
+        if not can_trade:
+            return
+
+        now_mins = now.hour * 60 + now.minute
+        if now_mins < 11 * 60 or now_mins >= 14 * 60:
+            return
+
+        trend = self._current_trend
+        if trend is None:
+            return
+        if trend.state.value not in ("STRONG_BULL", "STRONG_BEAR"):
+            return
+        if trend.conviction < 0.72:
+            return
+
+        reversal_dir = trend.direction  # "CALL" or "PUT"
+
+        # Must be opposite to today's plan
+        if not self._plan_direction or reversal_dir == self._plan_direction:
+            return
+
+        # Momentum confirmation on live candles
+        candles = self._candle_cache or self._refresh_candles(now)
+        momentum_ok, momentum_reason = self._confirm_intraday_momentum(reversal_dir, candles)
+        if not momentum_ok:
+            logger.info(
+                f"REVERSAL_ENTRY SKIP: momentum not confirmed for {reversal_dir} — {momentum_reason}"
+            )
+            return
+
+        # Direction-loss block still applies — if we already lost in this direction today, skip
+        if reversal_dir in self._lost_directions_today:
+            logger.info(
+                f"REVERSAL_ENTRY SKIP: {reversal_dir} already lost today — not retrying"
+            )
+            return
+
+        spot = self.client.get_quote("NIFTY 50", "NSE")
+        if spot <= 0:
+            return
+
+        logger.info(
+            f"REVERSAL_ENTRY: plan={self._plan_direction} → live={reversal_dir} "
+            f"trend={trend.state.value} conviction={trend.conviction:.2f} "
+            f"time={now.strftime('%H:%M')} — entering counter-direction trade"
+        )
+        _log_event("REVERSAL_ENTRY", {
+            "time": now.strftime("%H:%M"),
+            "plan_direction": self._plan_direction,
+            "reversal_direction": reversal_dir,
+            "trend_state": trend.state.value,
+            "conviction": round(trend.conviction, 2),
+            "vix": round(effective_vix, 1),
+        })
+
+        self._reversal_entry_done = True
+
+        from shared.regime_classifier import RegimeResult
+        stub_regime = RegimeResult(
+            regime="REVERSAL",
+            adx_proxy=0.0,
+            atr_current=1.0,
+            atr_avg=1.0,
+            atr_ratio=1.0,
+            vix=effective_vix,
+            rsi=50.0,
+            ema_fast=0.0,
+            ema_slow=0.0,
+            strategy_priority=[],
+            sl_target={},
+            detail=f"Intraday reversal: {self._plan_direction} → {reversal_dir}",
+        )
+        candle = {"close": spot, "open": spot, "high": spot, "low": spot, "ts": now}
+        self._enter_trade(
+            signal=reversal_dir,
+            strategy="INTRADAY_REVERSAL",
+            candle=candle,
+            atr=None,
+            filter_log={
+                "reversal_from": self._plan_direction,
+                "trend_state": trend.state.value,
+                "conviction": round(trend.conviction, 2),
+            },
+            vix=effective_vix,
+            regime=stub_regime,
+            sl_pct_override=0.21,
+            target_pct_override=0.42,
+            risk_multiplier=0.8,
+            fixed_option_lots=1,
         )
 
     def _scan_entry(self, now: datetime, candles: List[Dict], vix: Optional[float]) -> None:
