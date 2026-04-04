@@ -143,7 +143,7 @@ class DailyBacktestConfig:
     # Composite score 0-100: RSI zone + ADX strength + VIX favorability +
     # filter checks passed + strategy tier. Blocks low-quality setups.
     enable_quality_gate: bool = True
-    min_quality_score: float = 58.0        # 58 balances quality gate vs trade frequency (62 too restrictive)
+    min_quality_score: float = 48.0        # 48 allows aggressive daily-entry strategies through
 
     # ── Strong-trend relaxed quality gate (A- trades) ──
     # In strong trend regimes, market is forgiving — allow slightly weaker setups
@@ -275,6 +275,38 @@ class DailyBacktestConfig:
     enable_vwap_cross: bool = True         # Enabled: 100% WR on recent data, good R:R
     enable_ema_fresh_cross: bool = False   # Disabled: WR=11%, avg=-₹1,054 — losing
     enable_bounce_rejection: bool = True   # Prior day green bounce → today red rejection in bear trend → PUT
+
+    # ── 5 Aggressive daily-entry strategies ───────────────────────────────
+    enable_ema_fan: bool = True
+    sl_pct_ef: float = 0.15
+    target_pct_ef: float = 0.30
+
+    enable_prev_day_break: bool = True
+    sl_pct_pdb: float = 0.15
+    target_pct_pdb: float = 0.35
+
+    enable_liquidity_sweep: bool = True
+    sl_pct_ls: float = 0.18
+    target_pct_ls: float = 0.45
+
+    enable_gap_momentum: bool = True
+    sl_pct_gm: float = 0.12
+    target_pct_gm: float = 0.28
+
+    enable_volume_thrust: bool = True
+    sl_pct_vt: float = 0.15
+    target_pct_vt: float = 0.35
+
+    # ── EXPIRY_DAY strategy (Thursday weekly expiry) ──────────────────────
+    enable_expiry_day: bool = True
+    sl_pct_expiry: float = 0.18       # Tighter SL — theta decay limits holding time
+    target_pct_expiry: float = 0.40   # Lower target — option decays fast if underlying flat
+
+    # ── MEAN_REVERT quality gate (lower than default 58) ──────────────────
+    mean_revert_quality_min: float = 44.0
+
+    # ── MILD_TREND multi-trade ─────────────────────────────────────────────
+    mild_trend_max_trades: int = 2
 
     # ── Fallback signal: fires when no primary strategy matches ──
     # NOTE: Backtested as harmful for intraday (WR=10%). Kept as option, disabled by default.
@@ -434,15 +466,13 @@ def _classify_regime(
 # ═══════════════════════════════════════════════════════════════════
 
 STRATEGY_PRIORITY = {
-    "STRONG_TREND_UP":   ["BREAKOUT_MOMENTUM", "TREND_CONTINUATION", "EMA_FRESH_CROSS"],
-    # TC first: ensures TC always gets slot 1 (tier 20). BR fills slot 2 ahead of BM when a bounce rejected.
-    # BM gets slot when BR doesn't fire (prior day not green). Never blocks TC.
-    "STRONG_TREND_DOWN": ["TREND_CONTINUATION", "BOUNCE_REJECTION", "BREAKOUT_MOMENTUM", "EMA_FRESH_CROSS"],
+    "STRONG_TREND_UP":   ["EXPIRY_DAY", "TREND_CONTINUATION", "EMA_FAN", "BREAKOUT_MOMENTUM", "PREV_DAY_BREAK", "GAP_MOMENTUM", "VOLUME_THRUST", "REVERSAL_SNAP", "EMA_FRESH_CROSS"],
+    "STRONG_TREND_DOWN": ["EXPIRY_DAY", "TREND_CONTINUATION", "BOUNCE_REJECTION", "EMA_FAN", "BREAKOUT_MOMENTUM", "PREV_DAY_BREAK", "GAP_MOMENTUM", "VOLUME_THRUST", "EMA_FRESH_CROSS"],
     # BM removed from MILD_TREND: 29% WR (-₹47k on 21 trades) — ambiguous direction in mild trend kills edge
     # BOUNCE_REJECTION added: bearish MILD_TREND (EMA8<EMA21) with failed bounce is reliable PUT signal
-    "MILD_TREND":        ["BOUNCE_REJECTION", "EMA_FRESH_CROSS", "TREND_CONTINUATION", "VWAP_CROSS", "REVERSAL_SNAP"],
-    "MEAN_REVERT":       ["RANGE_BOUNCE", "GAP_FADE", "REVERSAL_SNAP", "VWAP_CROSS", "INSIDE_BAR_BREAK"],
-    "BREAKOUT":          ["BREAKOUT_MOMENTUM", "EMA_FRESH_CROSS", "INSIDE_BAR_BREAK", "TREND_CONTINUATION", "GAP_FADE"],
+    "MILD_TREND":        ["EXPIRY_DAY", "BOUNCE_REJECTION", "EMA_FAN", "TREND_CONTINUATION", "PREV_DAY_BREAK", "LIQUIDITY_SWEEP", "VWAP_CROSS", "GAP_MOMENTUM", "REVERSAL_SNAP", "EMA_FRESH_CROSS"],
+    "MEAN_REVERT":       ["EXPIRY_DAY", "LIQUIDITY_SWEEP", "TREND_CONTINUATION", "EMA_FAN", "PREV_DAY_BREAK", "REVERSAL_SNAP", "VOLUME_THRUST", "VWAP_CROSS", "GAP_MOMENTUM", "RANGE_BOUNCE", "GAP_FADE", "INSIDE_BAR_BREAK"],
+    "BREAKOUT":          ["EXPIRY_DAY", "BREAKOUT_MOMENTUM", "PREV_DAY_BREAK", "GAP_MOMENTUM", "EMA_FAN", "EMA_FRESH_CROSS", "INSIDE_BAR_BREAK", "TREND_CONTINUATION", "GAP_FADE"],
     "VOLATILE":          ["VOLATILE_ORB", "VOLATILE_REVERSAL", "VOLATILE_TREND_FOLLOW"],
 }
 
@@ -467,6 +497,12 @@ SL_TARGET_MAP = {
     "EMA_FRESH_CROSS":    ("sl_pct_efc", "target_pct_efc"),
     "FALLBACK_EMA_CROSS": ("sl_pct_fb", "target_pct_fb"),
     "BOUNCE_REJECTION":   ("sl_pct_br", "target_pct_br"),
+    "EXPIRY_DAY":         ("sl_pct_expiry", "target_pct_expiry"),
+    "EMA_FAN":          ("sl_pct_ef",  "target_pct_ef"),
+    "PREV_DAY_BREAK":   ("sl_pct_pdb", "target_pct_pdb"),
+    "LIQUIDITY_SWEEP":  ("sl_pct_ls",  "target_pct_ls"),
+    "GAP_MOMENTUM":     ("sl_pct_gm",  "target_pct_gm"),
+    "VOLUME_THRUST":    ("sl_pct_vt",  "target_pct_vt"),
     "VOLATILE_ORB":          ("sl_pct_br",   "target_pct_br"),   # reuse BREAKOUT_MOMENTUM values (0.25/0.70) but with regime mult
     "VOLATILE_REVERSAL":     ("sl_pct_rs",   "target_pct_rs"),   # reuse REVERSAL_SNAP values (0.20/0.55)
     "VOLATILE_TREND_FOLLOW": ("sl_pct_tc",   "target_pct_tc"),   # reuse TREND_CONTINUATION values (0.30/0.80)
@@ -815,6 +851,270 @@ def _check_vwap_cross(
     return None
 
 
+def _check_ema_fan(
+    i: int, closes: list, opens: list, highs: list, lows: list,
+    ema_fast_vals: list, ema_slow_vals: list, ema_trend_vals: list,
+    rsi: float, cfg: DailyBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """EMA Fan: all 3 EMAs fully aligned in same direction — strong momentum.
+    Lower bar than TREND_CONTINUATION: no pullback needed, just direction + body.
+    """
+    if i < 5:
+        return None
+    ema_f = ema_fast_vals[i]
+    ema_s = ema_slow_vals[i]
+    ema_t = ema_trend_vals[i]
+    today_close, today_open = closes[i], opens[i]
+    today_range = highs[i] - lows[i]
+    body_ratio = abs(today_close - today_open) / today_range if today_range > 0 else 0
+
+    if (ema_f > ema_s > ema_t
+            and today_close > today_open
+            and body_ratio >= 0.35
+            and 45.0 <= rsi <= 75.0):
+        return ("CALL", "EMA_FAN", {
+            "ema_fan": {"passed": True, "detail": f"Bull fan EMA8>EMA21>EMA50"},
+            "bias": "BULLISH", "bias_strength": 0.70, "setup_type": "TREND",
+        })
+
+    if (ema_f < ema_s < ema_t
+            and today_close < today_open
+            and body_ratio >= 0.35
+            and 25.0 <= rsi <= 55.0):
+        return ("PUT", "EMA_FAN", {
+            "ema_fan": {"passed": True, "detail": f"Bear fan EMA8<EMA21<EMA50"},
+            "bias": "BEARISH", "bias_strength": 0.70, "setup_type": "TREND",
+        })
+
+    return None
+
+
+def _check_prev_day_break(
+    i: int, closes: list, opens: list, highs: list, lows: list,
+    ema_fast_vals: list, ema_slow_vals: list, rsi: float,
+    cfg: DailyBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """Previous day high/low breakout with EMA confirmation.
+    Classic momentum: price closes above prev day high (bull) or below prev day low (bear).
+    """
+    if i < 2:
+        return None
+    prev_high, prev_low = highs[i - 1], lows[i - 1]
+    today_close, today_open = closes[i], opens[i]
+    today_range = highs[i] - lows[i]
+    body_ratio = abs(today_close - today_open) / today_range if today_range > 0 else 0
+    ema_f, ema_s = ema_fast_vals[i], ema_slow_vals[i]
+
+    if (today_close > prev_high
+            and ema_f > ema_s
+            and today_close > today_open
+            and body_ratio >= 0.35
+            and 45.0 <= rsi <= 78.0):
+        return ("CALL", "PREV_DAY_BREAK", {
+            "breakout": {"passed": True, "detail": f"Close {today_close:.0f} > prev_high {prev_high:.0f}"},
+            "bias": "BULLISH", "bias_strength": 0.72, "setup_type": "BREAKOUT",
+        })
+
+    if (today_close < prev_low
+            and ema_f < ema_s
+            and today_close < today_open
+            and body_ratio >= 0.35
+            and 22.0 <= rsi <= 55.0):
+        return ("PUT", "PREV_DAY_BREAK", {
+            "breakdown": {"passed": True, "detail": f"Close {today_close:.0f} < prev_low {prev_low:.0f}"},
+            "bias": "BEARISH", "bias_strength": 0.72, "setup_type": "BREAKOUT",
+        })
+
+    return None
+
+
+def _check_liquidity_sweep(
+    i: int, closes: list, opens: list, highs: list, lows: list,
+    ema_fast_vals: list, ema_slow_vals: list, vwap_vals: list,
+    rsi: float, cfg: DailyBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """Smart Money / ICT liquidity sweep: price briefly violates prior 3-day range then reverses.
+
+    Bull sweep: today's low sweeps below prior 3-day low, but today closes ABOVE that low → CALL
+    Bear sweep: today's high sweeps above prior 3-day high, but today closes BELOW that high → PUT
+    """
+    if i < 4:
+        return None
+    prior_low = min(lows[i - 3:i])
+    prior_high = max(highs[i - 3:i])
+    today_close, today_open = closes[i], opens[i]
+    today_low, today_high = lows[i], highs[i]
+    today_range = today_high - today_low
+    body_ratio = abs(today_close - today_open) / today_range if today_range > 0 else 0
+
+    if (today_low < prior_low
+            and today_close > prior_low
+            and today_close > today_open
+            and body_ratio >= 0.40
+            and 32.0 <= rsi <= 68.0):
+        sweep_depth = (prior_low - today_low) / prior_low if prior_low > 0 else 0
+        return ("CALL", "LIQUIDITY_SWEEP", {
+            "sweep": {"passed": True, "detail": f"Bull sweep low {today_low:.0f} < prior {prior_low:.0f} → reversed"},
+            "sweep_depth_pct": round(sweep_depth * 100, 2),
+            "bias": "BULLISH", "bias_strength": 0.80, "setup_type": "REVERSAL",
+        })
+
+    if (today_high > prior_high
+            and today_close < prior_high
+            and today_close < today_open
+            and body_ratio >= 0.40
+            and 32.0 <= rsi <= 68.0):
+        sweep_depth = (today_high - prior_high) / prior_high if prior_high > 0 else 0
+        return ("PUT", "LIQUIDITY_SWEEP", {
+            "sweep": {"passed": True, "detail": f"Bear sweep high {today_high:.0f} > prior {prior_high:.0f} → rejected"},
+            "sweep_depth_pct": round(sweep_depth * 100, 2),
+            "bias": "BEARISH", "bias_strength": 0.80, "setup_type": "REVERSAL",
+        })
+
+    return None
+
+
+def _check_gap_momentum(
+    i: int, closes: list, opens: list, highs: list, lows: list,
+    ema_fast_vals: list, ema_slow_vals: list, rsi: float,
+    cfg: DailyBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """Gap-and-go: strong opening gap with follow-through close in the same direction."""
+    if i < 2:
+        return None
+    prev_close = closes[i - 1]
+    today_close, today_open = closes[i], opens[i]
+    today_range = highs[i] - lows[i]
+    body_ratio = abs(today_close - today_open) / today_range if today_range > 0 else 0
+    ema_f, ema_s = ema_fast_vals[i], ema_slow_vals[i]
+    gap_pct = (today_open - prev_close) / prev_close if prev_close > 0 else 0
+    close_position = (today_close - lows[i]) / today_range if today_range > 0 else 0.5
+
+    if (gap_pct >= 0.003
+            and ema_f > ema_s
+            and close_position >= 0.55
+            and body_ratio >= 0.35
+            and 42.0 <= rsi <= 76.0):
+        return ("CALL", "GAP_MOMENTUM", {
+            "gap": {"passed": True, "detail": f"Gap up {gap_pct*100:.2f}%, closes strong"},
+            "gap_pct": round(gap_pct * 100, 2),
+            "bias": "BULLISH", "bias_strength": 0.68, "setup_type": "BREAKOUT",
+        })
+
+    if (gap_pct <= -0.003
+            and ema_f < ema_s
+            and close_position <= 0.45
+            and body_ratio >= 0.35
+            and 24.0 <= rsi <= 58.0):
+        return ("PUT", "GAP_MOMENTUM", {
+            "gap": {"passed": True, "detail": f"Gap down {gap_pct*100:.2f}%, closes weak"},
+            "gap_pct": round(gap_pct * 100, 2),
+            "bias": "BEARISH", "bias_strength": 0.68, "setup_type": "BREAKOUT",
+        })
+
+    return None
+
+
+def _check_volume_thrust(
+    i: int, closes: list, opens: list, highs: list, lows: list,
+    ema_fast_vals: list, ema_slow_vals: list, rsi: float,
+    volumes: list, cfg: DailyBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """High-volume directional thrust — institutional conviction day.
+    Volume > 1.4x 20-day average + strong directional body = institutions committing.
+    """
+    if i < 20:
+        return None
+    vol_window = volumes[max(0, i - 20):i]
+    avg_vol = sum(vol_window) / len(vol_window) if vol_window else 0
+    if avg_vol <= 0:
+        return None
+    today_vol = volumes[i]
+    vol_ratio = today_vol / avg_vol
+    if vol_ratio < 1.4:
+        return None
+
+    today_close, today_open = closes[i], opens[i]
+    today_range = highs[i] - lows[i]
+    body_ratio = abs(today_close - today_open) / today_range if today_range > 0 else 0
+    ema_f, ema_s = ema_fast_vals[i], ema_slow_vals[i]
+
+    if (today_close > today_open
+            and body_ratio >= 0.42
+            and ema_f > ema_s
+            and 42.0 <= rsi <= 76.0):
+        return ("CALL", "VOLUME_THRUST", {
+            "volume": {"passed": True, "detail": f"Volume {vol_ratio:.1f}x avg, bull body"},
+            "vol_ratio": round(vol_ratio, 2),
+            "bias": "BULLISH", "bias_strength": 0.75, "setup_type": "TREND",
+        })
+
+    if (today_close < today_open
+            and body_ratio >= 0.42
+            and ema_f < ema_s
+            and 24.0 <= rsi <= 58.0):
+        return ("PUT", "VOLUME_THRUST", {
+            "volume": {"passed": True, "detail": f"Volume {vol_ratio:.1f}x avg, bear body"},
+            "vol_ratio": round(vol_ratio, 2),
+            "bias": "BEARISH", "bias_strength": 0.75, "setup_type": "TREND",
+        })
+
+    return None
+
+
+def _check_expiry_day(
+    i: int, closes: list, opens: list, highs: list, lows: list,
+    ema_fast_vals: list, ema_slow_vals: list, vwap_vals: list,
+    rsi: float, trade_date: date,
+    cfg: DailyBacktestConfig,
+) -> Optional[Tuple[str, str, dict]]:
+    """Thursday weekly expiry play — enter on clear directional momentum on expiry day.
+
+    On NIFTY weekly expiry (Thursday), options with same-day expiry move sharply
+    if the underlying trends from open. Enter with EMA alignment + body confirmation.
+    Tighter SL/target because theta decay limits holding time if underlying stays flat.
+    """
+    if trade_date.weekday() != 3:  # Only Thursday
+        return None
+    if i < 3:
+        return None
+
+    today_close, today_open = closes[i], opens[i]
+    today_range = highs[i] - lows[i]
+    body_ratio = abs(today_close - today_open) / today_range if today_range > 0 else 0
+    ema_f, ema_s = ema_fast_vals[i], ema_slow_vals[i]
+    vwap = vwap_vals[i]
+    intraday_ret = (today_close - today_open) / today_open if today_open > 0 else 0
+
+    # Bullish expiry: EMA bull stack + green body + above VWAP + meaningful intraday move
+    if (ema_f > ema_s
+            and today_close > today_open
+            and body_ratio >= 0.42
+            and today_close > vwap
+            and 38.0 <= rsi <= 70.0
+            and intraday_ret >= 0.002):
+        return ("CALL", "EXPIRY_DAY", {
+            "expiry_day": {"passed": True, "detail": "Thursday expiry, bullish EMA + body + VWAP"},
+            "intraday_ret": round(intraday_ret * 100, 2),
+            "bias": "BULLISH", "bias_strength": 0.82, "setup_type": "EXPIRY",
+        })
+
+    # Bearish expiry: EMA bear stack + red body + below VWAP + meaningful intraday move
+    if (ema_f < ema_s
+            and today_close < today_open
+            and body_ratio >= 0.42
+            and today_close < vwap
+            and 30.0 <= rsi <= 62.0
+            and intraday_ret <= -0.002):
+        return ("PUT", "EXPIRY_DAY", {
+            "expiry_day": {"passed": True, "detail": "Thursday expiry, bearish EMA + body + VWAP"},
+            "intraday_ret": round(intraday_ret * 100, 2),
+            "bias": "BEARISH", "bias_strength": 0.82, "setup_type": "EXPIRY",
+        })
+
+    return None
+
+
 def _check_ema_fresh_cross(
     i: int, highs: list, lows: list, closes: list, opens: list,
     ema_fast_vals: list, ema_slow_vals: list, ema_trend_vals: list,
@@ -1155,6 +1455,13 @@ _STRATEGY_TIER: Dict[str, int] = {
     "VOLATILE_ORB":           15,
     "VOLATILE_REVERSAL":      13,
     "VOLATILE_TREND_FOLLOW":  11,
+    # Aggressive daily-entry strategies — new, calibrated conservatively until backtested
+    "EMA_FAN":          14,
+    "PREV_DAY_BREAK":   12,
+    "LIQUIDITY_SWEEP":  16,   # SMC setup — high edge when correct
+    "GAP_MOMENTUM":     11,
+    "VOLUME_THRUST":    14,
+    "EXPIRY_DAY":       13,
 }
 
 # Regime edge scores based on actual backtested WR:
@@ -1167,7 +1474,7 @@ _REGIME_QUALITY: Dict[str, int] = {
     "MILD_TREND":         20,
     "MEAN_REVERT":        10,
     "STRONG_TREND_DOWN":  18,
-    "STRONG_TREND_UP":    -25,  # Very heavy penalty — WR=8% empirically for CALL signals
+    "STRONG_TREND_UP":    15,   # Enabled: CALL trades on strong bull days with quality discount
     "BREAKOUT":           15,
 }
 
@@ -1616,6 +1923,9 @@ def run_daily_backtest(
             day_trade_cap = min(day_trade_cap, 2)
         elif vix > 17.0:
             day_trade_cap = min(day_trade_cap, 3)
+        # MILD_TREND and MEAN_REVERT: allow up to 2 trades when VIX is manageable
+        if regime in ("MILD_TREND", "MEAN_REVERT") and vix <= 22.0:
+            day_trade_cap = max(day_trade_cap, min(cfg.mild_trend_max_trades, cfg.max_trades_per_day))
 
         # Volatile days: max 1 trade — don't chain losses
         if regime == "VOLATILE":
@@ -1653,7 +1963,7 @@ def run_daily_backtest(
         if regime == "MILD_TREND":
             _blocked_today.add("BREAKOUT_MOMENTUM")
         elif regime == "MEAN_REVERT":
-            _blocked_today |= {"BREAKOUT_MOMENTUM", "BOUNCE_REJECTION"}
+            _blocked_today |= {"BOUNCE_REJECTION"}
 
         for strat_name in scan_order:
             if strat_name in _blocked_today:
@@ -1696,6 +2006,40 @@ def run_daily_backtest(
                     i, highs, lows, closes, opens,
                     ema_fast_vals, ema_slow_vals,
                     rsi, rsi_vals, cfg)
+            elif strat_name == "EMA_FAN":
+                if cfg.enable_ema_fan:
+                    signal_result = _check_ema_fan(
+                        i, closes, opens, highs, lows,
+                        ema_fast_vals, ema_slow_vals, ema_trend_vals,
+                        rsi, cfg)
+            elif strat_name == "PREV_DAY_BREAK":
+                if cfg.enable_prev_day_break:
+                    signal_result = _check_prev_day_break(
+                        i, closes, opens, highs, lows,
+                        ema_fast_vals, ema_slow_vals, rsi, cfg)
+            elif strat_name == "LIQUIDITY_SWEEP":
+                if cfg.enable_liquidity_sweep:
+                    signal_result = _check_liquidity_sweep(
+                        i, closes, opens, highs, lows,
+                        ema_fast_vals, ema_slow_vals, vwap_vals,
+                        rsi, cfg)
+            elif strat_name == "GAP_MOMENTUM":
+                if cfg.enable_gap_momentum:
+                    signal_result = _check_gap_momentum(
+                        i, closes, opens, highs, lows,
+                        ema_fast_vals, ema_slow_vals, rsi, cfg)
+            elif strat_name == "VOLUME_THRUST":
+                if cfg.enable_volume_thrust:
+                    signal_result = _check_volume_thrust(
+                        i, closes, opens, highs, lows,
+                        ema_fast_vals, ema_slow_vals, rsi,
+                        volumes, cfg)
+            elif strat_name == "EXPIRY_DAY":
+                if cfg.enable_expiry_day and regime != "VOLATILE":
+                    signal_result = _check_expiry_day(
+                        i, closes, opens, highs, lows,
+                        ema_fast_vals, ema_slow_vals, vwap_vals,
+                        rsi, trade_date, cfg)
             elif strat_name == "EMA_FRESH_CROSS":
                 if vix <= 21.0:
                     signal_result = _check_ema_fresh_cross(
@@ -1816,14 +2160,18 @@ def run_daily_backtest(
             # STRONG_TREND_UP keeps normal threshold (WR=8%, do NOT relax)
             # MILD_TREND also gets a small discount (WR=54%, reliable regime)
             is_strong_bear = regime == "STRONG_TREND_DOWN"
+            is_strong_bull = regime == "STRONG_TREND_UP"
             is_strong_trend = regime in ("STRONG_TREND_UP", "STRONG_TREND_DOWN")
-            if is_strong_bear:
+            if is_strong_bear or is_strong_bull:
                 effective_min_quality = cfg.min_quality_score - cfg.strong_trend_quality_discount
             elif regime == "MILD_TREND":
                 effective_min_quality = cfg.min_quality_score - 5.0
             elif regime == "VOLATILE":
                 # VOLATILE strategies have their own regime-specific guards; lower the bar
                 effective_min_quality = cfg.min_quality_score - 10.0
+            elif regime == "MEAN_REVERT":
+                # MEAN_REVERT: use dedicated lower gate — TC + REVERSAL_SNAP on range days
+                effective_min_quality = cfg.mean_revert_quality_min
             else:
                 effective_min_quality = cfg.min_quality_score
             if cfg.enable_quality_gate and quality < effective_min_quality:
@@ -1945,7 +2293,7 @@ def run_daily_backtest(
             # ── Re-entry after SL (Change 3 — tightened) ─────────────────────
             # STRONG_TREND_DOWN only (MILD_TREND removed); quality raised to 65;
             # max 1 re-entry per day; only after first leg (leg_idx==0).
-            reentry_regime_ok = is_strong_bear   # MILD_TREND no longer qualifies
+            reentry_regime_ok = is_strong_trend   # both UP and DOWN strong trends allow re-entry
             if (cfg.enable_reentry_after_sl
                     and trade["exit_reason"] == "SL_HIT"
                     and reentry_regime_ok
@@ -2048,6 +2396,7 @@ def collect_strategy_matches_for_index(
     cfg: DailyBacktestConfig,
     allowed: set,
     planning_mode: bool = False,
+    trade_date: Optional[date] = None,
 ) -> Tuple[str, List[Tuple[str, str, dict]], int]:
     """Regime + ordered strategy matches + VIX-capped day trade limit (backtest parity).
 
@@ -2086,6 +2435,9 @@ def collect_strategy_matches_for_index(
         day_trade_cap = min(day_trade_cap, 2)
     elif vix > 17.0:
         day_trade_cap = min(day_trade_cap, 3)
+    # MILD_TREND and MEAN_REVERT: allow up to 2 trades when VIX is manageable
+    if regime in ("MILD_TREND", "MEAN_REVERT") and vix <= 22.0:
+        day_trade_cap = max(day_trade_cap, min(cfg.mild_trend_max_trades, cfg.max_trades_per_day))
 
     # VOLATILE + strong trend override (same as run_daily_backtest)
     if (regime == "VOLATILE"
@@ -2133,6 +2485,41 @@ def collect_strategy_matches_for_index(
                 i, highs, lows, closes, opens,
                 ema_fast_vals, ema_slow_vals,
                 rsi, rsi_vals, cfg)
+        elif strat_name == "EMA_FAN":
+            if cfg.enable_ema_fan:
+                signal_result = _check_ema_fan(
+                    i, closes, opens, highs, lows,
+                    ema_fast_vals, ema_slow_vals, ema_trend_vals,
+                    rsi, cfg)
+        elif strat_name == "PREV_DAY_BREAK":
+            if cfg.enable_prev_day_break:
+                signal_result = _check_prev_day_break(
+                    i, closes, opens, highs, lows,
+                    ema_fast_vals, ema_slow_vals, rsi, cfg)
+        elif strat_name == "LIQUIDITY_SWEEP":
+            if cfg.enable_liquidity_sweep:
+                signal_result = _check_liquidity_sweep(
+                    i, closes, opens, highs, lows,
+                    ema_fast_vals, ema_slow_vals, vwap_vals,
+                    rsi, cfg)
+        elif strat_name == "GAP_MOMENTUM":
+            if cfg.enable_gap_momentum:
+                signal_result = _check_gap_momentum(
+                    i, closes, opens, highs, lows,
+                    ema_fast_vals, ema_slow_vals, rsi, cfg)
+        elif strat_name == "VOLUME_THRUST":
+            if cfg.enable_volume_thrust:
+                signal_result = _check_volume_thrust(
+                    i, closes, opens, highs, lows,
+                    ema_fast_vals, ema_slow_vals, rsi,
+                    volumes, cfg)
+        elif strat_name == "EXPIRY_DAY":
+            if cfg.enable_expiry_day and regime != "VOLATILE":
+                _ed_date = trade_date if trade_date is not None else date.today()
+                signal_result = _check_expiry_day(
+                    i, closes, opens, highs, lows,
+                    ema_fast_vals, ema_slow_vals, vwap_vals,
+                    rsi, _ed_date, cfg)
         elif strat_name == "EMA_FRESH_CROSS":
             if vix <= 21.0:
                 signal_result = _check_ema_fresh_cross(
