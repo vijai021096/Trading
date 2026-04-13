@@ -338,10 +338,16 @@ class KiteORBTrader:
                 _is_volatile = "VOLATILE" in plan_regime
                 _is_gap_trending = "GAP_TRENDING" in plan_regime
                 _conv_threshold = 0.55 if _is_volatile else 0.65
+                # VOLATILE requires STRONG_BULL/BEAR state (sharp move).
+                # GAP_TRENDING: BULL/BEAR state is enough when conviction >= 0.65
+                # (gap fills are slow grinds, STRONG_BULL may never fire but BULL + 0.65 conviction is clear).
+                _valid_states_volatile = ("STRONG_BULL", "STRONG_BEAR")
+                _valid_states_gap = ("STRONG_BULL", "STRONG_BEAR", "BULL", "BEAR")
+                _valid_states = _valid_states_volatile if _is_volatile else _valid_states_gap
                 if ((_is_volatile or _is_gap_trending)
                         and setup_type != "GAP_REVERSAL"
                         and conviction >= _conv_threshold
-                        and self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR")):
+                        and self._current_trend.state.value in _valid_states):
                     live_dir = "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
                     if live_dir != direction:
                         _label = "VOLATILE_DIR_OVERRIDE" if _is_volatile else "GAP_DIR_OVERRIDE"
@@ -1849,14 +1855,15 @@ class KiteORBTrader:
             regime_strategies = set(self._daily_regime.allowed_strategies)
             strategy_list = [s for s in strategy_list if s in regime_strategies]
             regime_direction = self._daily_regime.allowed_direction
-            # GAP_TRENDING direction unlock: if strong intraday trend contradicts the gap direction,
+            # GAP_TRENDING direction unlock: if intraday trend contradicts the gap direction,
             # open both directions so _resolve_leg_direction can follow live trend per-leg.
+            # BULL/BEAR state is sufficient (gap fills are slow grinds, not sharp STRONG moves).
             if ("GAP_TRENDING" in self._daily_regime.name
                     and self._current_trend
                     and self._current_trend.conviction >= 0.65
-                    and self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR")):
+                    and self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR", "BULL", "BEAR")):
                 _gap_dir = "CALL" if "BULL" in self._daily_regime.name else "PUT"
-                _live_dir = "CALL" if self._current_trend.state.value == "STRONG_BULL" else "PUT"
+                _live_dir = "CALL" if self._current_trend.state.value in ("STRONG_BULL", "BULL") else "PUT"
                 if _gap_dir != _live_dir:
                     logger.info(
                         f"GAP_TRENDING_DIR_UNLOCK: gap={_gap_dir} but live={_live_dir} "
