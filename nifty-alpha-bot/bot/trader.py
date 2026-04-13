@@ -331,15 +331,22 @@ class KiteORBTrader:
                 conviction = self._current_trend.conviction
                 plan_regime = str((self._daily_adaptive_plan or {}).get("regime", ""))
                 # VOLATILE regime: daily bar direction is uncertain — let strong live trend decide.
-                # Exception: GAP_REVERSAL legs are intentional fade trades — don't override with trend.
-                if ("VOLATILE" in plan_regime
+                # GAP_TRENDING regime: gap may reverse intraday — if strong live trend contradicts
+                # the gap direction, follow live trend. Higher conviction bar (0.65 vs 0.55)
+                # since gap days are directional and we need real confirmation, not a bounce.
+                # Exception: GAP_REVERSAL legs are intentional fade trades — don't override.
+                _is_volatile = "VOLATILE" in plan_regime
+                _is_gap_trending = "GAP_TRENDING" in plan_regime
+                _conv_threshold = 0.55 if _is_volatile else 0.65
+                if ((_is_volatile or _is_gap_trending)
                         and setup_type != "GAP_REVERSAL"
-                        and conviction >= 0.55
+                        and conviction >= _conv_threshold
                         and self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR")):
                     live_dir = "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
                     if live_dir != direction:
+                        _label = "VOLATILE_DIR_OVERRIDE" if _is_volatile else "GAP_DIR_OVERRIDE"
                         logger.info(
-                            f"VOLATILE_DIR_OVERRIDE: daily plan={direction} → live trend={live_dir} "
+                            f"{_label}: daily plan={direction} → live trend={live_dir} "
                             f"(conviction={conviction:.2f}, regime={plan_regime}, setup={setup_type})"
                         )
                         return live_dir
@@ -1842,6 +1849,20 @@ class KiteORBTrader:
             regime_strategies = set(self._daily_regime.allowed_strategies)
             strategy_list = [s for s in strategy_list if s in regime_strategies]
             regime_direction = self._daily_regime.allowed_direction
+            # GAP_TRENDING direction unlock: if strong intraday trend contradicts the gap direction,
+            # open both directions so _resolve_leg_direction can follow live trend per-leg.
+            if ("GAP_TRENDING" in self._daily_regime.name
+                    and self._current_trend
+                    and self._current_trend.conviction >= 0.65
+                    and self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR")):
+                _gap_dir = "CALL" if "BULL" in self._daily_regime.name else "PUT"
+                _live_dir = "CALL" if self._current_trend.state.value == "STRONG_BULL" else "PUT"
+                if _gap_dir != _live_dir:
+                    logger.info(
+                        f"GAP_TRENDING_DIR_UNLOCK: gap={_gap_dir} but live={_live_dir} "
+                        f"(conviction={self._current_trend.conviction:.2f}) — unlocking both directions"
+                    )
+                    regime_direction = None
         else:
             regime_direction = None
 
