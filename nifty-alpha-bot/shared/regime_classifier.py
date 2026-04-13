@@ -2,12 +2,23 @@
 Daily Regime Classifier — the PERMISSION layer.
 
 Runs ONCE per day (pre-market / at 9:15) using daily OHLC data.
-Classifies into 1 of 8 regimes that gate:
+Classifies into 1 of 10 regimes that gate:
   - Which strategies are allowed
   - Direction (CALL / PUT only)
   - Max trades, time windows, risk sizing
 
 CRITICAL RULE: Regime = Permission, NOT Entry.
+
+Regime ladder (gap_pct = today_open vs prev_close):
+  gap > 2.5% OR VIX > 38  → SKIP_VOLATILE   (true panic, stay out)
+  gap 1.0–2.5% + direction → GAP_TRENDING_BULL / GAP_TRENDING_BEAR  (NEW)
+  gap 0.3% + prev green    → STRONG_BULL
+  gap -0.3% + prev red     → STRONG_BEAR
+  prev_range tight + BULL  → BULL_BREAKOUT
+  prev_range tight + BEAR  → BEAR_BREAKOUT
+  5d_ret > 0 + flat open   → BULL_PULLBACK
+  5d_ret < 0 + flat open   → BEAR_PULLBACK
+  else                     → SKIP_RANGING
 """
 from __future__ import annotations
 
@@ -161,18 +172,64 @@ REGIME_DEFS: Dict[str, DailyRegime] = {
             min_quality_score=3,
         ),
     ),
+    # ── Gap-trending regimes (NEW) ───────────────────────────────────────────
+    # Fired on gap days (1.0–2.5%) that are too large for STRONG_BULL/BEAR
+    # but too clean to skip. These are the best momentum days of the year —
+    # war/tariff/macro events gap + continue. Use gap-follow strategies only,
+    # tight morning window, wider SL to absorb gap volatility.
+    "GAP_TRENDING_BULL": DailyRegime(
+        name="GAP_TRENDING_BULL",
+        allowed_direction="CALL",
+        allowed_strategies=[
+            "GAP_MOMENTUM", "TREND_CONTINUATION", "BREAKOUT_MOMENTUM",
+            "VOLUME_THRUST", "EMA_FAN", "CONSECUTIVE_MOMENTUM",
+        ],
+        otm_offset=0,
+        should_trade=True,
+        execution=ExecutionParams(
+            max_trades=3,
+            window_start="09:16",
+            window_end="12:00",   # morning momentum only — gap days fade by afternoon
+            sl_pct_override=0.35, # wider SL: gap day whipsaws are violent
+            risk_pct=0.030,       # 3% risk — high-conviction directional day
+            min_quality_score=3,
+            trail_trigger_pct=0.30,
+            trail_lock_step_pct=0.15,
+        ),
+    ),
+    "GAP_TRENDING_BEAR": DailyRegime(
+        name="GAP_TRENDING_BEAR",
+        allowed_direction="PUT",
+        allowed_strategies=[
+            "GAP_MOMENTUM", "TREND_CONTINUATION", "BREAKOUT_MOMENTUM",
+            "VOLUME_THRUST", "EMA_FAN", "CONSECUTIVE_MOMENTUM",
+        ],
+        otm_offset=0,
+        should_trade=True,
+        execution=ExecutionParams(
+            max_trades=3,
+            window_start="09:16",
+            window_end="12:00",
+            sl_pct_override=0.35,
+            risk_pct=0.030,
+            min_quality_score=3,
+            trail_trigger_pct=0.30,
+            trail_lock_step_pct=0.15,
+        ),
+    ),
 }
 
 
 @dataclass
 class RegimeClassifierConfig:
-    vix_skip_threshold: float = 30.0
-    gap_skip_pct: float = 0.015
+    vix_skip_threshold: float = 38.0    # raised from 30 — VIX 30-38 is tradeable in war/macro env
+    gap_skip_pct: float = 0.050         # raised from 2.5% — only skip truly chaotic gaps (>1100 pts)
+    gap_trending_pct: float = 0.010     # NEW: gap 1.0–2.5% → GAP_TRENDING regime
     strong_gap_pct: float = 0.003
     strong_5d_ret_pct: float = 0.01
     breakout_prev_range_max: float = 120.0
     pullback_5d_ret_pct: float = 0.005
-    pullback_flat_open_pct: float = 0.002
+    pullback_flat_open_pct: float = 0.008  # raised from 0.2% — gap up to 0.8% with strong 5d trend = pullback day
 
 
 def _build_daily_ohlc(candles_5m: List[Dict[str, Any]], target_date: date) -> Optional[Dict[str, Any]]:
@@ -266,46 +323,58 @@ def classify_regime(
 
     effective_vix = vix if vix is not None else 14.0
 
-    # 1. SKIP_VOLATILE
+    # 1. SKIP_VOLATILE — only true panic: gap >2.5% OR VIX >38
+    #    (raised from 1.5%/30 — war/macro gaps 1-2% are momentum opportunities, not skips)
     if effective_vix > cfg.vix_skip_threshold or abs(gap_pct) > cfg.gap_skip_pct:
         return _make_regime("SKIP_VOLATILE", scores,
                            f"VIX={effective_vix:.1f} gap={gap_pct*100:.2f}%")
 
-    # 2. STRONG_BULL
+    # 2. GAP_TRENDING — gap 1.0–2.5%: too large for normal regimes, clear directional momentum.
+    #    War/tariff/macro gap days that continue in gap direction all morning.
+    #    Direction: gap up = CALL, gap down = PUT (follow the institutional flow).
+    if abs(gap_pct) >= cfg.gap_trending_pct:
+        if gap_pct > 0:
+            return _make_regime("GAP_TRENDING_BULL", scores,
+                               f"gap_up={gap_pct*100:.2f}% VIX={effective_vix:.1f} — gap momentum day")
+        else:
+            return _make_regime("GAP_TRENDING_BEAR", scores,
+                               f"gap_down={gap_pct*100:.2f}% VIX={effective_vix:.1f} — gap momentum day")
+
+    # 3. STRONG_BULL
     if (gap_pct >= cfg.strong_gap_pct
             and prev_is_green
             and five_day_ret > cfg.strong_5d_ret_pct):
         return _make_regime("STRONG_BULL", scores,
                            f"gap={gap_pct*100:.2f}% prev_green 5d_ret={five_day_ret*100:.2f}%")
 
-    # 3. STRONG_BEAR
+    # 4. STRONG_BEAR
     if (gap_pct <= -cfg.strong_gap_pct
             and prev_is_red
             and five_day_ret < -cfg.strong_5d_ret_pct):
         return _make_regime("STRONG_BEAR", scores,
                            f"gap={gap_pct*100:.2f}% prev_red 5d_ret={five_day_ret*100:.2f}%")
 
-    # 4. BULL_BREAKOUT
+    # 5. BULL_BREAKOUT
     if prev_range < cfg.breakout_prev_range_max and bias == "BULL":
         return _make_regime("BULL_BREAKOUT", scores,
                            f"prev_range={prev_range:.0f}<{cfg.breakout_prev_range_max} bias=BULL")
 
-    # 5. BEAR_BREAKOUT
+    # 6. BEAR_BREAKOUT
     if prev_range < cfg.breakout_prev_range_max and bias == "BEAR":
         return _make_regime("BEAR_BREAKOUT", scores,
                            f"prev_range={prev_range:.0f}<{cfg.breakout_prev_range_max} bias=BEAR")
 
-    # 6. BULL_PULLBACK
+    # 7. BULL_PULLBACK
     if five_day_ret > cfg.pullback_5d_ret_pct and gap_pct < cfg.pullback_flat_open_pct:
         return _make_regime("BULL_PULLBACK", scores,
                            f"5d_ret={five_day_ret*100:.2f}% gap={gap_pct*100:.2f}% (flat/down)")
 
-    # 7. BEAR_PULLBACK
+    # 8. BEAR_PULLBACK
     if five_day_ret < -cfg.pullback_5d_ret_pct and gap_pct > -cfg.pullback_flat_open_pct:
         return _make_regime("BEAR_PULLBACK", scores,
                            f"5d_ret={five_day_ret*100:.2f}% gap={gap_pct*100:.2f}% (flat/up)")
 
-    # 8. SKIP_RANGING
+    # 9. SKIP_RANGING
     return _make_regime("SKIP_RANGING", scores,
                        f"no_clear_signal gap={gap_pct*100:.2f}% 5d={five_day_ret*100:.2f}%")
 

@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     daily_strategy_filter: str = "BOTH"
     nifty_option_lot_size: int = 65
     daily_base_lots: int = 1
-    daily_adaptive_window_start: str = "09:16"
+    daily_adaptive_window_start: str = "09:30"
     daily_adaptive_window_end: str = "13:00"
     # Late window: tighter A+ filters apply after the early window
     late_window_start: str = "10:30"
@@ -160,7 +160,7 @@ class Settings(BaseSettings):
     # ── Overextension filter ──────────────────────────────────────────
     overextended_move_pct: float = 0.015    # if Nifty moved >1.5% intraday in signal direction, skip in late window
 
-    thursday_max_loss_pct: float = 0.06
+    thursday_max_loss_pct: float = 0.14  # expiry ATM options: 6% is too tight (hit by noise), 14% gives room
 
     # ── Options Filters ───────────────────────────────────────────
     min_option_price: float = 60.0

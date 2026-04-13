@@ -12,6 +12,8 @@ import {
 } from 'lucide-react'
 import { AreaChart, Area, ResponsiveContainer, Tooltip, ReferenceDot } from 'recharts'
 import { useTradingStore } from '../stores/tradingStore'
+import { BotBrain } from '../components/panels/BotBrain'
+import { CommandCenter } from '../components/panels/CommandCenter'
 
 export function Dashboard() {
   const { position, trades, events, dailyPnl, connected, lastUpdate, emergencyStop, botStatus, marketState } = useTradingStore()
@@ -49,6 +51,11 @@ export function Dashboard() {
   }, [todayTrades])
 
   const marketOpen = botStatus?.market_open ?? (new Date().getHours() >= 9 && (new Date().getHours() < 15 || (new Date().getHours() === 15 && new Date().getMinutes() <= 30)))
+  // showScanPanel: show scanning/conditions UI from 8:45 AM (pre-market prep) through close.
+  // Uses local time so it doesn't vanish when bot sends market_open=false during pre-market.
+  const _nowForPanel = new Date()
+  const _nowMinsForPanel = _nowForPanel.getHours() * 60 + _nowForPanel.getMinutes()
+  const showScanPanel = _nowMinsForPanel >= 8*60+45 && _nowMinsForPanel <= 15*60+30
   const marketStatus = botStatus?.market_status ?? (marketOpen ? 'OPEN' : 'CLOSED')
   const todayCount = botStatus?.trades_today ?? dailyPnl?.trades ?? 0
   const maxTrades = botStatus?.max_trades ?? 4
@@ -379,8 +386,8 @@ export function Dashboard() {
                           {lastTradeStrategy && <span className="text-text3 font-mono text-[10px]">{lastTradeStrategy.replace(/_/g, ' ')}</span>}
                         </div>
                       )}
-                  {/* WHY NO TRADE panel — always visible when market open + no active position */}
-                  {marketOpen && (
+                  {/* WHY NO TRADE panel — visible from 8:45 AM through close, independent of bot's market_open flag */}
+                  {showScanPanel && (
                     <div className="mt-3 space-y-2">
                       {/* 3-factor decision grid */}
                       <div className="text-[9px] font-bold text-text3 uppercase tracking-widest flex items-center gap-1.5 mb-1">
@@ -986,6 +993,12 @@ export function Dashboard() {
 
         {/* Right 1/3 */}
         <div className="space-y-5">
+
+          {/* ──────── BOT INTELLIGENCE (narrative + thinking + checklist) ──────── */}
+          <BotBrain />
+
+          {/* ──────── MANUAL CONTROLS ──────── */}
+          <CommandCenter />
 
           {/* ──────── LIVE DECISION STATE CARD ──────── */}
           {marketOpen && !isActive && (() => {

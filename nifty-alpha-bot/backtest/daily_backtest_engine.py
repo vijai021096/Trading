@@ -248,7 +248,7 @@ class DailyBacktestConfig:
     adx_mild_trend: float = 0.175
     atr_volatile_mult: float = 1.7
     atr_squeeze_mult: float = 0.65
-    vix_volatile: float = 22.5
+    vix_volatile: float = 32.0          # raised from 22.5 — war/macro env: VIX 22-32 still tradeable
     min_option_premium: float = 4.5
 
     # ── SL / Target: EMA_FRESH_CROSS ──
@@ -498,17 +498,25 @@ STRATEGY_PRIORITY = {
     "MILD_TREND":        ["EXPIRY_DAY", "BOUNCE_REJECTION", "EMA_FAN", "MACD_MOMENTUM", "TREND_CONTINUATION", "PREV_DAY_BREAK", "LIQUIDITY_SWEEP", "CONSECUTIVE_MOMENTUM", "VWAP_CROSS", "GAP_MOMENTUM", "REVERSAL_SNAP", "HAMMER_REVERSAL", "EMA_FRESH_CROSS"],
     "MEAN_REVERT":       ["EXPIRY_DAY", "LIQUIDITY_SWEEP", "HAMMER_REVERSAL", "TREND_CONTINUATION", "EMA_FAN", "PREV_DAY_BREAK", "REVERSAL_SNAP", "MACD_MOMENTUM", "VOLUME_THRUST", "VWAP_CROSS", "GAP_MOMENTUM", "RANGE_BOUNCE", "GAP_FADE", "INSIDE_BAR_BREAK"],
     "BREAKOUT":          ["EXPIRY_DAY", "BREAKOUT_MOMENTUM", "BB_BREAKOUT", "PREV_DAY_BREAK", "GAP_MOMENTUM", "EMA_FAN", "CONSECUTIVE_MOMENTUM", "EMA_FRESH_CROSS", "INSIDE_BAR_BREAK", "TREND_CONTINUATION", "GAP_FADE"],
-    "VOLATILE":          ["VOLATILE_ORB", "VOLATILE_REVERSAL", "VOLATILE_TREND_FOLLOW"],
+    # VOLATILE: elevated VIX (22-32) + high ATR — use full trend suite, not just 3 intraday strategies.
+    # Gap days with VIX 25-32 are the best momentum days — GAP_MOMENTUM leads, then trend follow.
+    "VOLATILE":          ["GAP_MOMENTUM", "TREND_CONTINUATION", "BREAKOUT_MOMENTUM", "VOLUME_THRUST", "EMA_FAN", "CONSECUTIVE_MOMENTUM", "VOLATILE_ORB", "VOLATILE_TREND_FOLLOW", "VOLATILE_REVERSAL"],
+    # GAP_TRENDING: permission-layer regime for 1-2.5% gap days (war/macro environment).
+    # Pure gap-follow — direction is locked by gap, so momentum strategies dominate.
+    "GAP_TRENDING":      ["GAP_MOMENTUM", "TREND_CONTINUATION", "BREAKOUT_MOMENTUM", "VOLUME_THRUST", "EMA_FAN", "CONSECUTIVE_MOMENTUM", "BB_BREAKOUT"],
 }
 
 # Regime-adaptive SL/target multipliers: (sl_mult, tgt_mult)
 REGIME_SL_TARGET_ADJUST = {
-    "STRONG_TREND_UP":   (1.0, 1.20),
-    "STRONG_TREND_DOWN": (1.0, 1.20),
-    "MILD_TREND":        (1.0, 1.05),
+    "STRONG_TREND_UP":   (1.0,  1.20),
+    "STRONG_TREND_DOWN": (1.0,  1.20),
+    "MILD_TREND":        (1.0,  1.05),
     "MEAN_REVERT":       (0.90, 0.95),
     "BREAKOUT":          (0.85, 1.15),
-    "VOLATILE":          (0.75, 0.75),
+    # VOLATILE: wider SL (gap days whipsaw on entry) + bigger targets (500pt moves = 10R+ potential)
+    "VOLATILE":          (1.20, 1.40),
+    # GAP_TRENDING: large gap = wide SL needed + very large target (gap days run all morning)
+    "GAP_TRENDING":      (1.30, 1.50),
 }
 
 SL_TARGET_MAP = {

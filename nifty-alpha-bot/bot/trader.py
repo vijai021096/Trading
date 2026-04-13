@@ -149,6 +149,7 @@ class KiteORBTrader:
         self._emergency_halt: bool = False         # Set True if SL+exit both fail — blocks further entries
         self._reversal_entry_done: bool = False    # One counter-trend reversal entry per day max
         self._plan_direction: str = ""             # Direction of today's plan (PUT/CALL)
+        self._first_scan_done: bool = False        # Skip first scan after bot start (opening candles too noisy)
 
         # Restore SL-M order ID from persisted state (survives restarts)
         self._active_slm_order_id: Optional[str] = self.sm.position.slm_order_id or None
@@ -411,6 +412,86 @@ class KiteORBTrader:
                 return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
             return None
 
+        elif setup_type == "EXPIRY":
+            # Expiry day synthetic leg — works at any time of day (open, mid-day, late).
+            # Uses intraday VWAP + 2-candle confirmation + exhaustion guard.
+            if len(candles) < 3:
+                logger.info(f"EXPIRY_WAIT: only {len(candles)} candle(s) — waiting for 3+")
+                return None
+
+            # Large gap at open (≥0.8%) → follow immediately, skip other checks
+            if abs(gap_pct) >= 0.008:
+                return "CALL" if gap_pct > 0 else "PUT"
+
+            # ── Intraday VWAP: recalculates from all today's candles ──────────
+            # Try volume-weighted first; fall back to simple typical-price avg
+            # (Nifty index candles from Kite have zero volume — price avg is used)
+            _tp_vol, _vol_sum = 0.0, 0.0
+            _tp_sum, _bar_count = 0.0, 0
+            for _c in candles:
+                _h = float(_c.get("high", 0) or 0)
+                _l = float(_c.get("low", 0) or 0)
+                _cl = float(_c.get("close", 0) or 0)
+                _v = float(_c.get("volume", 0) or 0)
+                _tp = (_h + _l + _cl) / 3
+                if _v > 0:
+                    _tp_vol += _tp * _v
+                    _vol_sum += _v
+                _tp_sum += _tp
+                _bar_count += 1
+            if _vol_sum > 0:
+                _vwap = _tp_vol / _vol_sum
+            elif _bar_count > 0:
+                _vwap = _tp_sum / _bar_count   # simple typical-price average
+            else:
+                _vwap = spot
+
+            # ── Last 2 candles ────────────────────────────────────────────────
+            _c1, _c2 = candles[-2], candles[-1]
+            _c1_green = float(_c1.get("close", 0)) > float(_c1.get("open", 0))
+            _c2_o  = float(_c2.get("open",  0) or 0)
+            _c2_c  = float(_c2.get("close", 0) or 0)
+            _c2_h  = float(_c2.get("high",  _c2_c) or _c2_c)
+            _c2_l  = float(_c2.get("low",   _c2_c) or _c2_c)
+            _c2_green = _c2_c > _c2_o
+            _c2_range = _c2_h - _c2_l
+
+            # ── Exhaustion guard: large wick into move direction = rejection ──
+            # Green candle with big upper wick → sellers pushing back at highs
+            # Red candle with big lower wick  → buyers stepping in at lows
+            _exhausted = False
+            if _c2_range > 0:
+                _upper_wick = _c2_h - max(_c2_o, _c2_c)
+                _lower_wick = min(_c2_o, _c2_c) - _c2_l
+                if _c2_green and _upper_wick / _c2_range > 0.45:
+                    _exhausted = True
+                if not _c2_green and _lower_wick / _c2_range > 0.45:
+                    _exhausted = True
+
+            # ── Entry conditions ──────────────────────────────────────────────
+            logger.info(
+                f"EXPIRY_CHECK: c1={'G' if _c1_green else 'R'} "
+                f"c2={'G' if _c2_green else 'R'} "
+                f"spot={spot:.0f} vwap={_vwap:.0f} "
+                f"above_vwap={spot > _vwap} exhausted={_exhausted} "
+                f"bars={len(candles)}"
+            )
+            if _c1_green and _c2_green and spot > _vwap and not _exhausted:
+                logger.info(
+                    f"EXPIRY_DIR: 2 green + above VWAP({_vwap:.0f}) → CALL"
+                )
+                return "CALL"
+            if not _c1_green and not _c2_green and spot < _vwap and not _exhausted:
+                logger.info(
+                    f"EXPIRY_DIR: 2 red + below VWAP({_vwap:.0f}) → PUT"
+                )
+                return "PUT"
+
+            # ── Fallback: established trend conviction ────────────────────────
+            if trend_conviction >= 0.45:
+                return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
+            return None
+
         # Default: use trend direction
         if trend_conviction >= 0.6:
             return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
@@ -418,7 +499,16 @@ class KiteORBTrader:
 
     def _in_daily_adaptive_window(self, now: datetime) -> bool:
         t = now.time()
-        start = self._t(self.cfg.daily_adaptive_window_start)
+        global_start = self._t(self.cfg.daily_adaptive_window_start)
+        # If regime defines its own window_start, take the LATER of global and regime start
+        # This prevents early entries (e.g. 9:16) when regime requires 9:30
+        if (self._daily_regime and
+                self._daily_regime.execution and
+                self._daily_regime.execution.window_start):
+            regime_start = self._t(self._daily_regime.execution.window_start)
+            start = max(global_start, regime_start)
+        else:
+            start = global_start
         # Prefer the regime's own execution window_end if defined
         if (self._daily_regime and
                 self._daily_regime.execution and
@@ -466,64 +556,86 @@ class KiteORBTrader:
             self._fallback_entry_triggered = False
             self._reversal_entry_done = False
             self._plan_direction = ""
+            self._first_scan_done = False
             self._current_expiry = self.client.get_nearest_expiry("NIFTY")
             logger.info(f"Day rolled: {today} | Expiry: {self._current_expiry}")
 
-            # Classify daily regime once per day
-            vix = self._get_vix()
-            try:
-                self._daily_regime = classify_regime_live(self.client, today, vix)
-                self._daily_regime_classified = True
-            except Exception as _e:
-                logger.warning(f"classify_regime_live failed: {_e} — using SKIP_VOLATILE fallback")
-                from shared.regime_classifier import REGIME_DEFS
-                self._daily_regime = REGIME_DEFS.get("SKIP_VOLATILE")
-                self._daily_regime_classified = True
+            self._classify_and_log_regime(today)
 
             if self.cfg.trading_engine.strip().lower() == "daily_adaptive" and load_anchor_ym() is None:
                 save_anchor_ym(today.year, today.month)
 
-            # Persist daily_regime + active_engine so API heartbeat can expose them to UI
-            try:
-                import json as _json
-                from pathlib import Path as _Path
-                _regime_file = _Path(__file__).parent.parent / "state" / "kite_bot_daily_regime.json"
-                _regime_name = self._daily_regime.name if self._daily_regime else None
-                _active_engine = (
-                    "BULL" if (_regime_name and ("BULL" in _regime_name or "UP" in _regime_name))
-                    else "BEAR" if (_regime_name and ("BEAR" in _regime_name or "DOWN" in _regime_name))
-                    else "NEUTRAL"
-                )
-                _regime_file.write_text(_json.dumps({
-                    "daily_regime": _regime_name,
-                    "active_engine": _active_engine,
-                    "classified_at": today.isoformat(),
-                }))
-            except Exception:
-                pass
+        elif not self._daily_regime_classified:
+            # Retry regime classification — initial attempt had insufficient candle data
+            # (bot started before 9:20 when the first 5-min candle wasn't yet complete).
+            # _last_candle_date is already today so the day-roll block above won't run,
+            # which is why we need this separate retry path.
+            self._classify_and_log_regime(today)
 
-            regime_msg = (
-                f"DAILY REGIME: {self._daily_regime.name}\n"
-                f"Direction: {self._daily_regime.allowed_direction or 'ANY'}\n"
-                f"Strategies: {', '.join(self._daily_regime.allowed_strategies)}\n"
-                f"OTM: {self._daily_regime.otm_offset} | Max trades: {self._daily_regime.execution.max_trades}\n"
-                f"Window: {self._daily_regime.execution.window_start}-{self._daily_regime.execution.window_end}\n"
-                f"Risk: {self._daily_regime.execution.risk_pct*100:.0f}%\n"
-                f"Detail: {self._daily_regime.detail}"
+    def _classify_and_log_regime(self, today: date) -> None:
+        """Classify daily regime and log/persist/notify result.
+        Sets _daily_regime_classified=False and returns early if candle data is still insufficient."""
+        vix = self._get_vix()
+        try:
+            self._daily_regime = classify_regime_live(self.client, today, vix)
+            _is_placeholder = (
+                self._daily_regime and
+                self._daily_regime.name == "SKIP_RANGING" and
+                "insufficient" in str(getattr(self._daily_regime, "detail", "")).lower()
             )
-            logger.info(regime_msg)
-            _log_event("DAILY_REGIME", {
-                "regime": self._daily_regime.name,
-                "direction": self._daily_regime.allowed_direction,
-                "strategies": self._daily_regime.allowed_strategies,
-                "otm_offset": self._daily_regime.otm_offset,
-                "should_trade": self._daily_regime.should_trade,
-                "max_trades": self._daily_regime.execution.max_trades,
-                "risk_pct": self._daily_regime.execution.risk_pct,
-                "scores": self._daily_regime.scores,
-                "detail": self._daily_regime.detail,
-            })
-            self._notify(f"📊 {regime_msg}")
+            if _is_placeholder:
+                logger.info("REGIME: insufficient_history — will retry next poll")
+                self._daily_regime_classified = False
+                return
+            else:
+                self._daily_regime_classified = True
+        except Exception as _e:
+            logger.warning(f"classify_regime_live failed: {_e} — using SKIP_VOLATILE fallback")
+            from shared.regime_classifier import REGIME_DEFS
+            self._daily_regime = REGIME_DEFS.get("SKIP_VOLATILE")
+            self._daily_regime_classified = True
+
+        # Persist daily_regime + active_engine so API heartbeat can expose them to UI
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            _regime_file = _Path(__file__).parent.parent / "state" / "kite_bot_daily_regime.json"
+            _regime_name = self._daily_regime.name if self._daily_regime else None
+            _active_engine = (
+                "BULL" if (_regime_name and ("BULL" in _regime_name or "UP" in _regime_name))
+                else "BEAR" if (_regime_name and ("BEAR" in _regime_name or "DOWN" in _regime_name))
+                else "NEUTRAL"
+            )
+            _regime_file.write_text(_json.dumps({
+                "daily_regime": _regime_name,
+                "active_engine": _active_engine,
+                "classified_at": today.isoformat(),
+            }))
+        except Exception:
+            pass
+
+        regime_msg = (
+            f"DAILY REGIME: {self._daily_regime.name}\n"
+            f"Direction: {self._daily_regime.allowed_direction or 'ANY'}\n"
+            f"Strategies: {', '.join(self._daily_regime.allowed_strategies)}\n"
+            f"OTM: {self._daily_regime.otm_offset} | Max trades: {self._daily_regime.execution.max_trades}\n"
+            f"Window: {self._daily_regime.execution.window_start}-{self._daily_regime.execution.window_end}\n"
+            f"Risk: {self._daily_regime.execution.risk_pct*100:.0f}%\n"
+            f"Detail: {self._daily_regime.detail}"
+        )
+        logger.info(regime_msg)
+        _log_event("DAILY_REGIME", {
+            "regime": self._daily_regime.name,
+            "direction": self._daily_regime.allowed_direction,
+            "strategies": self._daily_regime.allowed_strategies,
+            "otm_offset": self._daily_regime.otm_offset,
+            "should_trade": self._daily_regime.should_trade,
+            "max_trades": self._daily_regime.execution.max_trades,
+            "risk_pct": self._daily_regime.execution.risk_pct,
+            "scores": self._daily_regime.scores,
+            "detail": self._daily_regime.detail,
+        })
+        self._notify(f"📊 {regime_msg}")
 
     def _get_vix(self) -> Optional[float]:
         try:
@@ -643,9 +755,10 @@ class KiteORBTrader:
         _trail_conv = self._current_trend.conviction if self._current_trend else 0.5
         _trail_params = compute_trail_params(_trail_impulse, _trail_conv, _trail_session)
 
-        # Volatile days: wider break-even trigger to avoid whipsaw exits.
-        # Normal 7-8% BE is too tight — volatile options can spike 15%+ then retrace to target.
-        _volatile_regime = (self._daily_regime and self._daily_regime.name == "SKIP_VOLATILE")
+        # Volatile/gap days: wider break-even trigger to avoid whipsaw exits.
+        # Normal 7-8% BE is too tight — gap-day options can spike 15%+ then retrace to target.
+        _volatile_regime = (self._daily_regime and self._daily_regime.name in (
+            "SKIP_VOLATILE", "GAP_TRENDING_BULL", "GAP_TRENDING_BEAR"))
         if _volatile_regime:
             _trail_params.break_even_pct = max(_trail_params.break_even_pct, 0.15)
 
@@ -871,11 +984,19 @@ class KiteORBTrader:
                 sl_slip_info = f"\nSL slip: ₹{sl_slip:.1f}/unit ({sl_slip_pct:+.1f}%), extra: ₹{extra_loss:.0f}"
 
         net = trade_record["net_pnl"]
-        self.risk.record_trade(net)
+        # MANUAL_EXIT: user closed position themselves (profit or decision to exit).
+        # Don't count as consecutive loss — user choice, not a strategy failure.
+        # Also reset the daily plan so the bot doesn't immediately re-enter.
+        if exit_reason == "MANUAL_EXIT":
+            self.risk.record_trade_manual_exit(net)
+            self._daily_adaptive_plan = None   # force fresh scan — user changed direction
+            self._plan_direction = ""           # clear plan direction so reversal logic resets
+        else:
+            self.risk.record_trade(net)
         # Track last trade outcome for skip-after-loss and direction correlation logic
-        self._last_trade_was_loss = net < 0
+        self._last_trade_was_loss = (net < 0 and exit_reason != "MANUAL_EXIT")
         self._last_exit_direction = pos.direction
-        if net < 0:
+        if net < 0 and exit_reason != "MANUAL_EXIT":
             self._lost_directions_today.add(pos.direction)  # hard-block this direction for today
         self._last_exit_reason = exit_reason
         self._last_trade_pnl = net
@@ -892,8 +1013,9 @@ class KiteORBTrader:
             # Lift the direction block so it can be re-evaluated by should_allow_reentry
             self._lost_directions_today.discard(pos.direction)
 
-        # Volatile days: require much higher conviction for re-entry to avoid chasing losses
-        _volatile_day_reentry = (self._daily_regime and self._daily_regime.name == "SKIP_VOLATILE")
+        # Volatile/gap days: require much higher conviction for re-entry to avoid chasing losses
+        _volatile_day_reentry = (self._daily_regime and self._daily_regime.name in (
+            "SKIP_VOLATILE", "GAP_TRENDING_BULL", "GAP_TRENDING_BEAR"))
         _reentry_conf_threshold = 75.0 if _volatile_day_reentry else 58.0
 
         if (
@@ -1016,6 +1138,14 @@ class KiteORBTrader:
         if not self._in_daily_adaptive_window(now):
             return
 
+        # Startup guard: skip the very first scan after bot start.
+        # Opening candles (first 1-2 available at restart) are noisy and cause wrong first trades.
+        # One skipped scan (poll_seconds apart) gives trend/momentum detection time to settle.
+        if not self._first_scan_done:
+            self._first_scan_done = True
+            logger.info("STARTUP_GUARD: skipping first scan cycle to let trend detection settle")
+            return
+
         # Block daily_adaptive on SKIP_VOLATILE regime — too risky on high-VIX/gap days.
         # User can override via dashboard by setting max_trades > 0 in runtime override.
         if self._daily_regime and self._daily_regime.name == "SKIP_VOLATILE":
@@ -1073,6 +1203,99 @@ class KiteORBTrader:
                         f"(will retry next poll)"
                     )
                 return
+
+            # ── Gap trending day inject: if shared regime is GAP_TRENDING_BULL/BEAR but
+            # backtest engine found no legs (its strategies need more candle history),
+            # inject a synthetic NEUTRAL leg — direction resolved from live gap + VWAP.
+            if (not ev.get("executable_legs")
+                    and self._daily_regime
+                    and self._daily_regime.name in ("GAP_TRENDING_BULL", "GAP_TRENDING_BEAR")
+                    and self._daily_regime.should_trade):
+                _regime_name = self._daily_regime.name
+                _gap_dir = "CALL" if _regime_name == "GAP_TRENDING_BULL" else "PUT"
+                _sl = 0.25   # wider SL on gap days
+                _tgt = round(_sl * 2.5, 4)
+                ev["executable_legs"] = [{
+                    "leg": 1,
+                    "direction": None,          # NEUTRAL — live momentum resolves at entry
+                    "bias": "NEUTRAL",
+                    "bias_strength": 0.70,
+                    "setup_type": "EXPIRY",     # reuse EXPIRY logic (VWAP+2-candle)
+                    "was_neutral": True,
+                    "strategy": "GAP_DAY",
+                    "sl_pct": _sl,
+                    "target_pct": _tgt,
+                    "lots": 1,
+                    "filter_log": {
+                        "gap_day": {
+                            "passed": True,
+                            "detail": (
+                                f"Gap trending day synthetic leg — backtest 0 legs, "
+                                f"shared regime {_regime_name}, expected dir={_gap_dir}"
+                            ),
+                        },
+                        "regime": {"value": ev.get("regime")},
+                        "daily_leg": 1,
+                    },
+                }]
+                logger.info(
+                    f"GAP_DAY_INJECT: no backtest legs on gap day, "
+                    f"injecting NEUTRAL leg (direction resolved from live momentum) "
+                    f"sl={_sl:.0%} tgt={_tgt:.0%} regime={_regime_name} expected={_gap_dir}"
+                )
+
+            # ── Expiry day synthetic leg: if backtest engine found no legs but today IS
+            # expiry day and the shared regime is tradeable, inject one directional leg
+            # so the bot can still trade on moved-expiry Tuesdays / holiday-adjusted dates.
+            _today_d = datetime.now().date()
+            _is_expiry_today = (
+                _today_d.weekday() == 3
+                or (self._current_expiry is not None and _today_d == self._current_expiry)
+            )
+            if (not ev.get("executable_legs")
+                    and _is_expiry_today
+                    and self._daily_regime
+                    and self._daily_regime.should_trade):
+                _regime_name = self._daily_regime.name
+                _inj_dir: Optional[str] = None
+                if "BEAR" in _regime_name or "DOWN" in _regime_name:
+                    _inj_dir = "PUT"
+                elif "BULL" in _regime_name or "UP" in _regime_name:
+                    _inj_dir = "CALL"
+                if _inj_dir is not None:
+                    _sl = float(self.cfg.thursday_max_loss_pct)      # 14% expiry SL
+                    _tgt = round(_sl * 2.5, 4)                        # 35% target → 2.5x RR
+                    # Direction is NEUTRAL — resolved at entry time from live intraday
+                    # momentum (first 3+ candles). Never follow regime direction blindly
+                    # on expiry day since the day's actual direction must be confirmed live.
+                    ev["executable_legs"] = [{
+                        "leg": 1,
+                        "direction": None,          # NEUTRAL — live momentum resolves at entry
+                        "bias": "NEUTRAL",
+                        "bias_strength": 0.60,
+                        "setup_type": "EXPIRY",
+                        "was_neutral": True,
+                        "strategy": "EXPIRY_DAY",
+                        "sl_pct": _sl,
+                        "target_pct": _tgt,
+                        "lots": 1,
+                        "filter_log": {
+                            "expiry_day": {
+                                "passed": True,
+                                "detail": (
+                                    f"Expiry day synthetic leg — backtest 0 legs, "
+                                    f"shared regime {_regime_name}, direction resolved live"
+                                ),
+                            },
+                            "regime": {"value": ev.get("regime")},
+                            "daily_leg": 1,
+                        },
+                    }]
+                    logger.info(
+                        f"EXPIRY_DAY_INJECT: no backtest legs on expiry day, "
+                        f"injecting NEUTRAL leg (direction resolved from live momentum) "
+                        f"sl={_sl:.0%} tgt={_tgt:.0%} regime={_regime_name}"
+                    )
 
             self._daily_adaptive_plan = ev
             # Capture plan direction from first leg for reversal detection
@@ -1380,18 +1603,19 @@ class KiteORBTrader:
                         "conf": round(best_conf, 1),
                     })
                     return
-            # Strategy must be A+ tier
-            allowed = [s.strip() for s in self.cfg.late_window_strategies.split(",")]
-            if leg["strategy"] not in allowed:
-                logger.info(
-                    f"LATE_WINDOW SKIP: strategy {leg['strategy']} not in A+ list {allowed}"
-                )
-                self._skip_reasons_today.append({
-                    "strategy": leg["strategy"], "direction": leg.get("direction", ""),
-                    "reason": f"Late window — {leg['strategy']} not in A+ tier",
-                    "conf": round(best_conf, 1),
-                })
-                return
+            # Strategy must be A+ tier — EXPIRY_DAY and GAP_DAY always allowed (injected synthetic legs)
+            if leg["strategy"] not in ("EXPIRY_DAY", "GAP_DAY"):
+                allowed = [s.strip() for s in self.cfg.late_window_strategies.split(",")]
+                if leg["strategy"] not in allowed:
+                    logger.info(
+                        f"LATE_WINDOW SKIP: strategy {leg['strategy']} not in A+ list {allowed}"
+                    )
+                    self._skip_reasons_today.append({
+                        "strategy": leg["strategy"], "direction": leg.get("direction", ""),
+                        "reason": f"Late window — {leg['strategy']} not in A+ tier",
+                        "conf": round(best_conf, 1),
+                    })
+                    return
             # Overextension check — only in late window
             # Exception: very high conviction (>= 0.8) strong trend days can move 2-3%
             overextended, oe_reason = self._is_overextended(leg["direction"], candles)
@@ -1469,8 +1693,8 @@ class KiteORBTrader:
 
         reversal_dir = trend.direction  # "CALL" or "PUT"
 
-        # Must be opposite to today's plan
-        if not self._plan_direction or reversal_dir == self._plan_direction:
+        # Must be opposite to today's plan (or no plan at all — opportunistic entry on 0-leg days)
+        if self._plan_direction and reversal_dir == self._plan_direction:
             return
 
         # Momentum confirmation on live candles
@@ -1834,8 +2058,16 @@ class KiteORBTrader:
         if not candidates:
             return
 
-        # Filter by regime direction
-        if regime_direction:
+        # Filter by regime direction + runtime override
+        _ov_direction = str(_read_runtime_override().get("strategy_filter", "")).upper()
+        _direction_unlocked = _ov_direction in ("ALL", "BOTH")
+        if _ov_direction == "PE":
+            # Hard override: PUT only regardless of regime
+            candidates = [c for c in candidates if c["signal"] == "PUT"]
+        elif _ov_direction == "CE":
+            # Hard override: CALL only regardless of regime
+            candidates = [c for c in candidates if c["signal"] == "CALL"]
+        elif regime_direction and not _direction_unlocked:
             candidates = [c for c in candidates if c["signal"] == regime_direction]
         if not candidates:
             return
@@ -1894,7 +2126,10 @@ class KiteORBTrader:
     ) -> None:
         signal_time = time.time()
         spot = float(candle["close"])
-        is_thursday = datetime.now().date().weekday() == 3
+        # Expiry-day protections: fire on actual expiry date, not just Thursdays
+        # (handles Tuesday expiries when Thursday is a holiday)
+        _today = datetime.now().date()
+        is_thursday = (_today.weekday() == 3) or (_today == self._current_expiry)
 
         # ── Impulse / trend state (used throughout) ────────────────────────
         impulse_grade_now = (
@@ -2033,8 +2268,21 @@ class KiteORBTrader:
             effective_risk_pct = min(effective_risk_pct, base_risk_pct * 0.50)
 
         if fixed_option_lots is not None:
-            lots = int(fixed_option_lots)
             lot_unit = self.cfg.nifty_option_lot_size
+            # Expiry day: tighter SL (6%) means plan's pre-computed lots (capped by VIX)
+            # undersize the position. Recalculate using actual risk budget / actual SL.
+            if is_thursday and sl_pct <= self.cfg.thursday_max_loss_pct + 0.01:
+                _risk_budget = self.risk.current_capital * effective_risk_pct
+                _risk_per_lot = opt_price * sl_pct * lot_unit
+                _expiry_lots = max(1, int(_risk_budget / _risk_per_lot)) if _risk_per_lot > 0 else 1
+                _expiry_lots = min(_expiry_lots, self.cfg.live_max_lots)
+                lots = _expiry_lots
+                logger.info(
+                    f"EXPIRY_SIZING: risk_budget=₹{_risk_budget:.0f} / "
+                    f"risk_per_lot=₹{_risk_per_lot:.0f} (sl={sl_pct*100:.1f}%) → {lots} lots"
+                )
+            else:
+                lots = int(fixed_option_lots)
             qty = lots * lot_unit
             risk_per_unit = opt_price * sl_pct
             actual_risk = round(risk_per_unit * qty, 2)

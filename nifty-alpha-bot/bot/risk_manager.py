@@ -104,6 +104,19 @@ class RiskManager:
         except Exception:
             pass
 
+    def _effective_max_trades(self) -> int:
+        """Return max_trades_per_day, bumped up if runtime override has a higher value."""
+        try:
+            _ov_file = STATE_DIR / "kite_bot_runtime_override.json"
+            if _ov_file.exists():
+                _ov = json.loads(_ov_file.read_text()) or {}
+                _ov_max = int(_ov.get("max_trades") or 0)
+                if _ov_max > self.max_trades_per_day:
+                    return _ov_max
+        except Exception:
+            pass
+        return self.max_trades_per_day
+
     def can_trade(self) -> Tuple[bool, str]:
         """Check all risk gates before placing a new entry."""
         self.state.reset_for_new_day()
@@ -114,8 +127,9 @@ class RiskManager:
         if self.state.trading_halted:
             return False, f"Trading halted: {self.state.halt_reason}"
 
-        if self.state.trades_today >= self.max_trades_per_day:
-            return False, f"Max trades reached: {self.state.trades_today}/{self.max_trades_per_day}"
+        effective_max = self._effective_max_trades()
+        if self.state.trades_today >= effective_max:
+            return False, f"Max trades reached: {self.state.trades_today}/{effective_max}"
 
         # Daily loss check (allows 2 SL hits before stopping)
         if self.state.daily_pnl <= -self.max_daily_loss:
@@ -182,6 +196,22 @@ class RiskManager:
         else:
             self.state.consecutive_losses += 1
 
+        self._persist_state()
+
+    def record_trade_manual_exit(self, net_pnl: float) -> None:
+        """User manually closed the position. Update P&L and trade count but
+        never increment consecutive_losses — manual exits are user decisions,
+        not strategy failures. Also never reset consecutive_losses on profit
+        (streak tracking should only reflect bot-managed exits)."""
+        self.state.reset_for_new_day()
+        self.state.daily_pnl += net_pnl
+        self.state.trades_today += 1
+        self.current_capital += net_pnl
+
+        if self.current_capital > self.state.peak_capital:
+            self.state.peak_capital = self.current_capital
+
+        # consecutive_losses intentionally unchanged
         self._persist_state()
 
         # Check daily limit after recording
