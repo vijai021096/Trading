@@ -425,6 +425,31 @@ class KiteORBTrader:
                 return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
             return None
 
+        elif setup_type == "GAP_DAY":
+            # Gap trending day synthetic leg.
+            # Priority 1: if live intraday trend has reversed the gap direction (gap fill),
+            #             follow the live trend (conviction >= 0.65, BULL/BEAR state sufficient).
+            # Priority 2: otherwise follow the original gap direction.
+            _regime_name = self._daily_regime.name if self._daily_regime else ""
+            _gap_dir = "CALL" if "BULL" in _regime_name else "PUT"
+            if ("GAP_TRENDING" in _regime_name
+                    and self._current_trend
+                    and self._current_trend.conviction >= 0.65
+                    and self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR", "BULL", "BEAR")):
+                _live_dir = "CALL" if self._current_trend.state.value in ("STRONG_BULL", "BULL") else "PUT"
+                if _live_dir != _gap_dir:
+                    logger.info(
+                        f"GAP_DAY_LIVE_OVERRIDE: gap={_gap_dir} → live={_live_dir} "
+                        f"(conviction={self._current_trend.conviction:.2f}, state={self._current_trend.state.value})"
+                    )
+                    return _live_dir
+            # No reversal confirmed — follow gap direction
+            if abs(gap_pct) >= 0.008:
+                return _gap_dir
+            if trend_conviction >= 0.55:
+                return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
+            return None
+
         elif setup_type == "EXPIRY":
             # Expiry day synthetic leg — works at any time of day (open, mid-day, late).
             # Uses intraday VWAP + 2-candle confirmation + exhaustion guard.
@@ -1233,7 +1258,7 @@ class KiteORBTrader:
                     "direction": None,          # NEUTRAL — live momentum resolves at entry
                     "bias": "NEUTRAL",
                     "bias_strength": 0.70,
-                    "setup_type": "EXPIRY",     # reuse EXPIRY logic (VWAP+2-candle)
+                    "setup_type": "GAP_DAY",    # dedicated logic: live trend override + gap follow
                     "was_neutral": True,
                     "strategy": "GAP_DAY",
                     "sl_pct": _sl,
