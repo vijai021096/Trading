@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useWebSocket } from './hooks/useWebSocket'
 import { TopBar } from './components/layout/TopBar'
-import { Dashboard } from './pages/Dashboard'
+import { BotControl } from './pages/BotControl'
 import { TradeHistory } from './pages/TradeHistory'
 import { BacktestPage } from './pages/BacktestPage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -41,7 +41,7 @@ export default function App() {
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
           >
-            {page === 'dashboard' && <Dashboard />}
+            {page === 'dashboard' && <BotControl />}
             {page === 'trades'    && <TradeHistory />}
             {page === 'backtest'  && <BacktestPage />}
             {page === 'watch'    && <WatchPage />}

@@ -1,2774 +1,806 @@
 """
-Live Nifty options trader — Regime-aware, risk-sized, SL-M protected.
+Live NIFTY Options Trader V2 — Regime-aware, direction-dynamic, risk-sized.
 
-Execution model:
-  Entry: Aggressive limit order (LTP + 0.5% buffer) for fast fill without market slippage
-  SL:    SL-M order placed immediately after fill — exchange-level protection
-  Exit:  Cancel SL-M → place market sell on target/force-exit
-  Trail: Modify SL-M trigger price when trailing conditions met
+Architecture:
+  RegimeV2       → 5-state classifier (SKIP/DIRECTIONAL/RANGE_BREAK/PULLBACK/UNCERTAIN)
+                   Direction = BIAS, live candles confirm. Gap reversals handled naturally.
+  StrategyEngine → build_entry_signal() → EntrySignal with all computed params
+  Execution      → Aggressive limit entry + SL limit order (no SL-M)
+  PositionSM     → IDLE → ENTRY_PENDING → ACTIVE → EXIT_PENDING → CLOSED
+  RiskManager    → drawdown halt, daily loss limit, trade count gate
+
+Bot runs on a 5-second poll loop:
+  1. Refresh candles (Kite API)
+  2. On new day: classify regime, reset state
+  3. If IDLE + in window: try to build entry signal
+  4. If ENTRY_PENDING: confirm fill or cancel
+  5. If ACTIVE: check SL, target, trail; broker sync every 60s
+  6. Write narrative event every cycle (storyteller)
 """
 from __future__ import annotations
 
 import json
 import os as _os
-import sys
 import time
 import traceback
-from datetime import date, datetime, time as dtime
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
+from loguru import logger
 
 from kite_broker.client import KiteClient
-from kite_broker.token_manager import get_valid_token, schedule_daily_refresh
 from bot.risk_manager import RiskManager
-from bot.state_machine import PositionStateMachine, PositionState
+from bot.state_machine import PositionStateMachine, PositionState, save_position, reset_position
+from bot.strategy_engine import build_entry_signal, EntrySignal
 from shared.config import settings
-from shared.orb_engine import evaluate_orb_signal, compute_sl_target
-from shared.vwap_reclaim_engine import evaluate_vwap_reclaim_signal
-from shared.ema_pullback_engine import evaluate_ema_pullback_signal
-from shared.momentum_breakout_engine import evaluate_momentum_breakout_signal
-from shared.regime_detector import detect_regime, RegimeResult, SL_TARGET_MAP, STRATEGY_PRIORITY
-from shared.trend_detector import (
-    detect_trend, TrendResult, TrendState, STRATEGY_PRIORITY_BY_TREND,
-    SL_TARGET_BY_STRATEGY, TIER_PARAMS, assign_tier, compute_signal_confidence,
-)
-from shared.impulse_detector import detect_impulse, ImpulseResult, ImpulseGrade
-from shared.quality_filter import compute_trade_quality
+from shared.regime_v2 import RegimeV2, classify_regime_v2_live
 from shared.black_scholes import charges_estimate
-from shared.regime_classifier import (
-    classify_regime_live, DailyRegime, RegimeClassifierConfig, regime_conflicts_with_trend,
-)
-from backtest.daily_backtest_engine import evaluate_live_daily_adaptive
-from shared.adaptive_engine import (
-    get_session,
-    get_entry_threshold,
-    compute_dynamic_lots,
-    compute_strike_offset,
-    confirm_momentum_adaptive,
-    should_allow_reentry,
-    should_exit_on_structure,
-    compute_trail_params,
-    compute_profit_stop_threshold,
-    compute_atm_sl_from_nifty_atr,
-    compute_dynamic_target,
-    generate_bot_narrative,
-)
-from bot.daily_adaptive_support import (
-    daily_backtest_config_from_settings,
-    load_anchor_ym,
-    save_anchor_ym,
-)
 
-try:
-    from loguru import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
 
+# ── File paths ────────────────────────────────────────────────────────────────
 
 _STATE_DIR = Path(_os.environ.get("STATE_DIR", "/tmp"))
-EVENTS_LOG = _STATE_DIR / "kite_bot_events.jsonl"
-NIFTY_TOKEN_FILE = _STATE_DIR / "nifty_instrument_token.txt"
-_RUNTIME_OVERRIDE_FILE = _STATE_DIR / "kite_bot_runtime_override.json"
-_TOKEN_CACHE_FILE = _STATE_DIR / "kite_token_cache.json"
+EVENTS_LOG      = _STATE_DIR / "kite_bot_events.jsonl"
+HALT_FLAG       = _STATE_DIR / "kite_bot_halt.flag"
+OVERRIDE_FILE   = _STATE_DIR / "kite_bot_runtime_override.json"
+NARRATIVE_FILE  = _STATE_DIR / "kite_bot_narrative.json"
 
 
-def _read_runtime_override() -> dict:
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _log_event(event_type: str, payload: dict) -> None:
+    entry = {"ts": datetime.now().isoformat(), "event": event_type, **payload}
+    with open(EVENTS_LOG, "a") as f:
+        f.write(json.dumps(entry, default=str) + "\n")
+
+
+def _write_narrative(data: dict) -> None:
+    """Write bot's current thinking to a JSON file for the UI storyteller."""
     try:
-        if _RUNTIME_OVERRIDE_FILE.exists():
-            import json as _json
-            return _json.loads(_RUNTIME_OVERRIDE_FILE.read_text()) or {}
+        NARRATIVE_FILE.write_text(json.dumps({"ts": datetime.now().isoformat(), **data}, default=str))
+    except Exception:
+        pass
+
+
+def _read_override() -> dict:
+    try:
+        if OVERRIDE_FILE.exists():
+            return json.loads(OVERRIDE_FILE.read_text()) or {}
     except Exception:
         pass
     return {}
 
 
-def _log_event(event_type: str, payload: dict) -> None:
-    entry = {
-        "ts": datetime.now().isoformat(),
-        "event": event_type,
-        **payload,
-    }
-    with open(EVENTS_LOG, "a") as f:
-        f.write(json.dumps(entry, default=str) + "\n")
+def _t(time_str: str) -> dtime:
+    h, m = map(int, time_str.split(":"))
+    return dtime(h, m)
 
+
+# ── Trader ────────────────────────────────────────────────────────────────────
 
 class KiteORBTrader:
+    """
+    Main trader class. Call run() to start the poll loop.
+    """
 
     def __init__(self, client: KiteClient) -> None:
-        self.client = client
-        self.cfg = settings
-        self.risk = RiskManager(
-            capital=self.cfg.capital,
-            max_daily_loss_pct=self.cfg.max_daily_loss_pct,
-            max_trades_per_day=self.cfg.max_trades_per_day,
-            max_consecutive_losses=self.cfg.max_consecutive_losses,
-            max_daily_loss_hard=self.cfg.max_daily_loss_hard,
-            risk_per_trade_pct=self.cfg.risk_per_trade_pct,
-            lot_size=self.cfg.lot_size,
-            max_lots=self.cfg.max_lots,
-            max_drawdown_pct=self.cfg.max_drawdown_pct,
+        self.client    = client
+        self.cfg       = settings
+        self.risk      = RiskManager(
+            capital                = self.cfg.capital,
+            max_daily_loss_pct     = self.cfg.max_daily_loss_pct,
+            max_trades_per_day     = self.cfg.max_trades_per_day,
+            max_consecutive_losses = self.cfg.max_consecutive_losses,
+            max_daily_loss_hard    = self.cfg.max_daily_loss_hard,
+            risk_per_trade_pct     = self.cfg.risk_per_trade_pct,
+            lot_size               = self.cfg.lot_size,
+            max_lots               = self.cfg.live_max_lots,
+            max_drawdown_pct       = self.cfg.max_drawdown_pct,
         )
         self.sm = PositionStateMachine()
-        self._candle_cache: List[Dict] = []
-        self._last_candle_date: Optional[date] = None
-        self._nifty_token: Optional[int] = None
-        self._current_expiry: Optional[date] = None
-        self._trades_today = 0
-        self._strategies_used: Dict[str, int] = {}
-        self._heartbeat_count = 0
-        self._current_regime: Optional[RegimeResult] = None
-        self._current_trend: Optional[TrendResult] = None
-        self._current_impulse: Optional[ImpulseResult] = None
-        self._daily_regime: Optional[DailyRegime] = None
-        self._regime_logged_today = False
-        self._trend_logged_today = False
-        self._daily_regime_classified = False
-        self._day_stopped_profit = False
-        self._last_trade_was_loss: bool = False
-        self._last_exit_direction: Optional[str] = None
-        self._lost_directions_today: set = set()
-        self._lost_at_times: Dict[str, Any] = {}  # direction -> datetime when last SL hit
-        self._last_exit_reason: str = ""
-        self._last_trade_pnl: float = 0.0
-        self._last_trade_ts: Optional[str] = None
-        self._last_trade_strategy: str = ""
-        self._skip_reasons_today: list = []
-        self._last_broker_sync: float = 0.0
-        self._orb_signal_used = False
-        self._momentum_signal_used = False
-        self._ema_pullback_signal_used = False
-        self._reclaim_signal_used = False
-        self._daily_adaptive_plan: Optional[Dict[str, Any]] = None
-        self._late_trend_rescanned: bool = False   # guard: only one late-trend re-scan per day
-        self._last_entry_confidence: float = 0.0   # track confidence of last entry (for re-entry gate)
-        self._reentries_today: int = 0             # Change 3: max 1 re-entry per day
-        self._fallback_entry_triggered: bool = False  # Change 2: anti-miss fallback (once per day)
-        self._emergency_halt: bool = False         # Set True if SL+exit both fail — blocks further entries
-        self._reversal_entry_done: bool = False    # One counter-trend reversal entry per day max
-        self._plan_direction: str = ""             # Direction of today's plan (PUT/CALL)
-        self._first_scan_done: bool = False        # Skip first scan after bot start (opening candles too noisy)
 
-        # Restore SL-M order ID from persisted state (survives restarts)
-        self._active_slm_order_id: Optional[str] = self.sm.position.slm_order_id or None
-        if self._active_slm_order_id:
-            logger.info(f"Restored SL-M order ID from state: {self._active_slm_order_id}")
+        # ── Daily state ──────────────────────────────────────────────
+        self._candle_cache:       List[Dict]        = []
+        self._nifty_token:        Optional[int]     = None
+        self._last_candle_date:   Optional[date]    = None
+        self._regime:             Optional[RegimeV2] = None
+        self._regime_classified:  bool              = False
+        self._is_expiry_day:      bool              = False
+        self._vix:                Optional[float]   = None
+        self._first_scan_done:    bool              = False   # Skip first scan after restart
+        self._trades_today:       int               = 0
+        self._direction_lost_today: Optional[str]  = None    # Block re-entry in same direction
+        self._pending_order_id:   Optional[str]    = None
+        self._pending_signal:     Optional[EntrySignal] = None
+        self._last_broker_sync:   float             = 0.0
+        self._sl_order_id:        Optional[str]    = None    # Active SL limit order
+        self._heartbeat_count:    int               = 0
 
-    # ── Time helpers ─────────────────────────────────────────────
+        # ── Narrative state ──────────────────────────────────────────
+        self._narrative_status:   str = "STARTING"
+        self._narrative_detail:   str = "Initializing bot..."
 
-    def _now(self) -> datetime:
-        return datetime.now()
+        logger.info("KiteORBTrader V2 initialized — regime=V2, engine=StrategyEngine")
 
-    def _t(self, time_str: str) -> dtime:
-        h, m = map(int, time_str.split(":"))
-        return dtime(h, m)
+    # ── Main loop ────────────────────────────────────────────────────────────
 
-    def _market_active(self, now: datetime) -> bool:
-        t = now.time()
-        return self._t("09:15") <= t <= self._t(self.cfg.force_exit_time)
+    def run(self) -> None:
+        """Main poll loop. Runs until KeyboardInterrupt."""
+        logger.info("Bot started — entering poll loop (5s)")
+        _log_event("BOT_START", {"version": "v2", "capital": self.cfg.capital})
 
-    # ── Token hot-reload on auth failure ─────────────────────────
+        while True:
+            try:
+                now = datetime.now()
+                if self._market_active(now):
+                    self._tick(now)
+                else:
+                    self._off_market_narrative(now)
+                time.sleep(self.cfg.poll_seconds)
+            except KeyboardInterrupt:
+                logger.info("Bot stopped by user")
+                break
+            except Exception as e:
+                logger.error(f"TICK_ERROR: {e}\n{traceback.format_exc()}")
+                time.sleep(10)
 
-    def _try_reload_token(self, err: Exception) -> bool:
-        """If Kite returns an auth error, reload the token from the cache file.
-        Returns True if the token was successfully reloaded."""
-        if "api_key" not in str(err) and "access_token" not in str(err):
-            return False
-        import json as _json
-        try:
-            data = _json.loads(_TOKEN_CACHE_FILE.read_text())
-            from datetime import date as _date
-            if data.get("date") != _date.today().isoformat():
-                logger.warning("[TokenReload] Cache token is from a previous day — cannot auto-reload")
-                return False
-            new_token = data.get("access_token", "")
-            if not new_token:
-                return False
-            self.client.kite.set_access_token(new_token)
-            logger.info("[TokenReload] Reloaded today's token from cache — auth error resolved")
-            return True
-        except Exception as reload_err:
-            logger.warning(f"[TokenReload] Failed: {reload_err}")
-            return False
+    def _tick(self, now: datetime) -> None:
+        self._heartbeat_count += 1
 
-    # ── Candle management ─────────────────────────────────────────
+        # ── 1. Refresh candles & roll day ──────────────────────────
+        candles = self._refresh_candles(now)
+        if not candles:
+            self._set_narrative("WAITING", "No candle data yet — waiting for market open")
+            return
 
-    def _refresh_candles(self, now: datetime) -> List[Dict]:
-        if self._nifty_token is None:
-            self._nifty_token = self.client.get_nifty_token()
-            if self._nifty_token is None:
-                logger.warning("Could not get NIFTY instrument token")
-                return self._candle_cache
+        self._roll_day(now)
 
-        today = now.date()
-        from_dt = datetime(today.year, today.month, today.day, 9, 0, 0)
-        to_dt = now
+        spot = self._get_spot()
+        if spot <= 0:
+            self._set_narrative("WAITING", "Cannot get NIFTY spot price")
+            return
 
-        try:
-            self._candle_cache = self.client.get_candles(
-                self._nifty_token, from_dt, to_dt, "5minute"
-            )
-            if today != self._last_candle_date:
-                self._last_candle_date = today
-                logger.info(f"New trading day: {today}")
-        except Exception as e:
-            if self._try_reload_token(e):
-                try:
-                    self._candle_cache = self.client.get_candles(
-                        self._nifty_token, from_dt, to_dt, "5minute"
-                    )
-                except Exception as e2:
-                    logger.warning(f"Candle fetch failed after token reload: {e2}")
-            else:
-                logger.warning(f"Candle fetch failed: {e}")
+        # ── 2. Refresh VIX ─────────────────────────────────────────
+        if self._heartbeat_count % 12 == 0:  # every ~60s
+            self._vix = self._get_vix()
 
-        return self._candle_cache
+        # ── 3. Dispatch by position state ──────────────────────────
+        state = self.sm.position.state
 
-    def _refresh_daily_nifty_df(self) -> Optional[pd.DataFrame]:
-        if self._nifty_token is None:
-            self._nifty_token = self.client.get_nifty_token()
-            if self._nifty_token is None:
-                logger.warning("Could not get NIFTY token for daily bars")
-                return None
-        from datetime import timedelta
+        if state == PositionState.IDLE:
+            self._handle_idle(now, candles, spot)
+        elif state == PositionState.ENTRY_PENDING:
+            self._handle_entry_pending(now, spot)
+        elif state == PositionState.ACTIVE:
+            self._handle_active(now, spot)
+        elif state == PositionState.EXIT_PENDING:
+            self._handle_exit_pending(now, spot)
+        # CLOSED is transient — resets to IDLE immediately
 
-        to_dt = datetime.now()
-        from_dt = to_dt - timedelta(days=520)
-        try:
-            candles = self.client.get_candles(self._nifty_token, from_dt, to_dt, "day")
-            if not candles:
-                return None
-            return pd.DataFrame(candles)
-        except Exception as e:
-            if self._try_reload_token(e):
-                try:
-                    candles = self.client.get_candles(self._nifty_token, from_dt, to_dt, "day")
-                    return pd.DataFrame(candles) if candles else None
-                except Exception as e2:
-                    logger.warning(f"Daily NIFTY fetch failed after token reload: {e2}")
-            else:
-                logger.warning(f"Daily NIFTY fetch failed: {e}")
-            return None
+        # ── 4. Write narrative ─────────────────────────────────────
+        self._flush_narrative(now, spot)
 
-    def _confirm_intraday_momentum(self, direction: str, candles: List[Dict]) -> tuple[bool, str]:
-        """Adaptive momentum confirmation — delegates to shared/adaptive_engine.
-        EXTREME impulse: 1 confirming candle enough.
-        STRONG impulse / high conviction: 1 of last 2.
-        Normal: 2 of last 3 (original logic).
-        """
-        impulse_grade = (
-            str(self._current_impulse.grade)
-            if self._current_impulse is not None else "NONE"
-        )
-        conviction = self._current_trend.conviction if self._current_trend else 0.0
-        return confirm_momentum_adaptive(direction, candles, impulse_grade, conviction)
-
-    def _is_overextended(self, direction: str, candles: List[Dict]) -> tuple[bool, str]:
-        """Skip late entries if Nifty has already moved too far in signal direction."""
-        if len(candles) < 2:
-            return False, "insufficient candles"
-        open_price = candles[0]["open"]
-        current = candles[-1]["close"]
-        if not open_price:
-            return False, "no open price"
-        intraday_move = (current - open_price) / open_price
-        threshold = self.cfg.overextended_move_pct
-        if direction == "PUT" and intraday_move < -threshold:
-            return True, f"overextended DOWN: Nifty already {intraday_move*100:.1f}% from open (limit -{threshold*100:.1f}%)"
-        if direction == "CALL" and intraday_move > threshold:
-            return True, f"overextended UP: Nifty already +{intraday_move*100:.1f}% from open (limit +{threshold*100:.1f}%)"
-        return False, f"not overextended: intraday_move={intraday_move*100:.2f}%"
-
-    def _compute_composite_score(
-        self,
-        confidence: float,
-        filter_log: dict,
-        candles: Optional[List[Dict]] = None,
-        current_idx: Optional[int] = None,
-        direction: Optional[str] = None,
-    ) -> float:
-        """Composite entry score = confidence * 0.5 + quality * 0.5 + conviction * 20 + momentum_bonus.
-        Returns 0-130 range. Used to rank multiple signal candidates.
-        Now directionally aware: if recent candles confirm signal direction, +5 bonus.
-        """
-        quality = float((filter_log or {}).get("quality_score", 0.0))
-        conviction = self._current_trend.conviction if self._current_trend else 0.0
-        base = confidence * 0.5 + quality * 0.5 + conviction * 20
-
-        # Directional momentum bonus from recent completed candles
-        momentum_bonus = 0.0
-        if candles and direction and len(candles) >= 3:
-            last3 = candles[-3:]
-            bull = sum(1 for c in last3 if c.get("close", 0) >= c.get("open", 0))
-            bear = len(last3) - bull
-            if direction == "CALL" and bull >= 2:
-                momentum_bonus = 4.0   # 2+ bullish candles confirm CALL
-            elif direction == "PUT" and bear >= 2:
-                momentum_bonus = 4.0   # 2+ bearish candles confirm PUT
-            elif direction == "CALL" and bear == 3:
-                momentum_bonus = -3.0  # all 3 bearish = CALL signal is going stale
-            elif direction == "PUT" and bull == 3:
-                momentum_bonus = -3.0  # all 3 bullish = PUT signal is going stale
-
-        return base + momentum_bonus
-
-    def _resolve_leg_direction(self, leg: dict, candles: list, spot: float) -> Optional[str]:
-        """Resolve direction for NEUTRAL legs using live intraday data.
-        Returns 'CALL', 'PUT', or None (skip — no clear direction).
-        """
-        setup_type = leg.get("setup_type", "BREAKOUT")
-        fl = leg.get("filter_log") or {}
-        bias = leg.get("bias", "NEUTRAL")
-        strength = leg.get("bias_strength", 0.7)
-
-        # Already has a direction (non-NEUTRAL, non-None)
-        direction = leg.get("direction")
-        if direction not in (None, "NEUTRAL"):
-            if self._current_trend:
-                trend_dir = self._current_trend.direction
-                conviction = self._current_trend.conviction
-                plan_regime = str((self._daily_adaptive_plan or {}).get("regime", ""))
-                # VOLATILE regime: daily bar direction is uncertain — let strong live trend decide.
-                # GAP_TRENDING regime: gap may reverse intraday — if strong live trend contradicts
-                # the gap direction, follow live trend. Higher conviction bar (0.65 vs 0.55)
-                # since gap days are directional and we need real confirmation, not a bounce.
-                # Exception: GAP_REVERSAL legs are intentional fade trades — don't override.
-                _is_volatile = "VOLATILE" in plan_regime
-                _is_gap_trending = "GAP_TRENDING" in plan_regime
-                _conv_threshold = 0.55 if _is_volatile else 0.65
-                # VOLATILE requires STRONG_BULL/BEAR state (sharp move).
-                # GAP_TRENDING: BULL/BEAR state is enough when conviction >= 0.65
-                # (gap fills are slow grinds, STRONG_BULL may never fire but BULL + 0.65 conviction is clear).
-                _valid_states_volatile = ("STRONG_BULL", "STRONG_BEAR")
-                _valid_states_gap = ("STRONG_BULL", "STRONG_BEAR", "BULL", "BEAR")
-                _valid_states = _valid_states_volatile if _is_volatile else _valid_states_gap
-                if ((_is_volatile or _is_gap_trending)
-                        and setup_type != "GAP_REVERSAL"
-                        and conviction >= _conv_threshold
-                        and self._current_trend.state.value in _valid_states):
-                    live_dir = "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
-                    if live_dir != direction:
-                        _label = "VOLATILE_DIR_OVERRIDE" if _is_volatile else "GAP_DIR_OVERRIDE"
-                        logger.info(
-                            f"{_label}: daily plan={direction} → live trend={live_dir} "
-                            f"(conviction={conviction:.2f}, regime={plan_regime}, setup={setup_type})"
-                        )
-                        return live_dir
-                # Bias rejection for weak-biased directional legs (non-VOLATILE)
-                if strength < 0.75:
-                    if (direction == "CALL" and trend_dir == "BEAR" and conviction >= 0.75):
-                        return None  # weak bullish bias vs confirmed bear trend → skip
-                    if (direction == "PUT" and trend_dir == "BULL" and conviction >= 0.75):
-                        return None  # weak bearish bias vs confirmed bull trend → skip
-            return direction
-
-        # NEUTRAL: resolve from intraday data
-        if not candles or len(candles) < 2:
-            return None
-
-        prev_close = float(fl.get("prev_close", 0) or 0)
-        if not prev_close:
-            prev_close = float((self._daily_adaptive_plan or {}).get("breakout_watch", {}).get("last_close", 0) or 0)
-
-        open_px = float(candles[0].get("open", spot))
-        gap_pct = (open_px - prev_close) / prev_close if prev_close > 0 else 0
-
-        # Current intraday momentum
-        trend_dir = self._current_trend.direction if self._current_trend else "NEUTRAL"
-        trend_conviction = self._current_trend.conviction if self._current_trend else 0.0
-
-        if setup_type == "BREAKOUT":
-            if abs(gap_pct) >= 0.002:
-                return "CALL" if gap_pct > 0 else "PUT"
-            if trend_conviction >= 0.5:
-                return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
-            return None
-
-        elif setup_type == "GAP_FADE":
-            if gap_pct >= 0.004:
-                return "PUT"   # gap up → fade = PUT
-            if gap_pct <= -0.004:
-                return "CALL"  # gap down → fade = CALL
-            return None
-
-        elif setup_type == "COMPRESSION":  # INSIDE_BAR_BREAK
-            prev_high = float(fl.get("prev_high", 0) or 0)
-            prev_low = float(fl.get("prev_low", 0) or 0)
-            margin = float(fl.get("margin", 0) or 0)
-            if prev_high and prev_low:
-                if open_px > prev_high + margin:
-                    return "CALL"
-                if open_px < prev_low - margin:
-                    return "PUT"
-            if trend_conviction >= 0.5:
-                return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
-            return None
-
-        elif setup_type == "ORB_GAP":  # VOLATILE_ORB — follow gap if >= 1%
-            if abs(gap_pct) >= 0.010:
-                return "CALL" if gap_pct > 0 else "PUT"
-            if trend_conviction >= 0.6:
-                return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
-            return None
-
-        elif setup_type == "GAP_REVERSAL":  # VOLATILE_REVERSAL — fade large gap
-            if gap_pct >= 0.015:
-                return "PUT"   # gap up ≥1.5% → fade = PUT
-            if gap_pct <= -0.015:
-                return "CALL"  # gap down ≥1.5% → fade = CALL
-            return None
-
-        elif setup_type == "VOLATILE_TREND":  # VOLATILE_TREND_FOLLOW — live trend confirmation
-            if trend_conviction >= 0.55:
-                return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
-            return None
-
-        elif setup_type == "GAP_DAY":
-            # Gap trending day synthetic leg.
-            # Priority 1: if live intraday trend has reversed the gap direction (gap fill),
-            #             follow the live trend (conviction >= 0.65, BULL/BEAR state sufficient).
-            # Priority 2: otherwise follow the original gap direction.
-            _regime_name = self._daily_regime.name if self._daily_regime else ""
-            _gap_dir = "CALL" if "BULL" in _regime_name else "PUT"
-            if ("GAP_TRENDING" in _regime_name
-                    and self._current_trend
-                    and self._current_trend.conviction >= 0.65
-                    and self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR", "BULL", "BEAR")):
-                _live_dir = "CALL" if self._current_trend.state.value in ("STRONG_BULL", "BULL") else "PUT"
-                if _live_dir != _gap_dir:
-                    logger.info(
-                        f"GAP_DAY_LIVE_OVERRIDE: gap={_gap_dir} → live={_live_dir} "
-                        f"(conviction={self._current_trend.conviction:.2f}, state={self._current_trend.state.value})"
-                    )
-                    return _live_dir
-            # No reversal confirmed — follow gap direction
-            if abs(gap_pct) >= 0.008:
-                return _gap_dir
-            if trend_conviction >= 0.55:
-                return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
-            return None
-
-        elif setup_type == "EXPIRY":
-            # Expiry day synthetic leg — works at any time of day (open, mid-day, late).
-            # Uses intraday VWAP + 2-candle confirmation + exhaustion guard.
-            if len(candles) < 3:
-                logger.info(f"EXPIRY_WAIT: only {len(candles)} candle(s) — waiting for 3+")
-                return None
-
-            # Large gap at open (≥0.8%) → follow immediately, skip other checks
-            if abs(gap_pct) >= 0.008:
-                return "CALL" if gap_pct > 0 else "PUT"
-
-            # ── Intraday VWAP: recalculates from all today's candles ──────────
-            # Try volume-weighted first; fall back to simple typical-price avg
-            # (Nifty index candles from Kite have zero volume — price avg is used)
-            _tp_vol, _vol_sum = 0.0, 0.0
-            _tp_sum, _bar_count = 0.0, 0
-            for _c in candles:
-                _h = float(_c.get("high", 0) or 0)
-                _l = float(_c.get("low", 0) or 0)
-                _cl = float(_c.get("close", 0) or 0)
-                _v = float(_c.get("volume", 0) or 0)
-                _tp = (_h + _l + _cl) / 3
-                if _v > 0:
-                    _tp_vol += _tp * _v
-                    _vol_sum += _v
-                _tp_sum += _tp
-                _bar_count += 1
-            if _vol_sum > 0:
-                _vwap = _tp_vol / _vol_sum
-            elif _bar_count > 0:
-                _vwap = _tp_sum / _bar_count   # simple typical-price average
-            else:
-                _vwap = spot
-
-            # ── Last 2 candles ────────────────────────────────────────────────
-            _c1, _c2 = candles[-2], candles[-1]
-            _c1_green = float(_c1.get("close", 0)) > float(_c1.get("open", 0))
-            _c2_o  = float(_c2.get("open",  0) or 0)
-            _c2_c  = float(_c2.get("close", 0) or 0)
-            _c2_h  = float(_c2.get("high",  _c2_c) or _c2_c)
-            _c2_l  = float(_c2.get("low",   _c2_c) or _c2_c)
-            _c2_green = _c2_c > _c2_o
-            _c2_range = _c2_h - _c2_l
-
-            # ── Exhaustion guard: large wick into move direction = rejection ──
-            # Green candle with big upper wick → sellers pushing back at highs
-            # Red candle with big lower wick  → buyers stepping in at lows
-            _exhausted = False
-            if _c2_range > 0:
-                _upper_wick = _c2_h - max(_c2_o, _c2_c)
-                _lower_wick = min(_c2_o, _c2_c) - _c2_l
-                if _c2_green and _upper_wick / _c2_range > 0.45:
-                    _exhausted = True
-                if not _c2_green and _lower_wick / _c2_range > 0.45:
-                    _exhausted = True
-
-            # ── Entry conditions ──────────────────────────────────────────────
-            logger.info(
-                f"EXPIRY_CHECK: c1={'G' if _c1_green else 'R'} "
-                f"c2={'G' if _c2_green else 'R'} "
-                f"spot={spot:.0f} vwap={_vwap:.0f} "
-                f"above_vwap={spot > _vwap} exhausted={_exhausted} "
-                f"bars={len(candles)}"
-            )
-            if _c1_green and _c2_green and spot > _vwap and not _exhausted:
-                logger.info(
-                    f"EXPIRY_DIR: 2 green + above VWAP({_vwap:.0f}) → CALL"
-                )
-                return "CALL"
-            if not _c1_green and not _c2_green and spot < _vwap and not _exhausted:
-                logger.info(
-                    f"EXPIRY_DIR: 2 red + below VWAP({_vwap:.0f}) → PUT"
-                )
-                return "PUT"
-
-            # ── Fallback: established trend conviction ────────────────────────
-            if trend_conviction >= 0.45:
-                return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
-            return None
-
-        # Default: use trend direction
-        if trend_conviction >= 0.6:
-            return "CALL" if trend_dir in ("BULL", "STRONG_BULL") else "PUT"
-        return None
-
-    def _in_daily_adaptive_window(self, now: datetime) -> bool:
-        t = now.time()
-        global_start = self._t(self.cfg.daily_adaptive_window_start)
-        # If regime defines its own window_start, take the LATER of global and regime start
-        # This prevents early entries (e.g. 9:16) when regime requires 9:30
-        if (self._daily_regime and
-                self._daily_regime.execution and
-                self._daily_regime.execution.window_start):
-            regime_start = self._t(self._daily_regime.execution.window_start)
-            start = max(global_start, regime_start)
-        else:
-            start = global_start
-        # Prefer the regime's own execution window_end if defined
-        if (self._daily_regime and
-                self._daily_regime.execution and
-                self._daily_regime.execution.window_end):
-            end = self._t(self._daily_regime.execution.window_end)
-        else:
-            # Fall back: extended window for trending regimes, default otherwise
-            extended_regimes = [r.strip() for r in self.cfg.trending_regimes_for_extended_window.split(",")]
-            regime_name = (self._daily_regime.name if self._daily_regime else "")
-            if regime_name in extended_regimes:
-                end = self._t(self.cfg.trending_regime_window_end)
-            else:
-                end = self._t(self.cfg.daily_adaptive_window_end)
-        return start <= t <= end
+    # ── Day roll ─────────────────────────────────────────────────────────────
 
     def _roll_day(self, now: datetime) -> None:
         today = now.date()
+
         if self._last_candle_date != today:
-            self._trades_today = 0
-            self._strategies_used = {}
-            self._regime_logged_today = False
-            self._trend_logged_today = False
-            self._daily_regime_classified = False
-            self._day_stopped_profit = False
-            self._current_trend = None
-            self._current_regime = None
-            self._current_impulse = None
-            self._daily_regime = None
-            self._active_slm_order_id = None
-            self._daily_adaptive_plan = None
-            self._late_trend_rescanned = False
-            self._last_entry_confidence = 0.0
-            self._orb_signal_used = False
-            self._momentum_signal_used = False
-            self._ema_pullback_signal_used = False
-            self._reclaim_signal_used = False
-            self._skip_reasons_today = []
-            self._lost_directions_today = set()
-            self._lost_at_times = {}
-            self._last_exit_reason = ""
-            self._last_trade_pnl = 0.0
-            self._last_trade_ts = None
-            self._last_trade_strategy = ""
-            self._reentries_today = 0
-            self._fallback_entry_triggered = False
-            self._reversal_entry_done = False
-            self._plan_direction = ""
-            self._first_scan_done = False
-            self._current_expiry = self.client.get_nearest_expiry("NIFTY")
-            logger.info(f"Day rolled: {today} | Expiry: {self._current_expiry}")
+            logger.info(f"DAY_ROLL: {self._last_candle_date} → {today}")
+            self._last_candle_date      = today
+            self._regime_classified     = False
+            self._regime                = None
+            self._first_scan_done       = False
+            self._trades_today          = 0
+            self._direction_lost_today  = None
+            self._pending_order_id      = None
+            self._pending_signal        = None
+            self._sl_order_id           = None
+            self._is_expiry_day         = self._check_expiry_day(today)
+            self._classify_regime(today)
 
-            self._classify_and_log_regime(today)
+        elif not self._regime_classified:
+            # Day already started but regime hasn't been classified yet
+            # (happens if candle data was unavailable at roll time)
+            self._classify_regime(today)
 
-            if self.cfg.trading_engine.strip().lower() == "daily_adaptive" and load_anchor_ym() is None:
-                save_anchor_ym(today.year, today.month)
-
-        elif not self._daily_regime_classified:
-            # Retry regime classification — initial attempt had insufficient candle data
-            # (bot started before 9:20 when the first 5-min candle wasn't yet complete).
-            # _last_candle_date is already today so the day-roll block above won't run,
-            # which is why we need this separate retry path.
-            self._classify_and_log_regime(today)
-
-    def _classify_and_log_regime(self, today: date) -> None:
-        """Classify daily regime and log/persist/notify result.
-        Sets _daily_regime_classified=False and returns early if candle data is still insufficient."""
-        vix = self._get_vix()
+    def _classify_regime(self, today: date) -> None:
+        """Classify daily regime using live candles from Kite."""
         try:
-            self._daily_regime = classify_regime_live(self.client, today, vix)
-            _is_placeholder = (
-                self._daily_regime and
-                self._daily_regime.name == "SKIP_RANGING" and
-                "insufficient" in str(getattr(self._daily_regime, "detail", "")).lower()
+            regime = classify_regime_v2_live(self.client, today, self._vix)
+            self._regime = regime
+            self._regime_classified = True
+            logger.info(
+                f"REGIME: {regime.name} | bias={regime.direction_bias} "
+                f"| trade={regime.should_trade} | window={regime.window_start}-{regime.window_end} "
+                f"| {regime.detail}"
             )
-            if _is_placeholder:
-                logger.info("REGIME: insufficient_history — will retry next poll")
-                self._daily_regime_classified = False
-                return
+            _log_event("REGIME_CLASSIFIED", {
+                "regime": regime.name,
+                "bias": regime.direction_bias,
+                "should_trade": regime.should_trade,
+                "detail": regime.detail,
+                "scores": regime.scores,
+            })
+        except Exception as e:
+            logger.warning(f"REGIME_CLASSIFY_ERROR: {e} — will retry next poll")
+
+    # ── IDLE: look for entry ──────────────────────────────────────────────────
+
+    def _handle_idle(self, now: datetime, candles: List[Dict], spot: float) -> None:
+        regime = self._regime
+
+        # No regime yet
+        if regime is None:
+            self._set_narrative("WAITING", "Classifying market regime — checking gap, VIX, trend...")
+            return
+
+        # Regime says skip
+        if not regime.should_trade:
+            self._set_narrative("SKIP", f"Regime: {regime.name} — {regime.detail}")
+            return
+
+        # Halt flag
+        if HALT_FLAG.exists():
+            self._set_narrative("HALTED", "Emergency halt active — manual resume required")
+            return
+
+        # Risk gates
+        can_trade, reason = self.risk.can_trade()
+        if not can_trade:
+            self._set_narrative("RISK_GATE", reason)
+            return
+
+        # Max trades per regime
+        if self._trades_today >= regime.max_trades:
+            self._set_narrative("DONE", f"Max trades for today reached ({regime.max_trades}) — regime: {regime.name}")
+            return
+
+        # Entry window
+        t = now.time()
+        if not (_t(regime.window_start) <= t <= _t(regime.window_end)):
+            if t < _t(regime.window_start):
+                self._set_narrative("WAITING", f"Entry window opens at {regime.window_start} — regime: {regime.name}")
             else:
-                self._daily_regime_classified = True
-        except Exception as _e:
-            logger.warning(f"classify_regime_live failed: {_e} — using SKIP_VOLATILE fallback")
-            from shared.regime_classifier import REGIME_DEFS
-            self._daily_regime = REGIME_DEFS.get("SKIP_VOLATILE")
-            self._daily_regime_classified = True
+                self._set_narrative("DONE", f"Entry window closed at {regime.window_end} — done for today")
+            return
 
-        # Persist daily_regime + active_engine so API heartbeat can expose them to UI
-        try:
-            import json as _json
-            from pathlib import Path as _Path
-            _regime_file = _Path(__file__).parent.parent / "state" / "kite_bot_daily_regime.json"
-            _regime_name = self._daily_regime.name if self._daily_regime else None
-            _active_engine = (
-                "BULL" if (_regime_name and ("BULL" in _regime_name or "UP" in _regime_name))
-                else "BEAR" if (_regime_name and ("BEAR" in _regime_name or "DOWN" in _regime_name))
-                else "NEUTRAL"
-            )
-            _regime_file.write_text(_json.dumps({
-                "daily_regime": _regime_name,
-                "active_engine": _active_engine,
-                "classified_at": today.isoformat(),
-            }))
-        except Exception:
-            pass
+        # Startup guard — skip very first scan (opening candles are noisy)
+        if not self._first_scan_done:
+            self._first_scan_done = True
+            self._set_narrative("WAITING", "First scan skipped — letting opening candles settle")
+            logger.info("STARTUP_GUARD: skipping first scan cycle")
+            return
 
-        regime_msg = (
-            f"DAILY REGIME: {self._daily_regime.name}\n"
-            f"Direction: {self._daily_regime.allowed_direction or 'ANY'}\n"
-            f"Strategies: {', '.join(self._daily_regime.allowed_strategies)}\n"
-            f"OTM: {self._daily_regime.otm_offset} | Max trades: {self._daily_regime.execution.max_trades}\n"
-            f"Window: {self._daily_regime.execution.window_start}-{self._daily_regime.execution.window_end}\n"
-            f"Risk: {self._daily_regime.execution.risk_pct*100:.0f}%\n"
-            f"Detail: {self._daily_regime.detail}"
+        # Check override
+        ov = _read_override()
+        if ov.get("pause"):
+            self._set_narrative("PAUSED", "Bot paused via dashboard")
+            return
+
+        # ── Build entry signal ──────────────────────────────────────
+        self._set_narrative("SCANNING", f"Scanning for entry... regime={regime.name} bias={regime.direction_bias}")
+
+        signal = build_entry_signal(
+            now              = now,
+            candles          = candles,
+            spot             = spot,
+            vix              = self._vix or 15.0,
+            regime           = regime,
+            capital          = self.risk.current_capital,
+            lot_size         = self.cfg.lot_size,
+            kite_client      = self.client,
+            is_expiry_day    = self._is_expiry_day,
+            direction_lost_today = self._direction_lost_today,
         )
-        logger.info(regime_msg)
-        _log_event("DAILY_REGIME", {
-            "regime": self._daily_regime.name,
-            "direction": self._daily_regime.allowed_direction,
-            "strategies": self._daily_regime.allowed_strategies,
-            "otm_offset": self._daily_regime.otm_offset,
-            "should_trade": self._daily_regime.should_trade,
-            "max_trades": self._daily_regime.execution.max_trades,
-            "risk_pct": self._daily_regime.execution.risk_pct,
-            "scores": self._daily_regime.scores,
-            "detail": self._daily_regime.detail,
-        })
-        self._notify(f"📊 {regime_msg}")
 
-    def _get_vix(self) -> Optional[float]:
+        if signal is None:
+            return  # narrative already set to SCANNING above
+
+        # ── Enter trade ─────────────────────────────────────────────
+        self._enter_trade(signal, spot)
+
+    # ── Entry execution ───────────────────────────────────────────────────────
+
+    def _enter_trade(self, signal: EntrySignal, spot: float) -> None:
+        """Place entry limit order and transition to ENTRY_PENDING."""
+        logger.info(
+            f"ENTRY_SIGNAL: {signal.direction} {signal.symbol} "
+            f"| LTP={signal.ltp:.0f} limit={signal.entry_limit:.0f} "
+            f"| SL={signal.sl_price:.0f} ({signal.sl_pct*100:.0f}%) "
+            f"| target={signal.target_price:.0f} "
+            f"| lots={signal.lots} qty={signal.qty} "
+            f"| strategy={signal.strategy} conviction={signal.conviction:.2f}"
+        )
+
         try:
-            vix = self.client.get_quote("INDIA VIX", "NSE")
-            return vix if vix > 0 else None
-        except Exception:
-            return None
-
-    # ── Regime detection ─────────────────────────────────────────
-
-    def _detect_regime(self, candles: List[Dict], vix: float) -> RegimeResult:
-        regime = detect_regime(candles, vix)
-
-        if not self._regime_logged_today:
-            self._regime_logged_today = True
-            logger.info(
-                f"REGIME: {regime.regime} | {regime.detail} | "
-                f"Priority: {', '.join(regime.strategy_priority)}"
+            result = self.client.place_order(
+                symbol      = signal.symbol,
+                qty         = signal.qty,
+                side        = "BUY",
+                exchange    = "NFO",
+                product     = "MIS",
+                limit_price = signal.entry_limit,
             )
-            _log_event("REGIME_DETECTED", {
-                "regime": regime.regime,
-                "adx_proxy": regime.adx_proxy,
-                "atr_ratio": regime.atr_ratio,
-                "vix": regime.vix,
-                "rsi": regime.rsi,
-                "strategy_priority": regime.strategy_priority,
+            order_id = result.get("order_id", "") if isinstance(result, dict) else str(result)
+        except Exception as e:
+            logger.error(f"ENTRY_ORDER_FAILED: {e}")
+            _log_event("ENTRY_ORDER_FAILED", {"symbol": signal.symbol, "error": str(e)})
+            return
+
+        self.sm.transition_to_entry_pending(
+            symbol        = signal.symbol,
+            direction     = signal.direction,
+            option_type   = signal.option_type,
+            strike        = signal.strike,
+            expiry        = str(signal.expiry),
+            qty           = signal.qty,
+            lots          = signal.lots,
+            sl_price      = signal.sl_price,
+            target_price  = signal.target_price,
+            spot_at_entry = spot,
+            vix_at_entry  = self._vix or 0.0,
+            strategy      = signal.strategy,
+            filter_log    = {
+                "regime":     signal.regime,
+                "rsi":        signal.rsi,
+                "vwap":       signal.vwap,
+                "conviction": signal.conviction,
+                "candles":    signal.candle_confirm,
+            },
+            entry_order_id = order_id,
+        )
+        self._pending_order_id = order_id
+        self._pending_signal   = signal
+
+        _log_event("ENTRY_PLACED", {
+            "order_id":    order_id,
+            "symbol":      signal.symbol,
+            "direction":   signal.direction,
+            "strategy":    signal.strategy,
+            "lots":        signal.lots,
+            "qty":         signal.qty,
+            "entry_limit": signal.entry_limit,
+            "sl_price":    signal.sl_price,
+            "target":      signal.target_price,
+            "regime":      signal.regime,
+            "conviction":  signal.conviction,
+            "ltp_at_signal": signal.ltp,
+        })
+        self._set_narrative(
+            "ENTRY_PENDING",
+            f"Limit order placed: {signal.direction} {signal.symbol} @ {signal.entry_limit:.0f} | order_id={order_id}",
+        )
+
+    # ── Entry pending ─────────────────────────────────────────────────────────
+
+    def _handle_entry_pending(self, now: datetime, spot: float) -> None:
+        """Check if entry order has filled. Cancel if stale (>60s)."""
+        order_id = self._pending_order_id
+        signal   = self._pending_signal
+        if not order_id or not signal:
+            logger.warning("ENTRY_PENDING but no order_id — resetting")
+            self.sm.cancel_entry()
+            return
+
+        try:
+            order_info = self.client.get_order_status(order_id)
+            status     = str(order_info.get("status", "")).upper()
+            fill_price = float(order_info.get("average_price") or order_info.get("price") or 0)
+        except Exception as e:
+            logger.warning(f"ORDER_STATUS_ERROR: {e}")
+            return
+
+        if status == "COMPLETE":
+            fill = fill_price or signal.entry_limit
+            self.sm.confirm_entry(fill)
+            self._trades_today += 1
+            logger.info(f"ENTRY_FILLED: {signal.symbol} @ {fill:.0f} | lots={signal.lots}")
+            _log_event("ENTRY_FILLED", {
+                "order_id":   order_id,
+                "symbol":     signal.symbol,
+                "fill_price": fill,
+                "lots":       signal.lots,
+                "strategy":   signal.strategy,
             })
 
-        return regime
+            # Place SL limit order immediately
+            self._place_sl_order(signal, fill)
+            self._set_narrative("ACTIVE", f"IN TRADE: {signal.direction} {signal.symbol} | entry={fill:.0f}")
 
-    def _detect_trend(self, candles: List[Dict], vix: float) -> TrendResult:
-        # ── Impulse detection (runs once per session after 4th candle) ──
-        # Cached so we don't re-evaluate on every loop tick.
-        if self._current_impulse is None and len(candles) >= 4:
-            self._current_impulse = detect_impulse(candles)
-            if self._current_impulse.grade != ImpulseGrade.NONE:
-                logger.info(
-                    f"IMPULSE: {self._current_impulse.grade} [{self._current_impulse.direction}] "
-                    f"bonus=+{self._current_impulse.bonus_votes} | {self._current_impulse.detail}"
-                )
-                _log_event("IMPULSE_DETECTED", {
-                    "grade": self._current_impulse.grade,
-                    "direction": self._current_impulse.direction,
-                    "bonus_votes": self._current_impulse.bonus_votes,
-                    "rules": self._current_impulse.rules,
-                    "detail": self._current_impulse.detail,
-                })
+        elif status in ("REJECTED", "CANCELLED"):
+            logger.warning(f"ENTRY_ORDER_{status}: {order_id} — cancelling")
+            self.sm.cancel_entry()
+            self._pending_order_id = None
+            self._pending_signal   = None
+            _log_event("ENTRY_CANCELLED", {"order_id": order_id, "status": status})
 
-        # Compute live move from session open for hard trend override
-        _move_from_open = 0.0
-        if candles and len(candles) >= 2:
-            _open = float(candles[0].get("open", 0) or 0)
-            if _open > 0:
-                _move_from_open = (float(candles[-1]["close"]) - _open) / _open * 100
+        else:
+            # Still pending — check timeout (60s)
+            entry_time_str = self.sm.position.entry_time
+            if entry_time_str:
+                entry_time = datetime.fromisoformat(entry_time_str)
+                if (now - entry_time).total_seconds() > 60:
+                    logger.warning(f"ENTRY_TIMEOUT: {order_id} — cancelling stale order")
+                    try:
+                        self.client.cancel_order(order_id)
+                    except Exception:
+                        pass
+                    self.sm.cancel_entry()
+                    self._pending_order_id = None
+                    self._pending_signal   = None
+                    _log_event("ENTRY_TIMEOUT", {"order_id": order_id})
 
-        trend = detect_trend(candles, vix, impulse=self._current_impulse, move_from_open_pct=_move_from_open)
+    def _place_sl_order(self, signal: EntrySignal, fill_price: float) -> None:
+        """Place SL as an SL-limit sell order at signal's SL price."""
+        # Use actual fill price to compute SL (may differ from signal LTP)
+        sl_price = round(fill_price * (1 - signal.sl_pct), 1)
 
-        if not self._trend_logged_today:
-            self._trend_logged_today = True
-            logger.info(
-                f"TREND: {trend.state.value} [{trend.direction}] | "
-                f"conviction={trend.conviction:.2f} risk_mult={trend.risk_multiplier:.2f} "
-                f"impulse={trend.impulse_grade} | {trend.detail}"
+        try:
+            result = self.client.place_slm_order(
+                symbol        = signal.symbol,
+                qty           = signal.qty,
+                trigger_price = sl_price,
+                exchange      = "NFO",
+                product       = "MIS",
             )
-            _log_event("TREND_DETECTED", {
-                "state": trend.state.value,
-                "direction": trend.direction,
-                "conviction": trend.conviction,
-                "risk_multiplier": trend.risk_multiplier,
-                "strategy_priority": trend.strategy_priority,
-                "scores": trend.scores,
-                "impulse_grade": trend.impulse_grade,
-            })
-        elif (self._current_trend is not None and
-              self._current_trend.state != trend.state):
-            # Log state change intraday
-            logger.info(
-                f"TREND SHIFT: {self._current_trend.state.value} → {trend.state.value} "
-                f"| conviction={trend.conviction:.2f} impulse={trend.impulse_grade} | {trend.detail}"
-            )
-            _log_event("TREND_SHIFTED", {
-                "from": self._current_trend.state.value,
-                "to": trend.state.value,
-                "conviction": trend.conviction,
-                "risk_multiplier": trend.risk_multiplier,
-                "scores": trend.scores,
-                "impulse_grade": trend.impulse_grade,
-            })
+            sl_order_id = result.get("order_id", "") if isinstance(result, dict) else str(result)
+            self._sl_order_id = sl_order_id
+            self.sm.position.sl_price   = sl_price
+            self.sm.position.current_sl = sl_price
+            save_position(self.sm.position)
+            logger.info(f"SL_ORDER_PLACED: trigger={sl_price:.0f} order_id={sl_order_id}")
+            _log_event("SL_ORDER_PLACED", {"order_id": sl_order_id, "sl_price": sl_price})
+        except Exception as e:
+            logger.error(f"SL_ORDER_FAILED: {e} — will monitor price manually")
+            _log_event("SL_ORDER_FAILED", {"error": str(e)})
 
-        self._current_trend = trend
-        return trend
+    # ── Active: monitor position ───────────────────────────────────────────────
 
-    # ── Position management ───────────────────────────────────────
+    def _handle_active(self, now: datetime, spot: float) -> None:
+        pos = self.sm.position
+        symbol = pos.symbol
 
-    def _manage_active_position(self, now: datetime, candles: List[Dict]) -> None:
+        # ── Broker sync every 60s ───────────────────────────────────
+        if time.time() - self._last_broker_sync > 60:
+            self._broker_sync(symbol)
+            self._last_broker_sync = time.time()
+            if self.sm.is_idle:
+                return  # Position was externally closed
+
+        # ── Get current option price ────────────────────────────────
+        ltp = self.client.get_quote(symbol, "NFO")
+        if ltp <= 0:
+            logger.warning(f"ACTIVE: cannot get LTP for {symbol}")
+            return
+
+        # ── Update narrative ────────────────────────────────────────
+        entry    = pos.entry_price
+        pnl_pct  = (ltp - entry) / entry * 100 if entry > 0 else 0
+        pnl_rs   = (ltp - entry) * pos.qty
+        self._set_narrative(
+            "ACTIVE",
+            f"{pos.direction} {symbol} | LTP={ltp:.0f} entry={entry:.0f} "
+            f"P&L={pnl_rs:+.0f} ({pnl_pct:+.1f}%) | SL={pos.current_sl:.0f} target={pos.target_price:.0f}",
+        )
+
+        # ── Target hit ─────────────────────────────────────────────
+        if ltp >= pos.target_price:
+            logger.info(f"TARGET_HIT: {symbol} LTP={ltp:.0f} >= target={pos.target_price:.0f}")
+            self._exit_position("TARGET", ltp)
+            return
+
+        # ── SL hit (price monitoring — exchange order may have already fired) ──
+        if ltp <= pos.current_sl:
+            logger.info(f"SL_HIT: {symbol} LTP={ltp:.0f} <= SL={pos.current_sl:.0f}")
+            self._exit_position("SL_HIT", ltp)
+            return
+
+        # ── Force exit time ─────────────────────────────────────────
+        if now.time() >= _t(self.cfg.force_exit_time):
+            logger.info(f"FORCE_EXIT: {now.time()} >= {self.cfg.force_exit_time}")
+            self._exit_position("FORCE_EXIT_TIME", ltp)
+            return
+
+        # ── Trail stop ──────────────────────────────────────────────
+        trail_event = self.sm.update_trailing_stop(
+            current_price         = ltp,
+            trail_trigger_pct     = self.cfg.trail_trigger_pct,
+            trail_lock_step_pct   = self.cfg.trail_lock_step_pct,
+            break_even_trigger_pct = self.cfg.break_even_trigger_pct,
+        )
+        if trail_event:
+            logger.info(f"TRAIL: {trail_event} | new_sl={pos.current_sl:.0f}")
+            self._update_sl_order(pos.current_sl, pos.qty, symbol)
+            _log_event(trail_event, {"new_sl": pos.current_sl, "ltp": ltp})
+
+    def _update_sl_order(self, new_sl: float, qty: int, symbol: str) -> None:
+        """Modify existing SL order to new trigger price."""
+        if not self._sl_order_id:
+            return
+        try:
+            self.client.modify_slm_order(self._sl_order_id, new_sl)
+            logger.info(f"SL_ORDER_MODIFIED: trigger={new_sl:.0f}")
+        except Exception as e:
+            logger.warning(f"SL_MODIFY_FAILED: {e} — will rely on price monitoring")
+
+    def _broker_sync(self, symbol: str) -> None:
+        """Check actual position at broker. Close locally if externally squared off."""
+        try:
+            positions = self.client.get_positions()
+            # get_positions() returns a flat list of position dicts
+            if isinstance(positions, dict):
+                positions = positions.get("net", []) or []
+            net_qty = 0
+            ltp     = 0.0
+            for p in positions:
+                if p.get("tradingsymbol") == symbol:
+                    net_qty = abs(int(p.get("quantity", 0)))
+                    ltp     = float(p.get("last_price", 0))
+                    break
+            discrepancy = self.sm.sync_with_broker(net_qty, ltp)
+            if discrepancy:
+                logger.warning(f"BROKER_SYNC: position externally closed for {symbol}")
+                _log_event("BROKER_SYNC_CLOSE", {"symbol": symbol, "ltp": ltp})
+                self._record_close("BROKER_SYNC", ltp)
+        except Exception as e:
+            logger.warning(f"BROKER_SYNC_ERROR: {e}")
+
+    # ── Exit pending ──────────────────────────────────────────────────────────
+
+    def _handle_exit_pending(self, now: datetime, spot: float) -> None:
+        """Check if exit order has filled."""
+        order_id = self.sm.position.exit_order_id
+        if not order_id or order_id == "EXTERNAL":
+            self._finalize_close()
+            return
+
+        try:
+            order_info = self.client.get_order_status(order_id)
+            status     = str(order_info.get("status", "")).upper()
+            fill_price = float(order_info.get("average_price") or order_info.get("price") or 0)
+        except Exception as e:
+            logger.warning(f"EXIT_ORDER_STATUS_ERROR: {e}")
+            return
+
+        if status == "COMPLETE":
+            self._finalize_close(fill_price)
+        elif status in ("REJECTED", "CANCELLED"):
+            logger.error(f"EXIT_ORDER_{status}: {order_id} — forcing market exit")
+            self._force_market_exit()
+
+    def _finalize_close(self, fill_price: float = 0.0) -> None:
+        pos = self.sm.position
+        if fill_price <= 0:
+            fill_price = pos.exit_price or pos.entry_price
+        reason = pos.exit_reason
+        charges = charges_estimate(pos.entry_price, fill_price, pos.qty)
+        trade = self.sm.confirm_exit(fill_price, charges)
+
+        net_pnl = trade.get("net_pnl", 0.0)
+        self.risk.record_trade(net_pnl)
+
+        # Track losing direction for direction_lost_today
+        if net_pnl < 0 and pos.direction:
+            self._direction_lost_today = pos.direction
+            logger.info(f"DIRECTION_LOST: {pos.direction} — blocking re-entry in this direction today")
+
+        logger.info(
+            f"TRADE_CLOSED: {pos.direction} {pos.symbol} | "
+            f"entry={pos.entry_price:.0f} exit={fill_price:.0f} "
+            f"net_pnl={net_pnl:+.0f} reason={reason}"
+        )
+        _log_event("TRADE_CLOSED", {
+            "symbol":      pos.symbol,
+            "direction":   pos.direction,
+            "strategy":    pos.strategy,
+            "entry_price": pos.entry_price,
+            "exit_price":  fill_price,
+            "qty":         pos.qty,
+            "lots":        pos.lots,
+            "net_pnl":     net_pnl,
+            "charges":     charges,
+            "exit_reason": reason,
+        })
+
+        self._pending_order_id = None
+        self._pending_signal   = None
+        self._sl_order_id      = None
+
+        result = "WIN" if net_pnl > 0 else "LOSS"
+        self._set_narrative("CLOSED", f"Trade {result}: {net_pnl:+.0f} | reason={reason}")
+
+    def _record_close(self, reason: str, ltp: float) -> None:
+        """Called when broker sync detects external close."""
+        pos = self.sm.position
+        charges = charges_estimate(pos.entry_price, ltp, pos.qty)
+        self.sm.position.exit_reason = reason
+        self.sm.position.exit_price  = ltp
+        trade = self.sm.confirm_exit(ltp, charges)
+        net_pnl = trade.get("net_pnl", 0.0)
+        self.risk.record_trade(net_pnl)
+        if net_pnl < 0 and pos.direction:
+            self._direction_lost_today = pos.direction
+        self._sl_order_id = None
+        _log_event("TRADE_CLOSED_EXTERNAL", {
+            "reason":    reason,
+            "exit_price": ltp,
+            "net_pnl":   net_pnl,
+        })
+
+    # ── Exit helpers ──────────────────────────────────────────────────────────
+
+    def _exit_position(self, reason: str, ltp: float) -> None:
+        """Place market sell to close the position."""
         pos = self.sm.position
         if pos.state != PositionState.ACTIVE:
             return
 
-        try:
-            current_price = self.client.get_quote(pos.symbol, "NFO")
-        except Exception as _qe:
-            logger.warning(f"get_quote raised exception for {pos.symbol}: {_qe}")
-            return
-        if current_price <= 0:
-            logger.warning(f"Could not get quote for {pos.symbol}")
-            return
-
-        # Update live unrealized P&L in position so dashboard can display it.
-        pos.gross_pnl = round((current_price - pos.entry_price) * pos.qty, 2)
-        from bot.state_machine import save_position as _save_pos
-        _save_pos(pos)
-
-        # Compute adaptive trailing params based on session, impulse and conviction
-        _trail_session = get_session(now)
-        _trail_impulse = str(self._current_impulse.grade) if self._current_impulse else "NONE"
-        _trail_conv = self._current_trend.conviction if self._current_trend else 0.5
-        _trail_params = compute_trail_params(_trail_impulse, _trail_conv, _trail_session)
-
-        # Volatile/gap days: wider break-even trigger to avoid whipsaw exits.
-        # Normal 7-8% BE is too tight — gap-day options can spike 15%+ then retrace to target.
-        _volatile_regime = (self._daily_regime and self._daily_regime.name in (
-            "SKIP_VOLATILE", "GAP_TRENDING_BULL", "GAP_TRENDING_BEAR"))
-        if _volatile_regime:
-            _trail_params.break_even_pct = max(_trail_params.break_even_pct, 0.15)
-
-        # Update trailing stop — save current_sl BEFORE mutating so we can revert
-        # if the Kite order modification fails (prevents showing wrong SL in UI).
-        _prev_sl = self.sm.position.current_sl
-        _prev_break_even = self.sm.position.break_even_set
-        trail_event = self.sm.update_trailing_stop(
-            current_price,
-            trail_trigger_pct=_trail_params.trigger_pct,
-            trail_lock_step_pct=_trail_params.lock_step_pct,
-            break_even_trigger_pct=_trail_params.break_even_pct,
-        )
-        if trail_event and self._active_slm_order_id and self.cfg.use_slm_exit:
-            ok = self.client.modify_slm_order(
-                self._active_slm_order_id,
-                self.sm.position.current_sl,
-            )
-            if ok:
-                logger.info(f"SL-M modified: {trail_event} → trigger={self.sm.position.current_sl:.2f}")
-                _save_pos(self.sm.position)
-            else:
-                logger.warning(f"SL-M modify failed for trail event: {trail_event} — reverting local SL to ₹{_prev_sl:.2f}")
-                self.sm.position.current_sl = _prev_sl
-                self.sm.position.break_even_set = _prev_break_even
-                _save_pos(self.sm.position)
-
-        # Check exit conditions (target and force-exit handled here;
-        # SL is handled by SL-M order at exchange level)
-        is_force_exit = now.time() >= self._t(self.cfg.force_exit_time)
-        exit_reason = None
-
-        if is_force_exit:
-            exit_reason = "FORCE_EXIT"
-        elif current_price >= pos.target_price:
-            exit_reason = "TARGET_HIT"
-        elif not self.cfg.use_slm_exit and current_price <= pos.current_sl:
-            exit_reason = "SL_HIT"
-
-        # ── Time-based SL tightening (live bot) ──────────────────────
-        # After 45 mins with no meaningful momentum, tighten SL to -15%.
-        # Prevents theta decay from slowly bleeding the trade to full SL.
-        if not exit_reason and pos.entry_time is not None:
-            _entry_time = pos.entry_time
-            if isinstance(_entry_time, str):
-                from datetime import datetime as _dt
-                _entry_time = _dt.fromisoformat(_entry_time)
-            trade_age_min = (now - _entry_time).total_seconds() / 60
-            gain_now = (current_price - pos.entry_price) / pos.entry_price if pos.entry_price > 0 else 0
-            time_sl_threshold = pos.entry_price * (1 - 0.15)   # -15% time SL
-            if (trade_age_min >= 45
-                    and gain_now < 0.06          # no meaningful upward momentum
-                    and current_price < time_sl_threshold
-                    and pos.current_sl < time_sl_threshold):
-                # Tighten SL-M to -15% if it hasn't been tightened already
-                if self._active_slm_order_id and self.cfg.use_slm_exit:
-                    ok = self.client.modify_slm_order(self._active_slm_order_id, time_sl_threshold)
-                    if ok:
-                        pos.current_sl = time_sl_threshold
-                        logger.info(
-                            f"TIME_SL: trade_age={trade_age_min:.0f}min, no momentum (gain={gain_now*100:.1f}%) "
-                            f"→ SL tightened to ₹{time_sl_threshold:.2f} (-15%)"
-                        )
-                        _log_event("TIME_SL_TIGHTENED", {
-                            "trade_age_min": round(trade_age_min, 1),
-                            "gain_pct": round(gain_now * 100, 2),
-                            "new_sl": round(time_sl_threshold, 2),
-                        })
-                elif not self.cfg.use_slm_exit:
-                    exit_reason = "TIME_SL"    # software SL mode — exit immediately
-
-        # Structure-based exit: exit early on trend reversal if already in profit
-        # Uses adaptive logic — requires 2 consecutive reversal candles (not just 1!)
-        # This prevents premature exits from single-candle noise on strong trend days.
-        if not exit_reason and len(candles) >= 3:
-            gain_pct = (current_price - pos.entry_price) / pos.entry_price if pos.entry_price > 0 else 0
-            # Use adaptive engine (needs 2 consecutive reversal candles + min 8% profit)
-            struct_exit, struct_reason = should_exit_on_structure(
-                pos.direction, candles, gain_pct,
-                min_profit_pct=self.cfg.structure_exit_min_profit_pct,
-                consecutive_reversal_candles=2,
-            )
-            if struct_exit:
-                exit_reason = "STRUCTURE_BREAK"
-                logger.info(f"STRUCTURE_BREAK: {struct_reason} | gain={gain_pct*100:.1f}%")
-
-        # Check if SL-M order got executed (SL hit at exchange)
-        if self._active_slm_order_id and self.cfg.use_slm_exit:
-            if pos.state != PositionState.ACTIVE:
-                return
-            slm_status = self.client.get_order_status(self._active_slm_order_id)
-            if str(slm_status.get("status", "")).upper() == "COMPLETE":
-                fill_price = float(slm_status.get("average_price", current_price) or current_price)
-                trigger_price = pos.current_sl
-                slm_slip = trigger_price - fill_price
-                slm_slip_pct = (slm_slip / trigger_price * 100) if trigger_price > 0 else 0
-
-                logger.info(
-                    f"SL-M TRIGGERED | trigger={trigger_price:.2f} fill={fill_price:.2f} | "
-                    f"SL slippage: ₹{slm_slip:.2f}/unit ({slm_slip_pct:+.2f}%) | "
-                    f"Extra loss: ₹{slm_slip * pos.qty:.0f}"
-                )
-                if abs(slm_slip_pct) > 2.0:
-                    logger.warning(
-                        f"HIGH SL SLIPPAGE: {slm_slip_pct:+.2f}% — "
-                        f"planned SL ₹{trigger_price:.2f}, got ₹{fill_price:.2f}"
-                    )
-
-                _log_event("SLM_EXECUTED", {
-                    "symbol": pos.symbol,
-                    "trigger_price": round(trigger_price, 2),
-                    "fill_price": round(fill_price, 2),
-                    "slm_slippage": round(slm_slip, 2),
-                    "slm_slippage_pct": round(slm_slip_pct, 3),
-                    "extra_loss_per_unit": round(slm_slip, 2),
-                    "extra_loss_total": round(slm_slip * pos.qty, 2),
-                    "qty": pos.qty,
-                })
-
-                self._active_slm_order_id = None
-                self.sm.position.slm_order_id = ""
-                from bot.state_machine import save_position
-                save_position(self.sm.position)
-                self._record_exit(pos, "SL_HIT", fill_price)
-                return
-
-        if exit_reason:
-            self._execute_exit(pos, exit_reason, current_price)
-
-    def _execute_exit(self, pos, exit_reason: str, approx_price: float) -> None:
-        """Exit by cancelling SL-M and placing a market sell."""
-        logger.info(f"EXITING: {pos.symbol} | Reason: {exit_reason} | Price~{approx_price:.2f}")
-
-        # Cancel pending SL-M order
-        if self._active_slm_order_id:
+        # Cancel existing SL order first
+        if self._sl_order_id:
             try:
-                self.client.cancel_order(self._active_slm_order_id)
+                self.client.cancel_order(self._sl_order_id)
+                logger.info(f"SL_ORDER_CANCELLED: {self._sl_order_id}")
             except Exception as e:
-                logger.warning(f"SL-M cancel failed (may already be done): {e}")
-            self._active_slm_order_id = None
-            self.sm.position.slm_order_id = ""
-            from bot.state_machine import save_position
-            save_position(self.sm.position)
+                logger.warning(f"SL_CANCEL_FAILED: {e}")
+            self._sl_order_id = None
 
-        if self.cfg.paper_mode:
-            fill_price = approx_price
-            order_id = "PAPER"
-        else:
-            # For force-exit, retry up to 3 times to guarantee exit before market close
-            max_attempts = 3 if exit_reason == "FORCE_EXIT" else 1
-            fill_price = approx_price
-            order_id = ""
+        try:
+            result = self.client.place_order(
+                symbol  = pos.symbol,
+                qty     = pos.qty,
+                side    = "SELL",
+                exchange= "NFO",
+                product = "MIS",
+                ltp     = ltp,   # aggressive limit (1% below LTP = market-like)
+            )
+            exit_order_id = result.get("order_id", "") if isinstance(result, dict) else str(result)
+        except Exception as e:
+            logger.error(f"EXIT_ORDER_FAILED: {e}")
+            _log_event("EXIT_ORDER_FAILED", {"reason": reason, "error": str(e)})
+            return
 
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    resp = self.client.place_order(
-                        symbol=pos.symbol,
-                        qty=pos.qty,
-                        side="SELL",
-                        exchange="NFO",
-                        product="MIS",
-                    )
-                    order_id = resp.get("order_id", "")
-                    filled = self.client.confirm_fill(order_id, timeout_seconds=15)
+        self.sm.transition_to_exit_pending(exit_order_id, reason)
+        _log_event("EXIT_PLACED", {"order_id": exit_order_id, "reason": reason, "ltp": ltp})
 
-                    if filled:
-                        # Retry fetching average_price up to 3 times — Kite may not
-                        # populate it immediately even after status = COMPLETE
-                        for _price_attempt in range(3):
-                            status = self.client.get_order_status(order_id)
-                            avg = float(status.get("average_price", 0) or 0)
-                            if avg > 0:
-                                fill_price = avg
-                                break
-                            time.sleep(0.5)
-                        else:
-                            fill_price = approx_price
-                            logger.warning(
-                                f"Exit {order_id}: average_price not populated after retries — "
-                                f"using approx ₹{approx_price:.2f}. Check Kite for actual fill."
-                            )
-                        logger.info(f"Exit confirmed: order={order_id} price={fill_price:.2f} (attempt {attempt})")
-                        break
+    def _force_market_exit(self) -> None:
+        """Emergency exit when exit order was rejected."""
+        pos = self.sm.position
+        ltp = self.client.get_quote(pos.symbol, "NFO")
+        try:
+            result = self.client.place_order(
+                symbol  = pos.symbol,
+                qty     = pos.qty,
+                side    = "SELL",
+                exchange= "NFO",
+                product = "MIS",
+                ltp     = ltp,
+            )
+            order_id = result.get("order_id", "") if isinstance(result, dict) else str(result)
+            self.sm.transition_to_exit_pending(order_id, "FORCE_MARKET_EXIT")
+        except Exception as e:
+            logger.critical(f"FORCE_EXIT_FAILED: {e} — MANUAL INTERVENTION REQUIRED")
+
+    # ── Candles & market data ─────────────────────────────────────────────────
+
+    def _refresh_candles(self, now: datetime) -> List[Dict]:
+        """Fetch today's 5-min candles from Kite. Returns cached list."""
+        if self._nifty_token is None:
+            self._nifty_token = self.client.get_nifty_token()
+            if self._nifty_token is None:
+                return []
+
+        today = now.date()
+        from_dt = datetime(today.year, today.month, today.day, 9, 0)
+        to_dt   = now
+
+        try:
+            candles = self.client.get_candles(self._nifty_token, from_dt, to_dt, "5minute")
+            if candles:
+                self._candle_cache = candles
+                # Update last_candle_date from actual data
+                dates = sorted(set(c["ts"].date() for c in candles if hasattr(c["ts"], "date")))
+                if dates:
+                    # Use today's date if today's candles exist, else latest
+                    if today in dates:
+                        self._last_candle_date = today
                     else:
-                        logger.warning(f"Exit order {order_id} not filled (attempt {attempt}/{max_attempts}) — cancelling and retrying")
-                        try:
-                            self.client.cancel_order(order_id)
-                        except Exception:
-                            pass
-                        if attempt < max_attempts:
-                            time.sleep(2)
-                except Exception as e:
-                    logger.error(f"Exit order failed (attempt {attempt}/{max_attempts}): {e}")
-                    if attempt < max_attempts:
-                        time.sleep(2)
-            else:
-                logger.error(f"EXIT FAILED after {max_attempts} attempts — position may still be open. Check Kite manually!")
-                _log_event("EXIT_FAILED", {
-                    "symbol": pos.symbol, "reason": exit_reason,
-                    "attempts": max_attempts, "approx_price": approx_price,
-                })
+                        self._last_candle_date = dates[-1]
+        except Exception as e:
+            logger.warning(f"CANDLE_FETCH_ERROR: {e}")
 
-        self._record_exit(pos, exit_reason, fill_price)
+        return self._candle_cache
 
-    def _record_exit(self, pos, exit_reason: str, fill_price: float) -> None:
-        planned_sl = pos.current_sl
-        self.sm.transition_to_exit_pending("", exit_reason)
-        charges = charges_estimate(pos.entry_price, fill_price, pos.qty)
-        trade_record = self.sm.confirm_exit(fill_price, charges)
-
-        # Compute SL slippage for SL exits
-        sl_slip_info = ""
-        if exit_reason == "SL_HIT" and planned_sl > 0:
-            sl_slip = planned_sl - fill_price
-            sl_slip_pct = (sl_slip / planned_sl * 100) if planned_sl > 0 else 0
-            extra_loss = sl_slip * pos.qty
-            trade_record["sl_trigger_price"] = round(planned_sl, 2)
-            trade_record["sl_fill_price"] = round(fill_price, 2)
-            trade_record["sl_slippage"] = round(sl_slip, 2)
-            trade_record["sl_slippage_pct"] = round(sl_slip_pct, 3)
-            trade_record["sl_extra_loss"] = round(extra_loss, 2)
-            if abs(sl_slip) > 0.01:
-                sl_slip_info = f"\nSL slip: ₹{sl_slip:.1f}/unit ({sl_slip_pct:+.1f}%), extra: ₹{extra_loss:.0f}"
-
-        net = trade_record["net_pnl"]
-        # MANUAL_EXIT: user closed position themselves (profit or decision to exit).
-        # Don't count as consecutive loss — user choice, not a strategy failure.
-        # Also reset the daily plan so the bot doesn't immediately re-enter.
-        if exit_reason == "MANUAL_EXIT":
-            self.risk.record_trade_manual_exit(net)
-            self._daily_adaptive_plan = None   # force fresh scan — user changed direction
-            self._plan_direction = ""           # clear plan direction so reversal logic resets
-        else:
-            self.risk.record_trade(net)
-        # Track last trade outcome for skip-after-loss and direction correlation logic
-        self._last_trade_was_loss = (net < 0 and exit_reason != "MANUAL_EXIT")
-        self._last_exit_direction = pos.direction
-        if net < 0 and exit_reason != "MANUAL_EXIT":
-            self._lost_directions_today.add(pos.direction)  # hard-block this direction for today
-        self._last_exit_reason = exit_reason
-        self._last_trade_pnl = net
-        self._last_trade_ts = datetime.now().isoformat()
-        self._last_trade_strategy = pos.strategy or ""
-        _log_event("TRADE_CLOSED", trade_record)
-
-        # ── Adaptive re-entry after SL ───────────────────────────────────────
-        # Uses adaptive_engine logic: time-based block (not permanent all-day),
-        # EXTREME impulse bypasses block, conviction gate, max 2 re-entries.
-        if exit_reason == "SL_HIT" and net < 0:
-            # Record time of loss for direction-specific block timer
-            self._lost_at_times[pos.direction] = datetime.now()
-            # Lift the direction block so it can be re-evaluated by should_allow_reentry
-            self._lost_directions_today.discard(pos.direction)
-
-        # Volatile/gap days: require much higher conviction for re-entry to avoid chasing losses
-        _volatile_day_reentry = (self._daily_regime and self._daily_regime.name in (
-            "SKIP_VOLATILE", "GAP_TRENDING_BULL", "GAP_TRENDING_BEAR"))
-        _reentry_conf_threshold = 75.0 if _volatile_day_reentry else 58.0
-
-        if (
-            exit_reason == "SL_HIT"
-            and net < 0
-            and self._daily_adaptive_plan is not None
-            and self._last_entry_confidence >= _reentry_conf_threshold
-        ):
-            _allow_reentry, _reentry_reason = should_allow_reentry(
-                direction=pos.direction,
-                lost_at=self._lost_at_times.get(pos.direction),
-                current_trend_state=(
-                    self._current_trend.state.value if self._current_trend else "NEUTRAL"
-                ),
-                conviction=(
-                    self._current_trend.conviction if self._current_trend else 0.0
-                ),
-                impulse_grade=str(
-                    self._current_impulse.grade if self._current_impulse else "NONE"
-                ),
-                reentries_today=self._reentries_today,
-                max_reentries=2,
-                block_duration_minutes=30,
-            )
-
-            if _allow_reentry:
-                legs: list = list(self._daily_adaptive_plan.get("executable_legs") or [])
-                day_cap = int(self._daily_adaptive_plan.get("day_trade_cap") or self.cfg.max_trades_per_day)
-                trades_so_far = int(self.risk.status().get("trades_today", 0))
-                if trades_so_far < day_cap:
-                    reentry_leg: Dict[str, Any] = {
-                        "strategy": pos.strategy or "",
-                        "direction": pos.direction,
-                        "lots": 1,
-                        "sl_pct": 0.0,
-                        "target_pct": 0.0,
-                        "filter_log": {"reentry": True, "after_sl": True},
-                    }
-                    self._daily_adaptive_plan["executable_legs"] = legs + [reentry_leg]
-                    self._reentries_today += 1
-                    logger.info(
-                        f"REENTRY_INJECTED: {pos.strategy} {pos.direction} — {_reentry_reason}"
-                    )
-                    _log_event("REENTRY_INJECTED", {
-                        "direction": pos.direction,
-                        "strategy": pos.strategy,
-                        "reason": _reentry_reason,
-                        "reentries_today": self._reentries_today,
-                    })
-            else:
-                # Keep direction blocked permanently for the day on genuine fails
-                self._lost_directions_today.add(pos.direction)
-                logger.info(f"REENTRY_BLOCKED: {_reentry_reason}")
-
-        # Stop trading for the day — adaptive threshold based on impulse grade + trend
-        # On EXTREME impulse + STRONG trend days: allow 6R (gap-and-go! don't stop early)
-        # On normal days: stop at 3R to protect profits
-        if net > 0 and pos.entry_price > 0:
-            raw_sl_pct = (pos.entry_price - pos.current_sl) / pos.entry_price if pos.current_sl > 0 else 0
-            sl_pct_used = raw_sl_pct if raw_sl_pct > 0 else self.cfg.risk_per_trade_pct
-            one_r = pos.entry_price * sl_pct_used * pos.qty
-            daily_pnl = self.risk.status().get("daily_pnl", 0)
-            _impulse_for_stop = str(
-                self._current_impulse.grade if self._current_impulse else "NONE"
-            )
-            _trend_for_stop = (
-                self._current_trend.state.value if self._current_trend else "NEUTRAL"
-            )
-            _profit_stop_r = compute_profit_stop_threshold(
-                impulse_grade=_impulse_for_stop,
-                trend_state=_trend_for_stop,
-                base_r=one_r,
-            )
-            if daily_pnl >= _profit_stop_r:
-                self._day_stopped_profit = True
-                logger.info(
-                    f"DAY STOPPED: Profit ₹{daily_pnl:.0f} >= {_profit_stop_r/one_r:.0f}R "
-                    f"(₹{_profit_stop_r:.0f}) | impulse={_impulse_for_stop} trend={_trend_for_stop}"
-                )
-                self._notify(f"🎯 DAY STOPPED — Profit ₹{daily_pnl:.0f} >= {_profit_stop_r/one_r:.0f}R")
-
-        sign = "+" if net >= 0 else ""
-        logger.info(
-            f"TRADE CLOSED | {pos.direction} {pos.symbol} | "
-            f"Entry={pos.entry_price:.2f} Exit={fill_price:.2f} | "
-            f"P&L: {sign}₹{net:.2f} | {exit_reason}"
-        )
-
-        self._notify(
-            f"{'✅' if net > 0 else '❌'} TRADE CLOSED\n"
-            f"{pos.direction} {pos.symbol}\n"
-            f"Entry: ₹{pos.entry_price:.0f} → Exit: ₹{fill_price:.0f}\n"
-            f"P&L: {sign}₹{net:.0f} ({exit_reason}){sl_slip_info}\n"
-            f"Capital: ₹{self.risk.current_capital:,.0f} | DD: {self.risk.drawdown_pct():.1f}%"
-        )
-
-    # ── Entry logic ───────────────────────────────────────────────
-
-    def _scan_entry_daily_adaptive(self, now: datetime, vix: Optional[float]) -> None:
-        """Same rules as daily backtest: last completed daily bar + live VIX, multi-leg day plan."""
-        if self._emergency_halt:
-            logger.warning("EMERGENCY HALT active — entries blocked. Restart bot after checking Kite.")
-            return
-        can_trade, reason = self.risk.can_trade()
-        if not can_trade:
-            if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
-                logger.info(f"RISK BLOCKED (daily_adaptive): {reason}")
-                _log_event(
-                    "RISK_BLOCKED",
-                    {"reason": reason, "engine": "daily_adaptive", **self.risk.status()},
-                )
-            return
-
-        if not self.sm.is_idle:
-            return
-
-        if self._day_stopped_profit:
-            return
-
-        if not self._in_daily_adaptive_window(now):
-            return
-
-        # Startup guard: skip the very first scan after bot start.
-        # Opening candles (first 1-2 available at restart) are noisy and cause wrong first trades.
-        # One skipped scan (poll_seconds apart) gives trend/momentum detection time to settle.
-        if not self._first_scan_done:
-            self._first_scan_done = True
-            logger.info("STARTUP_GUARD: skipping first scan cycle to let trend detection settle")
-            return
-
-        # Block daily_adaptive on SKIP_VOLATILE regime — too risky on high-VIX/gap days.
-        # User can override via dashboard by setting max_trades > 0 in runtime override.
-        if self._daily_regime and self._daily_regime.name == "SKIP_VOLATILE":
-            _ov = _read_runtime_override()
-            _ov_max = _ov.get("max_trades")
-            if _ov_max is None or int(_ov_max) <= 0:
-                if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
-                    logger.info("DAILY_ADAPTIVE blocked: regime=SKIP_VOLATILE (set override max_trades>0 to force)")
-                return
-            logger.info(f"DAILY_ADAPTIVE: SKIP_VOLATILE override active (max_trades={_ov_max})")
-
-        effective_vix = float(vix if vix is not None else self._get_vix() or 14.0)
-
-        # ── Late trend entry: if morning scan found no signal but strong trend emerges 10-12am ──
-        # Reset plan to allow one fresh scan (only done once per day via _late_trend_rescanned guard)
-        curr_mins = now.hour * 60 + now.minute
-        if (self._daily_adaptive_plan is not None
-                and not self._late_trend_rescanned
-                and not (self._daily_adaptive_plan.get("executable_legs"))
-                and 10 * 60 <= curr_mins <= 12 * 60
-                and self._current_trend is not None
-                and self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR")
-                and (self._current_trend.conviction or 0) >= 0.72):
-            logger.info(
-                f"LATE_TREND_ENTRY: morning had no signal, but strong trend "
-                f"state={self._current_trend.state.value} conviction={self._current_trend.conviction:.2f} "
-                f"detected at {now.strftime('%H:%M')} — resetting plan for late scan"
-            )
-            self._daily_adaptive_plan = None
-            self._late_trend_rescanned = True  # prevent infinite re-scan loops
-
-        if self._daily_adaptive_plan is None:
-            df = self._refresh_daily_nifty_df()
-            if df is None or df.empty:
-                logger.warning("DAILY_ADAPTIVE: could not load daily NIFTY dataframe")
-                return
-            dcfg = daily_backtest_config_from_settings(self.cfg)
-            anchor = load_anchor_ym()
-            st = self.risk.status()
-            ev = evaluate_live_daily_adaptive(
-                df,
-                effective_vix,
-                dcfg,
-                strategy_filter=self.cfg.daily_strategy_filter,
-                drop_incomplete_today=True,
-                anchor_ym=anchor,
-                capital=float(st.get("current_capital", self.cfg.capital)),
-                peak_equity=float(st.get("peak_capital", self.cfg.capital)),
-                consecutive_losses=int(st.get("consecutive_losses", 0)),
-            )
-            if not ev.get("ok"):
-                if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
-                    logger.warning(
-                        f"DAILY_ADAPTIVE eval not ready: {ev.get('error')} "
-                        f"(will retry next poll)"
-                    )
-                return
-
-            # ── Gap trending day inject: if shared regime is GAP_TRENDING_BULL/BEAR but
-            # backtest engine found no legs (its strategies need more candle history),
-            # inject a synthetic NEUTRAL leg — direction resolved from live gap + VWAP.
-            if (not ev.get("executable_legs")
-                    and self._daily_regime
-                    and self._daily_regime.name in ("GAP_TRENDING_BULL", "GAP_TRENDING_BEAR")
-                    and self._daily_regime.should_trade):
-                _regime_name = self._daily_regime.name
-                _gap_dir = "CALL" if _regime_name == "GAP_TRENDING_BULL" else "PUT"
-                _sl = 0.25   # wider SL on gap days
-                _tgt = round(_sl * 2.5, 4)
-                ev["executable_legs"] = [{
-                    "leg": 1,
-                    "direction": None,          # NEUTRAL — live momentum resolves at entry
-                    "bias": "NEUTRAL",
-                    "bias_strength": 0.70,
-                    "setup_type": "GAP_DAY",    # dedicated logic: live trend override + gap follow
-                    "was_neutral": True,
-                    "strategy": "GAP_DAY",
-                    "sl_pct": _sl,
-                    "target_pct": _tgt,
-                    "lots": 1,
-                    "filter_log": {
-                        "gap_day": {
-                            "passed": True,
-                            "detail": (
-                                f"Gap trending day synthetic leg — backtest 0 legs, "
-                                f"shared regime {_regime_name}, expected dir={_gap_dir}"
-                            ),
-                        },
-                        "regime": {"value": ev.get("regime")},
-                        "daily_leg": 1,
-                    },
-                }]
-                logger.info(
-                    f"GAP_DAY_INJECT: no backtest legs on gap day, "
-                    f"injecting NEUTRAL leg (direction resolved from live momentum) "
-                    f"sl={_sl:.0%} tgt={_tgt:.0%} regime={_regime_name} expected={_gap_dir}"
-                )
-
-            # ── Expiry day synthetic leg: if backtest engine found no legs but today IS
-            # expiry day and the shared regime is tradeable, inject one directional leg
-            # so the bot can still trade on moved-expiry Tuesdays / holiday-adjusted dates.
-            _today_d = datetime.now().date()
-            _is_expiry_today = (
-                _today_d.weekday() == 3
-                or (self._current_expiry is not None and _today_d == self._current_expiry)
-            )
-            if (not ev.get("executable_legs")
-                    and _is_expiry_today
-                    and self._daily_regime
-                    and self._daily_regime.should_trade):
-                _regime_name = self._daily_regime.name
-                _inj_dir: Optional[str] = None
-                if "BEAR" in _regime_name or "DOWN" in _regime_name:
-                    _inj_dir = "PUT"
-                elif "BULL" in _regime_name or "UP" in _regime_name:
-                    _inj_dir = "CALL"
-                if _inj_dir is not None:
-                    _sl = float(self.cfg.thursday_max_loss_pct)      # 14% expiry SL
-                    _tgt = round(_sl * 2.5, 4)                        # 35% target → 2.5x RR
-                    # Direction is NEUTRAL — resolved at entry time from live intraday
-                    # momentum (first 3+ candles). Never follow regime direction blindly
-                    # on expiry day since the day's actual direction must be confirmed live.
-                    ev["executable_legs"] = [{
-                        "leg": 1,
-                        "direction": None,          # NEUTRAL — live momentum resolves at entry
-                        "bias": "NEUTRAL",
-                        "bias_strength": 0.60,
-                        "setup_type": "EXPIRY",
-                        "was_neutral": True,
-                        "strategy": "EXPIRY_DAY",
-                        "sl_pct": _sl,
-                        "target_pct": _tgt,
-                        "lots": 1,
-                        "filter_log": {
-                            "expiry_day": {
-                                "passed": True,
-                                "detail": (
-                                    f"Expiry day synthetic leg — backtest 0 legs, "
-                                    f"shared regime {_regime_name}, direction resolved live"
-                                ),
-                            },
-                            "regime": {"value": ev.get("regime")},
-                            "daily_leg": 1,
-                        },
-                    }]
-                    logger.info(
-                        f"EXPIRY_DAY_INJECT: no backtest legs on expiry day, "
-                        f"injecting NEUTRAL leg (direction resolved from live momentum) "
-                        f"sl={_sl:.0%} tgt={_tgt:.0%} regime={_regime_name}"
-                    )
-
-            self._daily_adaptive_plan = ev
-            # Capture plan direction from first leg for reversal detection
-            _first_legs = ev.get("executable_legs") or []
-            if _first_legs and not self._plan_direction:
-                self._plan_direction = _first_legs[0].get("direction") or ""
-            _log_event(
-                "DAILY_ADAPTIVE_SCAN",
-                {**ev, "anchor_ym": list(anchor) if anchor else None},
-            )
-            logger.info(
-                f"DAILY_ADAPTIVE_SCAN ok={ev.get('ok')} regime={ev.get('regime')} "
-                f"legs={len(ev.get('executable_legs') or [])} cap={ev.get('day_trade_cap')} "
-                f"vix={effective_vix:.2f}"
-            )
-
-        plan = self._daily_adaptive_plan or {}
-        if not plan.get("ok"):
-            return
-
-        legs: List[Dict[str, Any]] = plan.get("executable_legs") or []
-        day_cap = int(plan.get("day_trade_cap") or self.cfg.max_trades_per_day)
-        day_cap = min(day_cap, self.cfg.max_trades_per_day)
-
-        # Conviction-based max trades: allow more entries on genuinely strong trend days
-        if (self._current_trend is not None
-                and self._current_trend.conviction >= self.cfg.strong_trend_conviction_min
-                and self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR")):
-            day_cap = min(self.cfg.strong_trend_max_trades, self.cfg.max_trades_per_day)
-            logger.info(
-                f"STRONG_TREND: conviction={self._current_trend.conviction:.2f} → "
-                f"day_cap expanded to {day_cap}"
-            )
-
-        idx = int(self.risk.status().get("trades_today", 0))
-
-        # If override max_trades allows more trades than the plan has legs, extend dynamically
-        _ov_max = int(_read_runtime_override().get("max_trades") or 0)
-        if _ov_max > len(legs) and legs:
-            import copy as _copy
-            extra = _ov_max - len(legs)
-            plan["executable_legs"] = list(legs) + [_copy.deepcopy(legs[-1]) for _ in range(extra)]
-            plan["day_trade_cap"] = _ov_max
-            legs = plan["executable_legs"]
-            day_cap = _ov_max
-            if not plan.get("_override_extended") or plan.get("_last_ov_max") != _ov_max:
-                plan["_override_extended"] = True
-                plan["_last_ov_max"] = _ov_max
-                logger.info(f"PLAN_EXTENDED: override max_trades={_ov_max} → total legs={len(legs)}")
-                _log_event("DAILY_ADAPTIVE_SCAN", {**plan, "anchor_ym": None, "_extended_by_override": True})
-
-        if idx >= len(legs) or idx >= day_cap:
-            self._maybe_reversal_entry(now, effective_vix, plan)
-            return
-
-        bw = plan.get("breakout_watch") or {}
-        stub_regime = RegimeResult(
-            regime="DAILY_ADAPTIVE",
-            adx_proxy=0.0,
-            atr_current=1.0,
-            atr_avg=1.0,
-            atr_ratio=1.0,
-            vix=effective_vix,
-            rsi=float(bw.get("rsi14") or 50),
-            ema_fast=float(bw.get("ema8") or 0),
-            ema_slow=float(bw.get("ema21") or 0),
-            strategy_priority=[],
-            sl_target={},
-            detail=f"{plan.get('regime')} | signal_bar={plan.get('signal_bar_date')}",
-        )
-
-        spot = self.client.get_quote("NIFTY 50", "NSE")
-        if spot <= 0:
-            logger.warning("DAILY_ADAPTIVE: NIFTY spot unavailable")
-            return
-        candle = {"close": spot, "open": spot, "high": spot, "low": spot, "ts": now}
-
-        candles = self._candle_cache or self._refresh_candles(now)
-        q_idx = len(candles) - 1 if candles else None
-
-        # ── Best signal selection: score all remaining legs, pick highest ──
-        remaining_legs = legs[idx:]
-        scored = []
-        for l in remaining_legs:
-            from shared.trend_detector import compute_signal_confidence
-            stub_trend = self._current_trend or TrendResult(
-                state=TrendState.NEUTRAL, direction="NEUTRAL", conviction=0,
-                risk_multiplier=0.6, strategy_priority=[]
-            )
-            # NEUTRAL legs have direction=None; use "CALL" as placeholder for scoring
-            score_direction = l.get("direction") or "CALL"
-            conf = compute_signal_confidence(
-                l["strategy"], score_direction, stub_regime.regime, stub_trend,
-                dict(l.get("filter_log") or {}), effective_vix,
-            )
-            composite = self._compute_composite_score(
-                conf,
-                dict(l.get("filter_log") or {}),
-                candles=candles,
-                current_idx=q_idx,
-                direction=l.get("direction"),
-            )
-            scored.append((l, conf, composite))
-
-        if not scored:
-            return
-
-        # Pick best by composite score
-        best_leg, best_conf, best_composite = max(scored, key=lambda x: x[2])
-        self._last_entry_confidence = best_conf  # store for re-entry quality gate
-
-        # A+ filter: confidence >= adaptive threshold (session/impulse/VIX/trend aware)
-        # This replaces the old hard-coded 65 with a smarter market-context threshold.
-        _adap_session = get_session(now)
-        _adap_impulse = str(self._current_impulse.grade) if self._current_impulse else "NONE"
-        _adap_conv = self._current_trend.conviction if self._current_trend else 0.5
-        is_strong_trend = (
-            self._current_trend is not None and
-            self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR")
-        )
-        # Get adaptive threshold (lower on opening/extreme impulse, higher on late/high VIX)
-        adaptive_min_conf = get_entry_threshold(
-            session=_adap_session,
-            impulse_grade=_adap_impulse,
-            vix=effective_vix,
-            is_strong_trend=is_strong_trend,
-        )
-        min_conf = adaptive_min_conf
-
-        if best_conf < min_conf:
-            # ── Change 2: Fallback anti-miss entry ───────────────────────────────
-            # Strong trend confirmed + no trade taken yet + approaching 11am → lower bar once
-            _curr_mins = now.hour * 60 + now.minute
-            _trades_today = int(self.risk.status().get("trades_today", 0))
-            _fallback_ok = (
-                not self._fallback_entry_triggered
-                and _trades_today == 0
-                and _curr_mins >= 10 * 60 + 30  # 10:30am — gave morning enough time
-                and _curr_mins < 11 * 60         # before 11am deadline
-                and is_strong_trend
-                and best_conf >= 55.0            # absolute floor — no junk trades
-            )
-            if _fallback_ok:
-                self._fallback_entry_triggered = True
-                logger.info(
-                    f"FALLBACK_ENTRY: no trade by {now.strftime('%H:%M')}, "
-                    f"strong trend ({self._current_trend.state.value} "    # type: ignore[union-attr]
-                    f"conviction={self._current_trend.conviction:.2f}), "  # type: ignore[union-attr]
-                    f"conf={best_conf:.0f} ≥ 55 → lowering threshold for one entry"
-                )
-                _log_event("FALLBACK_ENTRY", {
-                    "time": now.strftime("%H:%M"),
-                    "trend": self._current_trend.state.value,  # type: ignore[union-attr]
-                    "conviction": self._current_trend.conviction,  # type: ignore[union-attr]
-                    "best_conf": round(best_conf, 1),
-                    "strategy": best_leg["strategy"],
-                })
-                # Allow through with relaxed threshold (conf >= 55 already checked above)
-            else:
-                if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
-                    logger.info(
-                        f"A+_FILTER SKIP: best confidence {best_conf:.0f} < {min_conf:.0f} "
-                        f"(composite={best_composite:.1f})"
-                    )
-                    # Write to events log every ~60s so the UI logs panel shows live scan activity
-                    _log_event("SCAN_CYCLE", {
-                        "strategies_evaluated": len(scored),
-                        "signals_detected": len(scored),
-                        "best_strategy": best_leg["strategy"],
-                        "best_direction": best_leg.get("direction", ""),
-                        "best_confidence": round(best_conf, 1),
-                        "best_composite": round(best_composite, 1),
-                        "threshold": min_conf,
-                        "skip_reason": f"Confidence {best_conf:.0f} < {min_conf:.0f}",
-                        "regime": stub_regime.regime if stub_regime else "",
-                        "vix": round(effective_vix, 1),
-                        "candidates": [
-                            {"strategy": l["strategy"], "signal": l.get("direction", ""),
-                             "confidence": round(c, 1)}
-                            for l, c, _ in scored
-                        ],
-                        "scans": [
-                            {"strategy": l["strategy"], "signal": l.get("direction", ""),
-                             "confidence": round(c, 1), "passed": c >= min_conf,
-                             "regime": stub_regime.regime if stub_regime else ""}
-                            for l, c, _ in scored
-                        ],
-                    })
-                self._skip_reasons_today.append({
-                    "strategy": best_leg["strategy"], "direction": best_leg.get("direction", ""),
-                    "reason": f"Confidence {best_conf:.0f} < {min_conf:.0f} threshold",
-                    "conf": round(best_conf, 1),
-                })
-                return
-
-        logger.info(
-            f"BEST_SIGNAL: {best_leg['strategy']} {best_leg.get('direction', 'NEUTRAL')} "
-            f"confidence={best_conf:.0f} composite={best_composite:.1f}"
-        )
-
-        leg = best_leg
-
-        # ── Resolve direction for NEUTRAL/biased legs ─────────────────
-        candles = self._candle_cache or self._refresh_candles(now)
-        resolved_dir = self._resolve_leg_direction(leg, candles or [], spot)
-        if resolved_dir is None:
-            logger.info(
-                f"NEUTRAL_SKIP: {leg['strategy']} — no clear intraday direction "
-                f"(setup_type={leg.get('setup_type')}, bias={leg.get('bias')})"
-            )
-            self._skip_reasons_today.append({
-                "strategy": leg["strategy"], "direction": leg.get("direction", "NEUTRAL"),
-                "reason": f"NEUTRAL/weak-bias — no clear intraday direction (setup_type={leg.get('setup_type')})",
-                "conf": round(best_conf, 1),
-            })
-            return
-        # Override leg direction with resolved direction
-        if resolved_dir != leg.get("direction"):
-            leg = dict(leg)
-            leg["direction"] = resolved_dir
-            logger.info(f"DIRECTION_RESOLVED: {leg['strategy']} → {resolved_dir} (was {best_leg.get('direction', 'NEUTRAL')})")
-
-        # ── Intraday momentum confirmation ────────────────────────────
-        # Validate that recent 5m candles still confirm the signal direction.
-        if not candles:
-            candles = self._candle_cache or self._refresh_candles(now)
-        momentum_ok, momentum_reason = self._confirm_intraday_momentum(leg["direction"], candles)
-        if not momentum_ok:
-            if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
-                logger.info(f"MOMENTUM SKIP: {leg['direction']} not confirmed — {momentum_reason}")
-            return
-
-        logger.info(f"MOMENTUM OK: {momentum_reason}")
-
-        # ── Direction correlation block (hard block after any loss in same direction) ──
-        # Exception: BULL_DIP_RECOVERY trades a fundamentally different setup (recovery after
-        # prior-day red candle) and should not be blocked by a TC loss on the same day.
-        _is_dip_recovery = (leg.get("strategy") == "BULL_DIP_RECOVERY")
-        if not _is_dip_recovery and leg["direction"] in self._lost_directions_today:
-            logger.info(
-                f"DIRECTION_BLOCKED: {leg['direction']} already lost today — "
-                f"skipping {leg['strategy']} to prevent overexposure"
-            )
-            self._skip_reasons_today.append({
-                "strategy": leg["strategy"], "direction": leg["direction"],
-                "reason": "Direction correlation block — this direction already lost today",
-            })
-            return
-
-        # ── Skip after same-direction loss (prevents chasing failed setups) ──
-        # Exception: strong trend days often shake out then resume — allow re-entry
-        last_exit = getattr(self, '_last_exit_direction', None)
-        last_was_loss = getattr(self, '_last_trade_was_loss', False)
-        if last_was_loss and last_exit == leg["direction"] and not is_strong_trend:
-            if best_conf < 75:
-                logger.info(
-                    f"SKIP_AFTER_LOSS: last {last_exit} trade was a loss, "
-                    f"confidence {best_conf:.0f} < 75 — skipping same direction"
-                )
-                self._skip_reasons_today.append({
-                    "strategy": leg["strategy"], "direction": leg["direction"],
-                    "reason": "Skip after loss — same direction, confidence < 75",
-                    "conf": round(best_conf, 1),
-                })
-                return
-
-        # ── Late window A+ filter (after 10:30) ──────────────────────
-        is_late = now.time() >= self._t(self.cfg.late_window_start)
-        if is_late:
-            # VIX must be calm — exception: very strong trend day with A+ score ≥ 75
-            # Runtime override vix_max also raises late window ceiling
-            _ov_vix = _read_runtime_override().get("vix_max")
-            _late_vix_max = max(self.cfg.late_window_vix_max, float(_ov_vix)) if _ov_vix else self.cfg.late_window_vix_max
-            if effective_vix > _late_vix_max:
-                conviction = self._current_trend.conviction if self._current_trend else 0.0
-                # Directional move check: price must have moved ≥ 0.8% from open in leg direction
-                intraday_move_ok = False
-                if candles and len(candles) >= 2:
-                    open_px = candles[0].get("open", 0)
-                    curr_px = candles[-1].get("close", 0)
-                    if open_px and open_px > 0:
-                        raw_move = (curr_px - open_px) / open_px
-                        dir_move = raw_move if leg["direction"] == "CALL" else -raw_move
-                        intraday_move_ok = dir_move >= 0.008
-                if (is_strong_trend and conviction >= 0.8
-                        and best_conf >= 75 and intraday_move_ok):
-                    logger.info(
-                        f"LATE_VIX_OVERRIDE: VIX {effective_vix:.1f} > {_late_vix_max} "
-                        f"BUT strong trend conviction={conviction:.2f}, conf={best_conf:.0f}≥75, "
-                        f"directional move≥0.8% — allowing entry"
-                    )
-                    _log_event("LATE_VIX_OVERRIDE", {
-                        "vix": round(effective_vix, 1), "conviction": round(conviction, 2),
-                        "confidence": round(best_conf, 1), "strategy": leg["strategy"],
-                        "direction": leg["direction"],
-                    })
-                else:
-                    logger.info(
-                        f"LATE_WINDOW SKIP: VIX {effective_vix:.1f} > {_late_vix_max} "
-                        f"(conviction={conviction:.2f}, conf={best_conf:.0f}, move_ok={intraday_move_ok})"
-                    )
-                    self._skip_reasons_today.append({
-                        "strategy": leg["strategy"], "direction": leg.get("direction", ""),
-                        "reason": f"Late window — VIX {effective_vix:.1f} > {_late_vix_max}",
-                        "conf": round(best_conf, 1),
-                    })
-                    return
-            # Strategy must be A+ tier — EXPIRY_DAY and GAP_DAY always allowed (injected synthetic legs)
-            if leg["strategy"] not in ("EXPIRY_DAY", "GAP_DAY"):
-                allowed = [s.strip() for s in self.cfg.late_window_strategies.split(",")]
-                if leg["strategy"] not in allowed:
-                    logger.info(
-                        f"LATE_WINDOW SKIP: strategy {leg['strategy']} not in A+ list {allowed}"
-                    )
-                    self._skip_reasons_today.append({
-                        "strategy": leg["strategy"], "direction": leg.get("direction", ""),
-                        "reason": f"Late window — {leg['strategy']} not in A+ tier",
-                        "conf": round(best_conf, 1),
-                    })
-                    return
-            # Overextension check — only in late window
-            # Exception: very high conviction (>= 0.8) strong trend days can move 2-3%
-            overextended, oe_reason = self._is_overextended(leg["direction"], candles)
-            if overextended:
-                conviction = self._current_trend.conviction if self._current_trend else 0.0
-                if conviction >= 0.8 and is_strong_trend:
-                    logger.info(
-                        f"OVEREXTENDED ALLOWED (strong conviction={conviction:.2f}): {oe_reason}"
-                    )
-                else:
-                    logger.info(f"OVEREXTENDED SKIP (late window): {oe_reason}")
-                    self._skip_reasons_today.append({
-                        "strategy": leg["strategy"], "direction": leg.get("direction", ""),
-                        "reason": f"Overextended — {oe_reason}",
-                        "conf": round(best_conf, 1),
-                    })
-                    return
-            sl_pct = self.cfg.late_window_sl_pct
-            target_pct = self.cfg.late_window_target_pct
-            logger.info(
-                f"LATE_WINDOW ENTRY: {leg['strategy']} {leg['direction']} | "
-                f"VIX={effective_vix:.1f} ok | SL={sl_pct*100:.0f}% TGT={target_pct*100:.0f}%"
-            )
-        else:
-            sl_pct = float(leg["sl_pct"])
-            target_pct = float(leg["target_pct"])
-
-        self._enter_trade(
-            signal=leg["direction"],
-            strategy=leg["strategy"],
-            candle=candle,
-            atr=None,
-            filter_log=dict(leg.get("filter_log") or {}),
-            vix=effective_vix,
-            regime=stub_regime,
-            sl_pct_override=sl_pct,
-            target_pct_override=target_pct,
-            risk_multiplier=1.0,
-            fixed_option_lots=int(leg["lots"]),
-        )
-
-    def _maybe_reversal_entry(self, now: datetime, effective_vix: float, plan: Dict) -> None:
-        """
-        One counter-direction entry per day when the plan is exhausted but the live trend
-        has strongly reversed (e.g., plan was PUT all day, but market turned STRONG_BULL).
-
-        Requirements:
-          - Not already done today (_reversal_entry_done)
-          - State machine is IDLE (no open position)
-          - Risk allows another trade
-          - Time window: 11:00 – 14:00
-          - Live trend is STRONG_BULL or STRONG_BEAR with conviction >= 0.72
-          - Reversal direction is OPPOSITE to _plan_direction
-          - Intraday momentum confirms the new direction
-        """
-        if self._reversal_entry_done:
-            return
-        if not self.sm.is_idle:
-            return
-        can_trade, _ = self.risk.can_trade()
-        if not can_trade:
-            return
-
-        now_mins = now.hour * 60 + now.minute
-        if now_mins < 11 * 60 or now_mins >= 14 * 60:
-            return
-
-        trend = self._current_trend
-        if trend is None:
-            return
-        if trend.state.value not in ("STRONG_BULL", "STRONG_BEAR"):
-            return
-        if trend.conviction < 0.72:
-            return
-
-        reversal_dir = trend.direction  # "CALL" or "PUT"
-
-        # Must be opposite to today's plan (or no plan at all — opportunistic entry on 0-leg days)
-        if self._plan_direction and reversal_dir == self._plan_direction:
-            return
-
-        # Momentum confirmation on live candles
-        candles = self._candle_cache or self._refresh_candles(now)
-        momentum_ok, momentum_reason = self._confirm_intraday_momentum(reversal_dir, candles)
-        if not momentum_ok:
-            logger.info(
-                f"REVERSAL_ENTRY SKIP: momentum not confirmed for {reversal_dir} — {momentum_reason}"
-            )
-            return
-
-        # Direction-loss block still applies — if we already lost in this direction today, skip
-        if reversal_dir in self._lost_directions_today:
-            logger.info(
-                f"REVERSAL_ENTRY SKIP: {reversal_dir} already lost today — not retrying"
-            )
-            return
-
-        spot = self.client.get_quote("NIFTY 50", "NSE")
-        if spot <= 0:
-            return
-
-        logger.info(
-            f"REVERSAL_ENTRY: plan={self._plan_direction} → live={reversal_dir} "
-            f"trend={trend.state.value} conviction={trend.conviction:.2f} "
-            f"time={now.strftime('%H:%M')} — entering counter-direction trade"
-        )
-        _log_event("REVERSAL_ENTRY", {
-            "time": now.strftime("%H:%M"),
-            "plan_direction": self._plan_direction,
-            "reversal_direction": reversal_dir,
-            "trend_state": trend.state.value,
-            "conviction": round(trend.conviction, 2),
-            "vix": round(effective_vix, 1),
-        })
-
-        self._reversal_entry_done = True
-
-        from shared.regime_classifier import RegimeResult
-        stub_regime = RegimeResult(
-            regime="REVERSAL",
-            adx_proxy=0.0,
-            atr_current=1.0,
-            atr_avg=1.0,
-            atr_ratio=1.0,
-            vix=effective_vix,
-            rsi=50.0,
-            ema_fast=0.0,
-            ema_slow=0.0,
-            strategy_priority=[],
-            sl_target={},
-            detail=f"Intraday reversal: {self._plan_direction} → {reversal_dir}",
-        )
-        candle = {"close": spot, "open": spot, "high": spot, "low": spot, "ts": now}
-        self._enter_trade(
-            signal=reversal_dir,
-            strategy="INTRADAY_REVERSAL",
-            candle=candle,
-            atr=None,
-            filter_log={
-                "reversal_from": self._plan_direction,
-                "trend_state": trend.state.value,
-                "conviction": round(trend.conviction, 2),
-            },
-            vix=effective_vix,
-            regime=stub_regime,
-            sl_pct_override=0.21,
-            target_pct_override=0.42,
-            risk_multiplier=0.8,
-            fixed_option_lots=1,
-        )
-
-    def _scan_entry(self, now: datetime, candles: List[Dict], vix: Optional[float]) -> None:
-        can_trade, reason = self.risk.can_trade()
-        if not can_trade:
-            if self._heartbeat_count % (60 // self.cfg.poll_seconds) == 0:
-                logger.info(f"RISK BLOCKED: {reason}")
-                _log_event("RISK_BLOCKED", {"reason": reason, **self.risk.status()})
-            return
-
-        if not self.sm.is_idle:
-            return
-
-        # Daily regime gate — SKIP days mean zero trades
-        if self._daily_regime and not self._daily_regime.should_trade:
-            return
-
-        if self._day_stopped_profit:
-            return
-
-        strat_state = self.risk.get_strategy_state()
-        vwap_enabled = strat_state.get("vwap_enabled", True)
-
-        current_time = now.time()
-        orb_start = self._t(self.cfg.orb_start)
-        orb_end = self._t(self.cfg.orb_end)
-        entry_close = self._t(self.cfg.entry_window_close)
-        reclaim_start = self._t(self.cfg.reclaim_window_start)
-        reclaim_end = self._t(self.cfg.reclaim_window_end)
-
-        # Regime-driven time window
-        if self._daily_regime:
-            regime_window_start = self._t(self._daily_regime.execution.window_start)
-            regime_window_end = self._t(self._daily_regime.execution.window_end)
-            if current_time < regime_window_start or current_time > regime_window_end:
-                return
-
-        if not candles:
-            return
-
-        last_candle = candles[-1]
-        effective_vix = vix or 14.0
-        regime = self._detect_regime(candles, effective_vix)
-        self._current_regime = regime
-        trend = self._detect_trend(candles, effective_vix)
-
-        # ── FIX 3: Early session detection (9:15–10:00 = aggressive mode) ──
-        is_early_session = current_time < self._t("10:00")
-
-        # ── FIX 5: Missed move detection — skip if Nifty moved >150pts in 30min ──
-        if len(candles) >= 7:
-            price_30min_ago = float(candles[-7]["close"])
-            price_now = float(candles[-1]["close"])
-            move_pts = abs(price_now - price_30min_ago)
-            if move_pts >= 150.0:
-                logger.info(
-                    f"MISSED_MOVE: {move_pts:.0f}pts in 30min exceeds 150pt threshold "
-                    f"— skipping new entries (prevent late chasing)"
-                )
-                _log_event("MISSED_MOVE", {
-                    "move_pts": round(move_pts, 1),
-                    "price_30min_ago": round(price_30min_ago, 1),
-                    "price_now": round(price_now, 1),
-                    "threshold_pts": 150.0,
-                    "regime": regime.regime,
-                    "trend": trend.state.value,
-                })
-                return
-
-        # Strategy list: start from TREND priority, intersect with daily regime whitelist
-        strategy_list = trend.strategy_priority
-        risk_multiplier = trend.risk_multiplier
-
-        if self._daily_regime:
-            regime_strategies = set(self._daily_regime.allowed_strategies)
-            strategy_list = [s for s in strategy_list if s in regime_strategies]
-            regime_direction = self._daily_regime.allowed_direction
-            # GAP_TRENDING direction unlock: if intraday trend contradicts the gap direction,
-            # open both directions so _resolve_leg_direction can follow live trend per-leg.
-            # BULL/BEAR state is sufficient (gap fills are slow grinds, not sharp STRONG moves).
-            if ("GAP_TRENDING" in self._daily_regime.name
-                    and self._current_trend
-                    and self._current_trend.conviction >= 0.65
-                    and self._current_trend.state.value in ("STRONG_BULL", "STRONG_BEAR", "BULL", "BEAR")):
-                _gap_dir = "CALL" if "BULL" in self._daily_regime.name else "PUT"
-                _live_dir = "CALL" if self._current_trend.state.value in ("STRONG_BULL", "BULL") else "PUT"
-                if _gap_dir != _live_dir:
-                    logger.info(
-                        f"GAP_TRENDING_DIR_UNLOCK: gap={_gap_dir} but live={_live_dir} "
-                        f"(conviction={self._current_trend.conviction:.2f}) — unlocking both directions"
-                    )
-                    regime_direction = None
-        else:
-            regime_direction = None
-
-        # ── FIX 1: Intraday regime overrides ──
-        if regime.regime == "VOLATILE":
-            if regime.strong_trend_override:
-                # Strong trend day detected inside VOLATILE — allow trend strategies
-                logger.info(
-                    "STRONG_TREND_OVERRIDE: VOLATILE regime + strong trend detected "
-                    "(EMA stack + above VWAP + no pullback) — allowing EMA_PULLBACK & MOMENTUM_BREAKOUT"
-                )
-                _log_event("STRONG_TREND_OVERRIDE", {
-                    "regime": regime.regime,
-                    "detail": regime.detail,
-                    "strategy_override": ["EMA_PULLBACK", "MOMENTUM_BREAKOUT", "ORB", "VWAP_RECLAIM"],
-                })
-                # Moderate risk reduction (high ATR = bigger moves, but direction is clear)
-                risk_multiplier = min(risk_multiplier, 0.80)
-            else:
-                strategy_list = [s for s in strategy_list if s != "MOMENTUM_BREAKOUT"]
-                risk_multiplier = min(risk_multiplier, 0.60)
-
-        if trend.state == TrendState.NEUTRAL:
-            strategy_list = [s for s in strategy_list if s not in ("ORB", "MOMENTUM_BREAKOUT")]
-
-        # 10:30 trend-conflict check (skip in early session — price hasn't set direction yet)
-        conflict_time = self._t("10:30")
-        if (self._daily_regime
-                and current_time >= conflict_time
-                and regime_conflicts_with_trend(self._daily_regime, trend.direction)):
-            logger.info(
-                f"TREND CONFLICT: regime={self._daily_regime.name} ({self._daily_regime.allowed_direction}) "
-                f"vs trend={trend.direction} — reducing confidence"
-            )
-            risk_multiplier *= 0.5
-
-        pb_window_start = self._t(self.cfg.ema_pullback_window_start)
-        pb_window_end = self._t(self.cfg.ema_pullback_window_end)
-        mb_window_start = self._t(self.cfg.momentum_breakout_window_start)
-        mb_window_end = self._t(self.cfg.momentum_breakout_window_end)
-
-        # ── Evaluate ALL strategies, collect candidates, pick strongest ──
-        candidates: list = []
-        scan_results: list = []
-        idx = len(candles) - 1
-
-        # FIX 3/4: Early session FAST MODE — relaxed filter params
-        if is_early_session:
-            _orb_body = max(0.28, self.cfg.min_breakout_body_ratio - 0.15)
-            _orb_vol = max(0.90, self.cfg.min_volume_surge_ratio - 0.30)
-            _rsi_bull_min = max(35.0, self.cfg.rsi_bull_min - 10.0)
-            _rsi_bear_max = min(65.0, self.cfg.rsi_bear_max + 10.0)
-            _pb_prox = self.cfg.ema_pullback_proximity_pct * 1.5
-            _pb_body = max(0.28, 0.38 - 0.10)
-            logger.debug(
-                f"EARLY_SESSION_MODE: relaxed filters active "
-                f"(body≥{_orb_body:.0%}, vol≥{_orb_vol:.1f}x, RSI {_rsi_bull_min:.0f}-{_rsi_bear_max:.0f})"
-            )
-        else:
-            _orb_body = self.cfg.min_breakout_body_ratio
-            _orb_vol = self.cfg.min_volume_surge_ratio
-            _rsi_bull_min = self.cfg.rsi_bull_min
-            _rsi_bear_max = self.cfg.rsi_bear_max
-            _pb_prox = self.cfg.ema_pullback_proximity_pct
-            _pb_body = 0.38
-
-        def _fmt_filters(filters):
-            return {
-                k: {"passed": v.get("passed"), "value": v.get("value"), "detail": v.get("detail", "")}
-                for k, v in filters.items()
-            } if filters else {}
-
-        def _eval_strategy(name, result, event_type):
-            filters = result.get("filters", {})
-            failed_filters = [k for k, v in filters.items() if not (v.get("passed") if isinstance(v, dict) else v)]
-            waiting_for = failed_filters[:3] if failed_filters else []
-            _log_event(event_type, {
-                "strategy": name, "regime": regime.regime,
-                "trend": trend.state.value, "conviction": trend.conviction,
-                "signal": result.get("signal"), "all_passed": result["all_passed"],
-                "filters": _fmt_filters(filters),
-                "waiting_for": waiting_for,
-                "early_session": is_early_session,
-                "strong_trend_override": regime.strong_trend_override,
-            })
-            confidence = compute_signal_confidence(
-                name, result.get("signal", ""), regime.regime, trend, filters, effective_vix
-            )
-            scan_results.append({
-                "strategy": name, "signal": result.get("signal"),
-                "passed": result["all_passed"], "confidence": confidence,
-                "waiting_for": waiting_for,
-            })
-            if result["all_passed"] and result["signal"]:
-                sl_pct, target_pct = SL_TARGET_BY_STRATEGY.get(name, (0.28, 0.60))
-                candidates.append({
-                    "strategy": name, "signal": result["signal"],
-                    "confidence": confidence, "sl_pct": sl_pct, "target_pct": target_pct,
-                    "atr": result.get("atr", 0), "filters": filters,
-                })
-            else:
-                failed = [f"{k}={v.get('value','') if isinstance(v, dict) else ''}" for k, v in filters.items() if not (v.get("passed") if isinstance(v, dict) else v)]
-                logger.info(
-                    f"{name} SKIP: {'waiting for ' + ', '.join(f[:4]) if failed else 'no signal'} "
-                    f"(conf={confidence:.0f}, early={is_early_session})"
-                )
-
-        orb_enabled = strat_state.get("orb_enabled", True)
-
-        # ── ORB ──
-        if "ORB" in strategy_list and orb_enabled and not self._orb_signal_used and orb_end <= current_time <= entry_close:
-            result = evaluate_orb_signal(
-                candles, last_candle, vix,
-                orb_start=orb_start, orb_end=orb_end,
-                min_orb_range_points=self.cfg.min_orb_range_points,
-                max_orb_range_points=self.cfg.max_orb_range_points,
-                breakout_buffer_pct=self.cfg.breakout_buffer_pct,
-                min_breakout_body_ratio=_orb_body,
-                min_volume_surge_ratio=_orb_vol,
-                ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
-                rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
-                require_vwap_confirmation=self.cfg.require_vwap_confirmation,
-                vwap_buffer_points=self.cfg.vwap_buffer_points,
-                rsi_bull_min=_rsi_bull_min, rsi_bear_max=_rsi_bear_max,
-                rsi_overbought_skip=self.cfg.rsi_overbought_skip,
-                rsi_oversold_skip=self.cfg.rsi_oversold_skip,
-                vix_max=self.cfg.vix_max,
-            )
-            _eval_strategy("ORB", result, "ORB_SCAN")
-
-        # ── RELAXED_ORB ──
-        if "RELAXED_ORB" in strategy_list and orb_enabled and not self._orb_signal_used and orb_end <= current_time <= entry_close:
-            result = evaluate_orb_signal(
-                candles, last_candle, vix,
-                orb_start=orb_start, orb_end=orb_end,
-                min_orb_range_points=self.cfg.min_orb_range_points,
-                max_orb_range_points=self.cfg.relaxed_orb_max_range_points,
-                breakout_buffer_pct=self.cfg.breakout_buffer_pct,
-                min_breakout_body_ratio=max(0.28, _orb_body - 0.05),
-                min_volume_surge_ratio=max(0.80, _orb_vol - 0.10),
-                ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
-                rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
-                require_vwap_confirmation=self.cfg.require_vwap_confirmation,
-                vwap_buffer_points=self.cfg.vwap_buffer_points,
-                rsi_bull_min=_rsi_bull_min, rsi_bear_max=_rsi_bear_max,
-                rsi_overbought_skip=self.cfg.rsi_overbought_skip,
-                rsi_oversold_skip=self.cfg.rsi_oversold_skip,
-                vix_max=self.cfg.vix_max,
-            )
-            _eval_strategy("RELAXED_ORB", result, "ORB_SCAN")
-
-        # ── MOMENTUM_BREAKOUT ──
-        if "MOMENTUM_BREAKOUT" in strategy_list and not self._momentum_signal_used and mb_window_start <= current_time <= mb_window_end:
-            mb_result = evaluate_momentum_breakout_signal(
-                candles, idx, vix,
-                breakout_lookback=self.cfg.momentum_breakout_lookback,
-                min_body_ratio=self.cfg.momentum_breakout_min_body_ratio,
-                rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
-                rsi_bull_min=self.cfg.momentum_breakout_rsi_bull_min,
-                rsi_bull_max=self.cfg.momentum_breakout_rsi_bull_max,
-                rsi_bear_min=self.cfg.momentum_breakout_rsi_bear_min,
-                rsi_bear_max=self.cfg.momentum_breakout_rsi_bear_max,
-                vix_max=self.cfg.vix_max,
-                min_volume_surge_ratio=self.cfg.momentum_breakout_min_volume_surge,
-                ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
-            )
-            _eval_strategy("MOMENTUM_BREAKOUT", mb_result, "MOMENTUM_SCAN")
-
-        # ── EMA_PULLBACK ──
-        ema_dead_start = self._t("11:00")
-        ema_dead_end = self._t("12:00")
-        if "EMA_PULLBACK" in strategy_list and not self._ema_pullback_signal_used and pb_window_start <= current_time <= pb_window_end and not (ema_dead_start <= current_time < ema_dead_end):
-            pb_result = evaluate_ema_pullback_signal(
-                candles, idx, vix,
-                ema_fast=self.cfg.ema_fast, ema_slow=self.cfg.ema_slow,
-                pullback_proximity_pct=_pb_prox,
-                min_body_ratio=_pb_body,
-                rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
-                vix_max=self.cfg.vix_max,
-                lookback_candles=self.cfg.ema_pullback_lookback_candles,
-            )
-            _eval_strategy("EMA_PULLBACK", pb_result, "EMA_PULLBACK_SCAN")
-
-        # ── VWAP_RECLAIM ──
-        if "VWAP_RECLAIM" in strategy_list and vwap_enabled and not self._reclaim_signal_used and reclaim_start <= current_time <= reclaim_end:
-            reclaim = evaluate_vwap_reclaim_signal(
-                candles, idx, vix,
-                reclaim_min_rejection_points=self.cfg.reclaim_min_rejection_points,
-                rsi_period=self.cfg.rsi_period, atr_period=self.cfg.atr_period,
-                vix_max=self.cfg.vix_max,
-            )
-            _eval_strategy("VWAP_RECLAIM", reclaim, "RECLAIM_SCAN")
-
-        # ── Log full scan cycle ──
-        _log_event("SCAN_CYCLE", {
-            "regime": regime.regime,
-            "strong_trend_override": regime.strong_trend_override,
-            "trend": trend.state.value,
-            "trend_direction": trend.direction,
-            "conviction": trend.conviction,
-            "risk_multiplier": risk_multiplier,
-            "vix": effective_vix,
-            "early_session": is_early_session,
-            "strategies_evaluated": len(scan_results),
-            "signals_detected": len(candidates),
-            "scans": scan_results,  # includes waiting_for per strategy
-            "candidates": [
-                {"strategy": c["strategy"], "signal": c["signal"], "confidence": c["confidence"]}
-                for c in candidates
-            ],
-        })
-
-        # ── Pick strongest candidate ──
-        if not candidates:
-            return
-
-        # Filter by regime direction + runtime override
-        _ov_direction = str(_read_runtime_override().get("strategy_filter", "")).upper()
-        _direction_unlocked = _ov_direction in ("ALL", "BOTH")
-        if _ov_direction == "PE":
-            # Hard override: PUT only regardless of regime
-            candidates = [c for c in candidates if c["signal"] == "PUT"]
-        elif _ov_direction == "CE":
-            # Hard override: CALL only regardless of regime
-            candidates = [c for c in candidates if c["signal"] == "CALL"]
-        elif regime_direction and not _direction_unlocked:
-            candidates = [c for c in candidates if c["signal"] == regime_direction]
-        if not candidates:
-            return
-
-        # Check regime max trades
-        if self._daily_regime:
-            trades_today = self.risk.status().get("trades_today", 0)
-            if trades_today >= self._daily_regime.execution.max_trades:
-                return
-
-        candidates.sort(key=lambda c: c["confidence"], reverse=True)
-        best = candidates[0]
-
-        if len(candidates) > 1:
-            runner_up = candidates[1]
-            logger.info(
-                f"MULTI-SIGNAL: {len(candidates)} signals detected. "
-                f"BEST={best['strategy']} ({best['signal']}, conf={best['confidence']:.0f}) "
-                f"vs {runner_up['strategy']} ({runner_up['signal']}, conf={runner_up['confidence']:.0f})"
-            )
-        else:
-            logger.info(
-                f"SIGNAL: {best['strategy']} {best['signal']} confidence={best['confidence']:.0f}"
-            )
-
-        self._enter_trade(
-            signal=best["signal"], strategy=best["strategy"],
-            candle=last_candle, atr=best["atr"],
-            filter_log=best["filters"], vix=effective_vix,
-            regime=regime, sl_pct_override=best["sl_pct"],
-            target_pct_override=best["target_pct"], risk_multiplier=risk_multiplier,
-        )
-        # Mark used flags
-        if best["strategy"] in ("ORB", "RELAXED_ORB"):
-            self._orb_signal_used = True
-        elif best["strategy"] == "MOMENTUM_BREAKOUT":
-            self._momentum_signal_used = True
-        elif best["strategy"] == "EMA_PULLBACK":
-            self._ema_pullback_signal_used = True
-        elif best["strategy"] == "VWAP_RECLAIM":
-            self._reclaim_signal_used = True
-
-    def _enter_trade(
-        self,
-        signal: str,
-        strategy: str,
-        candle: Dict,
-        atr: Optional[float],
-        filter_log: dict,
-        vix: float,
-        regime: RegimeResult,
-        sl_pct_override: float = 0.30,
-        target_pct_override: float = 0.65,
-        risk_multiplier: float = 1.0,
-        fixed_option_lots: Optional[int] = None,
-    ) -> None:
-        signal_time = time.time()
-        spot = float(candle["close"])
-        # Expiry-day protections: fire on actual expiry date, not just Thursdays
-        # (handles Tuesday expiries when Thursday is a holiday)
-        _today = datetime.now().date()
-        is_thursday = (_today.weekday() == 3) or (_today == self._current_expiry)
-
-        # ── Impulse / trend state (used throughout) ────────────────────────
-        impulse_grade_now = (
-            self._current_impulse.grade
-            if self._current_impulse is not None else ImpulseGrade.NONE
-        )
-        trend_state_now = (
-            self._current_trend.state if self._current_trend is not None else None
-        )
-        _strong_states = (TrendState.STRONG_BEAR, TrendState.STRONG_BULL)
-        _is_aplus = (
-            impulse_grade_now == ImpulseGrade.EXTREME
-            and trend_state_now in _strong_states
-        )
-        _is_strong = (
-            trend_state_now in _strong_states
-            and not _is_aplus
-        )
-
-        # ── Adaptive OTM/Strike selection ──────────────────────────────────
-        # Uses session + conviction + P&L state + VIX + impulse to pick ITM/ATM/OTM
-        _entry_session = get_session(datetime.now())
-        _daily_pnl_now = self.risk.status().get("daily_pnl", 0.0)
-        _capital_now = self.risk.current_capital
-        _conviction_now = self._current_trend.conviction if self._current_trend else 0.5
-
-        _strike_decision = compute_strike_offset(
-            conviction=_conviction_now,
-            impulse_grade=str(impulse_grade_now),
-            daily_pnl=_daily_pnl_now,
-            capital=_capital_now,
-            session=_entry_session,
-            vix=float(vix or 15.0),
-        )
-        otm_offset = _strike_decision.otm_offset
-        # Thursday expiry: cap at ATM (0) to avoid deep OTM theta implosion on expiry day
-        if is_thursday:
-            otm_offset = min(otm_offset, 0)
-        logger.info(
-            f"STRIKE_SELECT: {_strike_decision.strike_type} (offset={otm_offset}) — {_strike_decision.reasoning}"
-        )
-
-        target_strike_offset = otm_offset * self.cfg.strike_step
-        if signal == "CALL":
-            target_spot_for_strike = spot + target_strike_offset
-        else:
-            target_spot_for_strike = spot - target_strike_offset
-
+    def _get_spot(self) -> float:
         try:
-            opt_info = self.client.select_atm_option(
-                spot=target_spot_for_strike, direction=signal,
-                strike_step=self.cfg.strike_step, expiry=self._current_expiry,
-            )
-        except Exception as _oe:
-            logger.warning(f"select_atm_option raised exception for {signal} at spot={spot}: {_oe}")
-            return
-        if not opt_info:
-            logger.warning(f"No option found for {signal} signal at spot={spot}")
-            return
+            ltp = self.client.get_quote("NIFTY 50", "NSE")
+            return float(ltp) if ltp and ltp > 0 else 0.0
+        except Exception as e:
+            logger.warning(f"SPOT_FETCH_ERROR: {e}")
+            return 0.0
 
-        symbol = opt_info["symbol"]
-        strike = opt_info["strike"]
-        expiry = opt_info["expiry"]
-
-        quote = self.client.get_quote_details(symbol, "NFO")
-        opt_price = (quote or {}).get("ltp") or (quote or {}).get("mid") or 0
-        spread_pct = (quote or {}).get("spread_pct") or 0
-
-        if opt_price < self.cfg.min_option_price:
-            logger.warning(f"Option price too low: {opt_price:.2f}")
-            return
-        if opt_price > self.cfg.max_option_price:
-            logger.warning(f"Option price too high: {opt_price:.2f}")
-            return
-        if spread_pct and spread_pct > self.cfg.max_spread_pct:
-            logger.warning(f"Spread too wide: {spread_pct:.3f}")
-            return
-
-        # ── Dynamic ATR-based SL and target ───────────────────────────────
-        # Nifty ATR → option stop distance via delta estimate. Much smarter than
-        # a flat % derived from a static config value.
-        setup_tag = "A+" if _is_aplus else ("STRONG" if _is_strong else "STD")
-        candles_for_atr = self._candle_cache if self._candle_cache else []
-        atr_sl_pct, atr_sl_reason = compute_atm_sl_from_nifty_atr(
-            candles_for_atr, opt_price,
-            otm_offset=otm_offset,
-            atr_multiplier=1.5 if not _is_aplus else 2.0,  # A+ gets wider SL room
-        )
-        # Blend: ATR-based (70%) + backtest-calibrated (30%), so we don't deviate wildly
-        blended_sl_pct = (atr_sl_pct * 0.70) + (sl_pct_override * 0.30)
-        # Tighten slightly on marginal setups, widen on A+
-        if _is_aplus:
-            sl_pct = min(blended_sl_pct * 1.15, 0.40)   # A+: full room
-        elif _is_strong:
-            sl_pct = blended_sl_pct
-        else:
-            sl_pct = blended_sl_pct * 0.88              # STD: tighter
-        if is_thursday:
-            sl_pct = min(sl_pct, self.cfg.thursday_max_loss_pct)
-        sl_pct = round(max(0.15, min(0.42, sl_pct)), 3)
-        logger.info(
-            f"DYNAMIC_SL: {setup_tag} | {atr_sl_reason} | "
-            f"blended={blended_sl_pct*100:.1f}% → final={sl_pct*100:.1f}%"
-        )
-
-        # Dynamic target: R:R multiple of ATR-derived SL (not static cfg target)
-        target_pct, target_reason = compute_dynamic_target(
-            sl_pct=sl_pct,
-            impulse_grade=str(impulse_grade_now),
-            conviction=_conviction_now,
-            session=_entry_session,
-            trend_state=trend_state_now.value if trend_state_now else "NEUTRAL",
-        )
-        logger.info(f"DYNAMIC_TARGET: {target_reason}")
-
-        # ── Conviction-based risk scaling ────────────────────────────
-        # A+ (EXTREME impulse + STRONG trend) → 5% risk (3-4 lots at ₹1L)
-        # STRONG trend (non-A+)               → 3% risk (2 lots)
-        # Normal                              → regime/config default (1-2 lots)
-        base_risk_pct = self._daily_regime.execution.risk_pct if self._daily_regime else self.cfg.risk_per_trade_pct
-        if _is_aplus:
-            effective_risk_pct = self.cfg.aplus_risk_pct * risk_multiplier
-            logger.info(
-                f"CONVICTION_SIZING: A+ setup (EXTREME impulse + {trend_state_now.value if trend_state_now else '?'}) "
-                f"→ risk={effective_risk_pct*100:.1f}% OTM={otm_offset} steps ({_strike_decision.strike_type})"
-            )
-        elif _is_strong:
-            effective_risk_pct = max(base_risk_pct * 1.50, 0.03) * risk_multiplier
-            logger.info(
-                f"CONVICTION_SIZING: STRONG trend ({trend_state_now.value if trend_state_now else '?'}) "
-                f"→ risk={effective_risk_pct*100:.1f}% OTM={otm_offset} steps ({_strike_decision.strike_type})"
-            )
-        else:
-            effective_risk_pct = base_risk_pct * risk_multiplier
-        if regime.regime == "VOLATILE":
-            effective_risk_pct = min(effective_risk_pct, base_risk_pct * 0.50)
-
-        if fixed_option_lots is not None:
-            lot_unit = self.cfg.nifty_option_lot_size
-            # Expiry day: tighter SL (6%) means plan's pre-computed lots (capped by VIX)
-            # undersize the position. Recalculate using actual risk budget / actual SL.
-            if is_thursday and sl_pct <= self.cfg.thursday_max_loss_pct + 0.01:
-                _risk_budget = self.risk.current_capital * effective_risk_pct
-                _risk_per_lot = opt_price * sl_pct * lot_unit
-                _expiry_lots = max(1, int(_risk_budget / _risk_per_lot)) if _risk_per_lot > 0 else 1
-                _expiry_lots = min(_expiry_lots, self.cfg.live_max_lots)
-                lots = _expiry_lots
-                logger.info(
-                    f"EXPIRY_SIZING: risk_budget=₹{_risk_budget:.0f} / "
-                    f"risk_per_lot=₹{_risk_per_lot:.0f} (sl={sl_pct*100:.1f}%) → {lots} lots"
-                )
-            else:
-                lots = int(fixed_option_lots)
-            qty = lots * lot_unit
-            risk_per_unit = opt_price * sl_pct
-            actual_risk = round(risk_per_unit * qty, 2)
-            size_info = {
-                "lots": lots,
-                "qty": qty,
-                "risk_amount": actual_risk,
-                "actual_risk": actual_risk,
-            }
-            logger.info(
-                f"DAILY_ADAPTIVE SIZING: lots={lots} × {lot_unit} = qty {qty} | "
-                f"est_risk≈₹{actual_risk:,.0f} (sl {sl_pct*100:.1f}%)"
-            )
-        else:
-            if effective_risk_pct != base_risk_pct:
-                logger.info(
-                    f"RISK SCALED: {base_risk_pct*100:.1f}% × {risk_multiplier:.2f} "
-                    f"= {effective_risk_pct*100:.1f}% | regime={regime.regime} "
-                    f"daily_regime={self._daily_regime.name if self._daily_regime else '?'}"
-                )
-            size_info = self.risk.compute_position_size(
-                entry_price=opt_price, sl_pct=sl_pct, risk_pct_override=effective_risk_pct
-            )
-            lots = size_info["lots"]
-            qty = size_info["qty"]
-
-        sl_price = round(opt_price * (1 - sl_pct), 1)
-        target_price = round(opt_price * (1 + target_pct), 1)
-
-        trend_info = f"{self._current_trend.state.value}" if self._current_trend else "?"
-        conf_score = compute_signal_confidence(
-            strategy, signal, regime.regime, self._current_trend or TrendResult(
-                state=TrendState.NEUTRAL, direction="NEUTRAL", conviction=0,
-                risk_multiplier=0.6, strategy_priority=[]
-            ),
-            filter_log, vix,
-        )
-        otm_tag   = f"OTM+{otm_offset}" if otm_offset > 0 else ("ITM" if otm_offset < 0 else "ATM")
-        logger.info(
-            f"SIGNAL: {strategy} {signal} [{setup_tag}/{otm_tag} ({_strike_decision.strike_type})] | "
-            f"trend={trend_info} impulse={impulse_grade_now} regime={regime.regime} | "
-            f"confidence={conf_score:.0f} | "
-            f"{symbol} strike={strike} | LTP={opt_price:.2f} SL={sl_price:.2f} ({sl_pct*100:.0f}%) "
-            f"TGT={target_price:.2f} ({target_pct*100:.0f}%) | "
-            f"Lots={lots} Qty={qty} Risk=₹{size_info['actual_risk']:.0f} "
-            f"(risk_mult={risk_multiplier:.2f})"
-        )
-
-        # Place entry order
-        if self.cfg.paper_mode:
-            order_id = "PAPER"
-            fill_price = opt_price
-            entry_latency_ms = 0
-        else:
-            # Aggressive limit: LTP + buffer for fast fill
-            if self.cfg.use_limit_orders:
-                limit_px = opt_price * (1 + self.cfg.limit_price_buffer_pct)
-                resp = self.client.place_order(
-                    symbol=symbol, qty=qty, side="BUY",
-                    exchange="NFO", product="MIS", limit_price=limit_px,
-                )
-            else:
-                resp = self.client.place_order(
-                    symbol=symbol, qty=qty, side="BUY",
-                    exchange="NFO", product="MIS",
-                )
-            order_id = resp.get("order_id", "")
-            filled = self.client.confirm_fill(order_id, timeout_seconds=15)
-            if not filled:
-                logger.error(f"Entry order {order_id} not filled — cancelling")
-                self.client.cancel_order(order_id)
-                return
-            status = self.client.get_order_status(order_id)
-            fill_price = float(status.get("average_price", opt_price) or opt_price)
-            entry_latency_ms = int((time.time() - signal_time) * 1000)
-
-        logger.info(
-            f"FILLED: {fill_price:.2f} (signal LTP was {opt_price:.2f}, "
-            f"slip={((fill_price - opt_price) / opt_price * 100):+.2f}%, "
-            f"latency={entry_latency_ms}ms)"
-        )
-
-        # Recalculate SL/target based on actual fill price
-        sl_price = round(fill_price * (1 - sl_pct), 1)
-        target_price = round(fill_price * (1 + target_pct), 1)
-
-        # Place SL-M order at exchange for protection
-        if not self.cfg.paper_mode and self.cfg.use_slm_exit:
-            try:
-                slm_resp = self.client.place_slm_order(
-                    symbol=symbol, qty=qty,
-                    trigger_price=sl_price,
-                )
-                self._active_slm_order_id = slm_resp.get("order_id")
-                logger.info(f"SL-M placed: trigger={sl_price:.2f} order_id={self._active_slm_order_id}")
-            except Exception as e:
-                logger.error(f"SL placement failed: {e} — exiting position immediately for safety")
-                _log_event("SL_PLACEMENT_FAILED", {"symbol": symbol, "error": str(e), "action": "emergency_exit"})
-                try:
-                    # Use LTP-based limit sell (market orders blocked on F&O by NSE)
-                    exit_resp = self.client.place_order(
-                        symbol=symbol, qty=qty, side="SELL",
-                        exchange="NFO", product="MIS",
-                        ltp=opt_price,
-                    )
-                    self.client.confirm_fill(exit_resp.get("order_id", ""), timeout_seconds=15)
-                    logger.info("Emergency exit (limit) placed after SL placement failure")
-                except Exception as exit_err:
-                    logger.error(f"EMERGENCY EXIT FAILED: {exit_err} — HALTING BOT ENTRIES. CHECK KITE NOW!")
-                    _log_event("EMERGENCY_EXIT_FAILED", {"symbol": symbol, "error": str(exit_err)})
-                    self._notify(f"🚨 EMERGENCY: SL failed AND exit failed for {symbol}. CHECK KITE NOW!")
-                    self._emergency_halt = True  # Block all further entries until bot restart
-                # Record trade so trades_today is incremented — prevents re-entry loop on next scan
-                self.risk.record_trade(0.0)
-                return
-
-        filter_log["regime"] = {"passed": True, "value": regime.regime, "detail": regime.detail}
-        if self._current_trend:
-            filter_log["trend"] = {
-                "passed": True,
-                "value": self._current_trend.state.value,
-                "detail": (
-                    f"direction={self._current_trend.direction} "
-                    f"conviction={self._current_trend.conviction:.2f} "
-                    f"risk_mult={risk_multiplier:.2f}"
-                ),
-            }
-
-        self.sm.transition_to_entry_pending(
-            symbol=symbol, direction=signal, option_type=opt_info["option_type"],
-            strike=strike, expiry=str(expiry), qty=qty, lots=lots,
-            sl_price=sl_price, target_price=target_price,
-            spot_at_entry=spot, vix_at_entry=vix,
-            strategy=strategy, filter_log=filter_log, entry_order_id=order_id,
-        )
-        self.sm.confirm_entry(fill_price)
-        # Persist SL-M order ID so it survives bot restarts
-        if self._active_slm_order_id:
-            self.sm.position.slm_order_id = self._active_slm_order_id
-            from bot.state_machine import save_position
-            save_position(self.sm.position)
-
-        _log_event("ENTRY", {
-            "engine": "daily_adaptive" if fixed_option_lots is not None else "intraday",
-            "strategy": strategy, "regime": regime.regime, "signal": signal,
-            "confidence": conf_score,
-            "trend": trend_info, "conviction": self._current_trend.conviction if self._current_trend else 0,
-            "risk_multiplier": risk_multiplier,
-            "symbol": symbol, "fill_price": fill_price,
-            "signal_ltp": opt_price,
-            "slippage_pct": round((fill_price - opt_price) / opt_price * 100, 3),
-            "entry_latency_ms": entry_latency_ms,
-            "sl": sl_price, "sl_pct": sl_pct,
-            "target": target_price, "target_pct": target_pct,
-            "spot": spot, "vix": vix,
-            "lots": lots, "qty": qty, "risk_amount": size_info["actual_risk"],
-            "slm_order_id": self._active_slm_order_id,
-            "order_type": "LIMIT" if self.cfg.use_limit_orders else "MARKET",
-            "setup_tag": setup_tag, "otm_offset": otm_offset,
-            "impulse_grade": impulse_grade_now,
-        })
-
-        daily_regime_name = self._daily_regime.name if self._daily_regime else "?"
-        _otm_label = f"OTM+{otm_offset}" if otm_offset > 0 else ("ITM" if otm_offset < 0 else "ATM")
-        _setup_label = "A+" if _is_aplus else ("STRONG" if _is_strong else "STD")
-        self._notify(
-            f"🚀 ENTRY: {strategy} {signal} [{daily_regime_name}] [{_setup_label}/{_otm_label}]\n"
-            f"{symbol}\n"
-            f"Fill: ₹{fill_price:.0f} (slip {((fill_price - opt_price) / opt_price * 100):+.1f}%)\n"
-            f"SL: ₹{sl_price:.0f} ({sl_pct*100:.0f}%) | TGT: ₹{target_price:.0f} ({target_pct*100:.0f}%)\n"
-            f"Risk: ₹{size_info['actual_risk']:.0f} | Lots: {lots} | SL-M: {'YES' if self._active_slm_order_id else 'NO'}"
-        )
-
-    # ── Notifications ─────────────────────────────────────────────
-
-    def _notify(self, message: str) -> None:
-        if not self.cfg.telegram_bot_token or not self.cfg.telegram_chat_id:
-            return
+    def _get_vix(self) -> Optional[float]:
         try:
-            import httpx
-            httpx.post(
-                f"https://api.telegram.org/bot{self.cfg.telegram_bot_token}/sendMessage",
-                json={"chat_id": self.cfg.telegram_chat_id, "text": message},
-                timeout=5,
-            )
+            ltp = self.client.get_quote("INDIA VIX", "NSE")
+            return float(ltp) if ltp and ltp > 0 else None
         except Exception:
-            pass
+            return None
 
-    # ── Main loop ──────────────────────────────────────────────────
+    # ── Market timing ─────────────────────────────────────────────────────────
 
-    def run(self) -> None:
-        mode = "PAPER" if self.cfg.paper_mode else "LIVE"
-        logger.info(f"{'='*60}")
-        logger.info(f" KITE REGIME-AWARE TRADER [{mode}]")
-        logger.info(
-            f" Engine: {self.cfg.trading_engine} | "
-            f"Capital: ₹{self.cfg.capital:,.0f} | "
-            f"Opt lot unit: {self.cfg.nifty_option_lot_size} | "
-            f"Intraday lot_size: {self.cfg.lot_size}"
-        )
-        logger.info(f" Risk/trade: {self.cfg.risk_per_trade_pct*100:.1f}% | Max lots: {self.cfg.max_lots}")
-        logger.info(f" Daily loss limit: {self.cfg.max_daily_loss_pct*100:.0f}% (2R) | Hard: ₹{self.cfg.max_daily_loss_hard:,.0f}")
-        logger.info(f" Drawdown halt: {self.cfg.max_drawdown_pct:.0f}%")
-        logger.info(f" Entry: {'Aggressive LIMIT' if self.cfg.use_limit_orders else 'MARKET'} | SL: {'SL-M' if self.cfg.use_slm_exit else 'Software'}")
-        logger.info(f" Max trades: {self.cfg.max_trades_per_day}/day | VIX max: {self.cfg.vix_max}")
-        logger.info(f"{'='*60}")
+    def _market_active(self, now: datetime) -> bool:
+        t = now.time()
+        return _t("09:00") <= t <= _t("15:30")
 
-        self._notify(
-            f"🤖 Bot started [{mode}]\n"
-            f"Capital: ₹{self.cfg.capital:,.0f}\n"
-            f"Risk/trade: {self.cfg.risk_per_trade_pct*100:.1f}%\n"
-            f"DD halt: {self.cfg.max_drawdown_pct:.0f}%\n"
-            f"SL: {'SL-M' if self.cfg.use_slm_exit else 'Software'}"
-        )
+    def _check_expiry_day(self, today: date) -> bool:
+        """Returns True if today is a Thursday (weekly expiry for NIFTY)."""
+        return today.weekday() == 3  # Thursday
 
-        # Startup broker sync — if bot restarted mid-trade, verify position is still open
-        if not self.cfg.paper_mode and self.sm.is_active:
-            try:
-                broker_qty = self.client.get_open_qty(self.sm.position.symbol)
-                current_price = self.client.get_quote(self.sm.position.symbol, "NFO")
-                was_synced = self.sm.sync_with_broker(broker_qty, last_price=current_price)
-                if was_synced:
-                    logger.warning(
-                        f"STARTUP SYNC: position for {self.sm.position.symbol} was closed externally "
-                        f"(broker_qty={broker_qty}) — resetting to IDLE"
-                    )
-                    self._active_slm_order_id = None
-                    self._notify(f"⚠️ Startup sync: position closed externally. Check Kite.")
-                else:
-                    logger.info(
-                        f"STARTUP SYNC: broker position confirmed active "
-                        f"qty={self.sm.position.qty} symbol={self.sm.position.symbol}"
-                    )
-            except Exception as e:
-                logger.warning(f"Startup broker sync failed: {e}")
+    # ── Narrative ─────────────────────────────────────────────────────────────
 
-        api_failures = 0
+    def _set_narrative(self, status: str, detail: str) -> None:
+        self._narrative_status = status
+        self._narrative_detail = detail
 
-        while True:
-            try:
-                now = self._now()
+    def _off_market_narrative(self, now: datetime) -> None:
+        if now.time() < _t("09:00"):
+            self._set_narrative("PRE_MARKET", f"Market opens at 09:15 — current time {now.strftime('%H:%M')}")
+        else:
+            self._set_narrative("CLOSED", f"Market closed — today's P&L: ₹{self.risk.state.daily_pnl:+.0f}")
 
-                if now.weekday() >= 5:
-                    time.sleep(60)
-                    continue
+    def _flush_narrative(self, now: datetime, spot: float) -> None:
+        regime = self._regime
+        _write_narrative({
+            "status":        self._narrative_status,
+            "detail":        self._narrative_detail,
+            "regime":        regime.name if regime else "UNKNOWN",
+            "regime_bias":   regime.direction_bias if regime else None,
+            "regime_detail": regime.detail if regime else "",
+            "window":        f"{regime.window_start}–{regime.window_end}" if regime else "",
+            "spot":          spot,
+            "vix":           self._vix,
+            "trades_today":  self._trades_today,
+            "daily_pnl":     self.risk.state.daily_pnl,
+            "is_expiry_day": self._is_expiry_day,
+            "position": self.sm.current_state_dict() if not self.sm.is_idle else None,
+        })
 
-                if not self._market_active(now):
-                    time.sleep(self.cfg.poll_seconds)
-                    continue
+    # ── Startup broker sync ───────────────────────────────────────────────────
 
-                # Apply runtime overrides from dashboard (paused / halted / max_trades)
-                _ov = _read_runtime_override()
-                if _ov.get("paused") or _ov.get("halted"):
-                    if self._heartbeat_count % max(1, (60 // max(1, self.cfg.poll_seconds))) == 0:
-                        logger.info(f"BOT PAUSED via runtime override: {_ov}")
-                    time.sleep(self.cfg.poll_seconds)
-                    continue
+    def startup_sync(self) -> None:
+        """
+        Called once on startup. Checks if there's an active position in local state
+        that matches the broker — handles restarts during an open trade.
+        """
+        pos = self.sm.position
+        if pos.state not in (PositionState.ACTIVE, PositionState.ENTRY_PENDING, PositionState.EXIT_PENDING):
+            logger.info("STARTUP_SYNC: no open position in local state — clean start")
+            return
 
-                self._roll_day(now)
-                candles = self._refresh_candles(now)
-                vix = self._get_vix()
+        logger.info(f"STARTUP_SYNC: local state has position {pos.symbol} [{pos.state.value}] — verifying with broker")
 
-                # Always update live trend/impulse state regardless of engine type.
-                # daily_adaptive never calls _scan_entry, so without this the
-                # dashboard would permanently show conviction=0 / NEUTRAL / impulse=NONE.
-                if candles and len(candles) >= 4:
-                    self._detect_trend(candles, float(vix or 14.0))
+        try:
+            raw = self.client.get_positions()
+            positions = raw if isinstance(raw, list) else (raw.get("net", []) if isinstance(raw, dict) else [])
+            net_qty = 0
+            ltp     = 0.0
+            for p in positions:
+                if p.get("tradingsymbol") == pos.symbol:
+                    net_qty = abs(int(p.get("quantity", 0)))
+                    ltp     = float(p.get("last_price", 0))
+                    break
 
-                self._heartbeat_count += 1
-                hb_interval = max(1, 60 // self.cfg.poll_seconds)
-                if self._heartbeat_count % hb_interval == 0:
-                    rs = self.risk.status()
-                    regime_str = self._current_regime.regime if self._current_regime else "?"
-                    hb_data = {
-                        "mode": mode,
-                        "regime": regime_str,
-                        "trades_today": rs["trades_today"],
-                        "max_trades": self.cfg.max_trades_per_day,
-                        "daily_pnl": rs["daily_pnl"],
-                        "current_capital": rs["current_capital"],
-                        "peak_capital": rs["peak_capital"],
-                        "drawdown_pct": rs["drawdown_pct"],
-                        "vix": vix or 0,
-                        "state": self.sm.position.state.value,
-                        "consecutive_losses": rs["consecutive_losses"],
-                        "remaining_daily_loss": rs["remaining_daily_loss"],
-                        "halted": rs["trading_halted"],
-                        "halt_reason": rs.get("halt_reason", ""),
-                        "last_exit_reason": self._last_exit_reason,
-                        "last_trade_pnl": self._last_trade_pnl,
-                        "last_trade_ts": self._last_trade_ts if hasattr(self, "_last_trade_ts") else None,
-                        "last_trade_strategy": self._last_trade_strategy,
-                        "slm_order_active": bool(self._active_slm_order_id),
-                        "skip_reasons": self._skip_reasons_today[-5:],
-                        "move_from_open_pct": (
-                            round((float(candles[-1]["close"]) - float(candles[0]["open"]))
-                                  / float(candles[0]["open"]) * 100, 3)
-                            if candles and len(candles) >= 2
-                            and float(candles[0].get("open", 0)) > 0
-                            else 0.0
-                        ),
-                        "nifty_open_price": float(candles[0]["open"]) if candles else 0.0,
-                        "trend_state_live": self._current_trend.state.value if self._current_trend else "NEUTRAL",
-                        "trend_conviction_live": round(self._current_trend.conviction, 3) if self._current_trend else 0.0,
-                        "impulse_grade_live": (self._current_impulse.grade if self._current_impulse else "NONE"),
-                        # Daily regime for engine routing badge in UI
-                        "daily_regime": self._daily_regime.name if self._daily_regime else None,
-                        "active_engine": (
-                            "BULL" if (self._daily_regime and ("BULL" in self._daily_regime.name or "UP" in self._daily_regime.name))
-                            else "BEAR" if (self._daily_regime and ("BEAR" in self._daily_regime.name or "DOWN" in self._daily_regime.name))
-                            else "NEUTRAL"
-                        ),
-                    }
+            if net_qty == 0 and pos.state == PositionState.ACTIVE:
+                logger.warning(f"STARTUP_SYNC: broker has 0 qty for {pos.symbol} — position closed externally")
+                self._record_close("STARTUP_SYNC_CLOSED", ltp or pos.entry_price)
+            elif net_qty > 0:
+                logger.info(f"STARTUP_SYNC: broker confirms {net_qty} qty for {pos.symbol} @ {ltp:.0f} — resuming")
+                if pos.state == PositionState.ENTRY_PENDING and ltp > 0:
+                    self.sm.confirm_entry(ltp)
+                    self._trades_today += 1
+            else:
+                logger.info("STARTUP_SYNC: position state is PENDING/EXIT — will resolve in next tick")
 
-                    # ── Bot narrative (powers UI Story Panel) ────────────────
-                    try:
-                        _narrative = generate_bot_narrative(
-                            session=get_session(now),
-                            trend_state=(
-                                self._current_trend.state.value if self._current_trend else "NEUTRAL"
-                            ),
-                            conviction=(
-                                self._current_trend.conviction if self._current_trend else 0.0
-                            ),
-                            impulse_grade=str(
-                                self._current_impulse.grade if self._current_impulse else "NONE"
-                            ),
-                            daily_regime=(
-                                self._daily_regime.name if self._daily_regime else None
-                            ),
-                            position_active=self.sm.is_active,
-                            daily_pnl=rs["daily_pnl"],
-                            skip_reasons=self._skip_reasons_today[-3:],
-                            trades_today=rs["trades_today"],
-                            max_trades=self.cfg.max_trades_per_day,
-                            vix=float(vix or 15.0),
-                        )
-                        # Dashboard expects a plain string — extract lines list from dict
-                        if isinstance(_narrative, dict):
-                            _lines = _narrative.get("narrative", [])
-                            if isinstance(_lines, list):
-                                hb_data["narrative"] = " · ".join(str(l) for l in _lines if l)
-                            else:
-                                hb_data["narrative"] = str(_lines)
-                        else:
-                            hb_data["narrative"] = str(_narrative) if _narrative else ""
-                    except Exception as _ne:
-                        logger.debug(f"Narrative gen failed: {_ne}")
-                    logger.info(
-                        f"HEARTBEAT [{mode}] "
-                        f"regime={regime_str} "
-                        f"trades={rs['trades_today']}/{self.cfg.max_trades_per_day} "
-                        f"pnl=₹{rs['daily_pnl']:+.0f} "
-                        f"capital=₹{rs['current_capital']:,.0f} "
-                        f"dd={rs['drawdown_pct']:.1f}% "
-                        f"vix={vix or '?'} "
-                        f"state={self.sm.position.state.value}"
-                    )
-                    _log_event("HEARTBEAT", hb_data)
-
-                # Broker reconciliation every 60s — detects manual exits and external closes
-                if self.sm.is_active:
-                    now_ts = time.time()
-                    if now_ts - self._last_broker_sync >= 60:
-                        self._last_broker_sync = now_ts
-                        try:
-                            broker_qty = self.client.get_open_qty(self.sm.position.symbol)
-                            current_price = self.client.get_quote(self.sm.position.symbol, "NFO")
-                            symbol_before_sync = self.sm.position.symbol
-                            expected_qty = self.sm.position.qty
-                            was_synced = self.sm.sync_with_broker(broker_qty, last_price=current_price)
-                            if was_synced:
-                                if broker_qty == 0:
-                                    logger.warning(
-                                        f"BROKER SYNC: {symbol_before_sync} fully closed externally "
-                                        f"(expected qty={expected_qty}, broker=0)"
-                                    )
-                                    _log_event("BROKER_SYNC_CLOSED", {
-                                        "symbol": symbol_before_sync,
-                                        "expected_qty": expected_qty,
-                                        "broker_qty": broker_qty,
-                                        "last_price": current_price,
-                                    })
-                                    self._active_slm_order_id = None
-                                    # Record the exit so trades_today, daily_pnl,
-                                    # last_exit_reason are updated correctly.
-                                    try:
-                                        _pos_snap = self.sm.position
-                                        self._record_exit(_pos_snap, "MANUAL_EXIT", current_price)
-                                    except Exception as _re:
-                                        logger.warning(f"BROKER SYNC: could not record exit: {_re}")
-                                    self._notify(
-                                        "⚠️ BROKER SYNC: Position closed externally\n"
-                                        f"Symbol: {symbol_before_sync}\n"
-                                        "Check Kite for details."
-                                    )
-                                else:
-                                    logger.warning(
-                                        f"BROKER SYNC: {symbol_before_sync} partially closed externally "
-                                        f"(expected qty={expected_qty}, broker={broker_qty}) — qty updated"
-                                    )
-                                    _log_event("BROKER_SYNC_PARTIAL", {
-                                        "symbol": symbol_before_sync,
-                                        "expected_qty": expected_qty,
-                                        "broker_qty": broker_qty,
-                                    })
-                        except Exception as e:
-                            logger.warning(f"Broker sync check failed: {e}")
-
-                if self.sm.is_active:
-                    self._manage_active_position(now, candles)
-                elif self.sm.is_idle:
-                    if self.cfg.trading_engine.strip().lower() == "daily_adaptive":
-                        self._scan_entry_daily_adaptive(now, vix)
-                    else:
-                        self._scan_entry(now, candles, vix)
-
-                api_failures = 0
-
-            except KeyboardInterrupt:
-                logger.info("Bot stopped by user.")
-                break
-            except Exception as e:
-                api_failures += 1
-                logger.error(f"LOOP ERROR ({api_failures}): {e}")
-                traceback.print_exc()
-                _log_event("LOOP_ERROR", {"error": str(e), "failures": api_failures})
-
-                if api_failures >= self.cfg.api_circuit_breaker_failures:
-                    cooldown = self.cfg.api_circuit_breaker_cooldown_seconds
-                    logger.warning(f"CIRCUIT BREAKER: {api_failures} failures. Cooling {cooldown}s")
-                    time.sleep(cooldown)
-                    api_failures = 0
-
-            sys.stdout.flush()
-            time.sleep(self.cfg.poll_seconds)
+        except Exception as e:
+            logger.warning(f"STARTUP_SYNC_ERROR: {e} — proceeding with local state")

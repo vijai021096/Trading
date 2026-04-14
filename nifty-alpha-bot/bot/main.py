@@ -285,6 +285,7 @@ def main():
     run_startup_validation(paper_mode=settings.paper_mode)
 
     trader = KiteORBTrader(client)
+    trader.startup_sync()   # verify broker position vs local state before starting loop
     trader.run()
 
 

@@ -984,6 +984,38 @@ def position():
     return read_position()
 
 
+@app.get("/api/narrative")
+def narrative():
+    """
+    Returns the bot's current storyteller narrative — what it is thinking,
+    doing, waiting for. Written by trader.py every poll cycle.
+    """
+    narrative_file = _STATE_DIR / "kite_bot_narrative.json"
+    if narrative_file.exists():
+        try:
+            data = json.loads(narrative_file.read_text())
+            return data
+        except Exception:
+            pass
+
+    # Fallback: derive from bot-status
+    pos = read_position()
+    pos_state = pos.get("state", "IDLE")
+    return {
+        "ts": datetime.now().isoformat(),
+        "status": "ACTIVE" if pos_state == "ACTIVE" else "IDLE",
+        "detail": "Bot narrative not available — bot may not be running",
+        "regime": None,
+        "regime_bias": None,
+        "position": pos if pos_state == "ACTIVE" else None,
+        "trades_today": 0,
+        "daily_pnl": 0.0,
+        "is_expiry_day": False,
+        "vix": None,
+        "spot": None,
+    }
+
+
 @app.post("/api/emergency-stop")
 def emergency_stop():
     """Trigger emergency stop — write a halt file the bot polls."""
